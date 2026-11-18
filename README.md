@@ -32,7 +32,8 @@ the data model without it.
 
 | Package | Imports |
 |---|---|
-| `gox` | `evm`, `evmbind`, `evmcompiler`, `evmruntime`, `values` |
+| `gox` | `evm`, `evmbind`, `evmcompiler`, `evmruntime`, `evmstd`, `values` |
+| `evmstd` | `evm`, `evmbind` |
 | `evmbind` | `evm`, `evmcompiler`, `kvo`, `nativebind`, `values` |
 | `evmcompiler` | `evm`, `kvo`, `nativebind`, `values` |
 | `evmasm` | `evm`, `values` |
@@ -187,10 +188,32 @@ isolation boundary.
 
 ## Standard library and output
 
-Imports expose selected `fmt`, `log`, `math`, `strings`, `strconv` and `errors`
-APIs. Unlisted symbols fail type checking. Formatting supports flags, aggregates,
+The VM implements `errors`, `fmt`, `log`, `math`, `strconv` and `strings`
+itself; every script can import them. Formatting supports flags, aggregates,
 custom formatting methods and wrapped errors. `errors.As` is not exposed.
 `log` has no process-exit or configuration APIs.
+
+[`evmstd`](evmstd/API.md) adds general-purpose standard packages: `bytes`,
+`cmp`, `encoding/base64`, `encoding/hex`, `encoding/json` (validation and
+reformatting only), `html`, `iter`, `maps`, `math/bits`, `net/url`, `path`,
+`path/filepath`, `regexp`, `slices`, `sort`, `time`, `unicode`,
+`unicode/utf8` and `unicode/utf16`. Pass `evmstd.Packages()` to Compile and
+Link next to the host's packages; GoX does so by default. Nothing in them
+reads files, the network, the environment or the host's time zone:
+`time.Local`, `time.Sleep`, `filepath.Glob` and their kind are left out.
+`time.Now` is exposed. `evmstd/API.md` lists, per package, every exposed
+declaration and every one left out with the reason. Unlisted symbols fail
+type checking.
+
+Most of these packages are bound to the real Go functions, which run outside
+the VM's instruction and allocation budgets; only their results are charged.
+`cmp`, `iter`, `maps`, `slices` and `sort` are script source and are metered
+like any script code. Linking them makes `[]string`, `[]byte`, `[]int` and
+other slices these packages use native Go slices in the program, so a host
+passes such arguments as Go values (`RunEntryNative`, `RenderNative`), not as
+hand-built cell slices. `evmstd.Imports()` supplies their schemas to
+`evmbind.Options.Imports`, so a host API can use `time.Duration` or
+`*url.URL` as the same types.
 
 `VM.Output func(string) error` receives print/log output; nil uses Go's logger.
 Sink errors abort execution. `Limits.OutputBytes` defaults to 1 MiB and caps both

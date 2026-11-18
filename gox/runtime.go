@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/andreyvit/evm"
+	"github.com/andreyvit/evm/evmstd"
 	ht "github.com/andreyvit/evm/gox/internal/htmltemplate"
 	"github.com/andreyvit/evm/values"
 )
@@ -22,6 +23,24 @@ func init() {
 		trustedTypes[name] = Schema().Type(name)
 	}
 }
+
+// withBuiltinPackages adds what every template can import: the GoX runtime
+// and the evmstd standard packages. A host package with the same path as a
+// standard package replaces it.
+func withBuiltinPackages(packages []evm.Package) []evm.Package {
+	out := append(slices.Clone(packages), runtimePackage())
+	supplied := make(map[string]bool, len(out))
+	for _, p := range out {
+		supplied[p.Path] = true
+	}
+	for _, p := range evmstd.Packages() {
+		if !supplied[p.Path] {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func runtimePackage() evm.Package {
 	p := Schema().Bind(nil)
 	p.Source = optionalSource

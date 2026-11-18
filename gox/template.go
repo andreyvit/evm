@@ -128,7 +128,7 @@ func LinkModule(module *evm.Module, packages ...evm.Package) (*Program, error) {
 // Link binds the module to host packages with matching signatures. It does not run it.
 func (t *Template) Link(packages ...evm.Package) (*Program, error) {
 	linked := &Program{template: t}
-	p, err := evm.LinkWithHostData(t.Module, linked, append(packages, runtimePackage())...)
+	p, err := evm.LinkWithHostData(t.Module, linked, withBuiltinPackages(packages)...)
 	if err != nil {
 		return nil, err
 	}

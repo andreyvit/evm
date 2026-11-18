@@ -58,6 +58,26 @@ func TimePackage() Package {
 	return p
 }
 
+// WithTimePackage puts the built-in time package first. A supplied package
+// with path "time" extends it: its declarations join the built-in ones, so a
+// host can add types, functions and further Time methods.
+func WithTimePackage(packages []Package) ([]Package, error) {
+	out := make([]Package, 0, len(packages)+1)
+	out = append(out, TimePackage())
+	for _, p := range packages {
+		if p.Path != "time" {
+			out = append(out, p)
+			continue
+		}
+		merged, err := MergePackages(out[0], p)
+		if err != nil {
+			return nil, err
+		}
+		out[0] = merged[0]
+	}
+	return out, nil
+}
+
 // Native slots contain Go time.Time; logical VM values own their snapshots.
 var nativeTimeCodec = &NativeValueCodec{
 	Decode: func(c *Call, v values.Value) (values.Value, error) {

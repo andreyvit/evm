@@ -133,6 +133,36 @@ func standardSignature(path, name string) (params, results []string, ok bool) {
 		return []string{"float64"}, []string{"uint64"}, true
 	case "math.Float64frombits":
 		return []string{"uint64"}, []string{"float64"}, true
+	case "math.Erfinv":
+		return []string{"float64"}, []string{"float64"}, true
+	case "math.Erfcinv":
+		return []string{"float64"}, []string{"float64"}, true
+	case "math.Gamma":
+		return []string{"float64"}, []string{"float64"}, true
+	case "math.J0":
+		return []string{"float64"}, []string{"float64"}, true
+	case "math.J1":
+		return []string{"float64"}, []string{"float64"}, true
+	case "math.Y0":
+		return []string{"float64"}, []string{"float64"}, true
+	case "math.Y1":
+		return []string{"float64"}, []string{"float64"}, true
+	case "math.Logb":
+		return []string{"float64"}, []string{"float64"}, true
+	case "math.Ilogb":
+		return []string{"float64"}, []string{"int"}, true
+	case "math.Jn":
+		return []string{"int", "float64"}, []string{"float64"}, true
+	case "math.Yn":
+		return []string{"int", "float64"}, []string{"float64"}, true
+	case "math.Ldexp":
+		return []string{"float64", "int"}, []string{"float64"}, true
+	case "math.Frexp":
+		return []string{"float64"}, []string{"float64", "int"}, true
+	case "math.Lgamma":
+		return []string{"float64"}, []string{"float64", "int"}, true
+	case "math.Nextafter32":
+		return []string{"float32", "float32"}, []string{"float32"}, true
 	case "strconv.atoi":
 		return []string{"string"}, []string{"int", "string"}, true
 	case "strconv.Itoa":
@@ -159,6 +189,20 @@ func standardSignature(path, name string) (params, results []string, ok bool) {
 		return []string{"string"}, []string{"string"}, true
 	case "strconv.unquote":
 		return []string{"string"}, []string{"string", "string"}, true
+	case "strconv.QuoteRune":
+		return []string{"rune"}, []string{"string"}, true
+	case "strconv.QuoteRuneToASCII":
+		return []string{"rune"}, []string{"string"}, true
+	case "strconv.QuoteRuneToGraphic":
+		return []string{"rune"}, []string{"string"}, true
+	case "strconv.QuoteToGraphic":
+		return []string{"string"}, []string{"string"}, true
+	case "strconv.CanBackquote":
+		return []string{"string"}, []string{"bool"}, true
+	case "strconv.IsPrint":
+		return []string{"rune"}, []string{"bool"}, true
+	case "strconv.IsGraphic":
+		return []string{"rune"}, []string{"bool"}, true
 	case "strings.Clone":
 		return []string{"string"}, []string{"string"}, true
 	case "strings.ToLower":

@@ -57,3 +57,33 @@ func Unquote(s string) (string, error) {
 	}
 	return v, nil
 }
+
+// IntSize is the size in bits of an int or uint value.
+const IntSize = 64
+
+func QuoteRune(r rune) string
+func QuoteRuneToASCII(r rune) string
+func QuoteRuneToGraphic(r rune) string
+func QuoteToGraphic(s string) string
+func CanBackquote(s string) bool
+func IsPrint(r rune) bool
+func IsGraphic(r rune) bool
+
+func AppendBool(dst []byte, b bool) []byte           { return append(dst, FormatBool(b)...) }
+func AppendInt(dst []byte, i int64, base int) []byte { return append(dst, FormatInt(i, base)...) }
+func AppendUint(dst []byte, i uint64, base int) []byte {
+	return append(dst, FormatUint(i, base)...)
+}
+func AppendFloat(dst []byte, f float64, fmt byte, prec, bitSize int) []byte {
+	return append(dst, FormatFloat(f, fmt, prec, bitSize)...)
+}
+func AppendQuote(dst []byte, s string) []byte          { return append(dst, Quote(s)...) }
+func AppendQuoteToASCII(dst []byte, s string) []byte   { return append(dst, QuoteToASCII(s)...) }
+func AppendQuoteToGraphic(dst []byte, s string) []byte { return append(dst, QuoteToGraphic(s)...) }
+func AppendQuoteRune(dst []byte, r rune) []byte        { return append(dst, QuoteRune(r)...) }
+func AppendQuoteRuneToASCII(dst []byte, r rune) []byte {
+	return append(dst, QuoteRuneToASCII(r)...)
+}
+func AppendQuoteRuneToGraphic(dst []byte, r rune) []byte {
+	return append(dst, QuoteRuneToGraphic(r)...)
+}

@@ -70,3 +70,38 @@ const (
 	SmallestNonzeroFloat32 = 0x1p-126 * 0x1p-23
 	SmallestNonzeroFloat64 = 0x1p-1022 * 0x1p-52
 )
+
+// Integer limit values.
+const (
+	MaxInt    = 1<<63 - 1
+	MinInt    = -1 << 63
+	MaxInt8   = 1<<7 - 1
+	MinInt8   = -1 << 7
+	MaxInt16  = 1<<15 - 1
+	MinInt16  = -1 << 15
+	MaxInt32  = 1<<31 - 1
+	MinInt32  = -1 << 31
+	MaxInt64  = 1<<63 - 1
+	MinInt64  = -1 << 63
+	MaxUint   = 1<<64 - 1
+	MaxUint8  = 1<<8 - 1
+	MaxUint16 = 1<<16 - 1
+	MaxUint32 = 1<<32 - 1
+	MaxUint64 = 1<<64 - 1
+)
+
+func Erfinv(x float64) float64
+func Erfcinv(x float64) float64
+func Gamma(x float64) float64
+func J0(x float64) float64
+func J1(x float64) float64
+func Y0(x float64) float64
+func Y1(x float64) float64
+func Logb(x float64) float64
+func Ilogb(x float64) int
+func Jn(n int, x float64) float64
+func Yn(n int, x float64) float64
+func Ldexp(frac float64, exp int) float64
+func Frexp(f float64) (frac float64, exp int)
+func Lgamma(x float64) (lgamma float64, sign int)
+func Nextafter32(x float32, y float32) (r float32)

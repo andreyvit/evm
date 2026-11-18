@@ -74,7 +74,10 @@ type typeEnvironment struct {
 }
 
 func newTypeEnvironment(packages []evm.Package) (*typeEnvironment, error) {
-	packages = append([]evm.Package{evm.TimePackage()}, packages...)
+	packages, err := evm.WithTimePackage(packages)
+	if err != nil {
+		return nil, err
+	}
 	if err := evm.ValidateDirectBindings(packages); err != nil {
 		return nil, err
 	}

@@ -8,6 +8,7 @@ Go-with-HTML templates to EVM programs. KVO gives typed access to records.
 - Root `evm`: VM, linker, standard library, host calls and record support.
 - `evmcompiler`: Go source to bytecode. `evmasm`: assembler for tests and diagnostics.
 - `evmbind`: host API bindings and their generator. `evmruntime`: guest-visible runtime types.
+- `evmstd`: standard packages for scripts; `go run ./internal/genstd` regenerates its declarations, bindings and `API.md`.
 - `gox`: Go/markup templates. `cmd/gox`: syntax check and formatter. `_editors`: editor support.
 - `kvo`: models, typed properties, records, collections, editors and Go bindings.
 - `values` / `nativebind`: shared runtime values and native field operations.

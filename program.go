@@ -404,7 +404,10 @@ func Link(m *Module, packages ...Package) (*Program, error) {
 // program. There is no setter; derived runtimes can retain their compiled data
 // without a separate program registry.
 func LinkWithHostData(m *Module, hostData any, packages ...Package) (*Program, error) {
-	packages = append([]Package{TimePackage()}, packages...)
+	packages, err := WithTimePackage(packages)
+	if err != nil {
+		return nil, err
+	}
 	if m == nil {
 		return nil, fmt.Errorf("nil module")
 	}

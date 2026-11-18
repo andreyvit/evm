@@ -501,3 +501,13 @@ func (b *buffer) badPointer(v any) {
 	b.diagnostic = old
 	b.text(")")
 }
+
+// Append formats using the default formats for its operands, appends the
+// result to the byte slice, and returns the updated slice.
+func Append(b []byte, a ...any) []byte { return append(b, Sprint(a...)...) }
+
+// Appendf formats according to a format specifier and appends the result.
+func Appendf(b []byte, format string, a ...any) []byte { return append(b, Sprintf(format, a...)...) }
+
+// Appendln formats like Sprintln and appends the result.
+func Appendln(b []byte, a ...any) []byte { return append(b, Sprintln(a...)...) }

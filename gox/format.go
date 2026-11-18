@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/andreyvit/evm"
+	"github.com/andreyvit/evm/evmstd"
 	"golang.org/x/tools/go/ast/astutil"
 	"golang.org/x/tools/imports"
 )
@@ -275,6 +276,15 @@ func addFormattingImports(files *token.FileSet, file *ast.File, packages []evm.P
 	names := map[string]string{"gox": "github.com/andreyvit/evm/gox"}
 	for _, name := range evm.StandardLibraryPaths() {
 		names[path.Base(name)] = name
+	}
+	for _, name := range evmstd.Paths() {
+		// Two standard packages can share a last element, such as path and
+		// filepath's parent; an ambiguous name is left for the author.
+		if old, ok := names[path.Base(name)]; ok && old != name {
+			names[path.Base(name)] = ""
+		} else {
+			names[path.Base(name)] = name
+		}
 	}
 	for _, pkg := range packages {
 		name := path.Base(pkg.Path)

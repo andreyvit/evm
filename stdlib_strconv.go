@@ -14,7 +14,7 @@ func standardStrconv(c *Call) error {
 	}
 	size := uint64(128)
 	switch name {
-	case "atoi", "parseBool", "parseInt", "parseUint", "parseFloat", "Quote", "QuoteToASCII", "unquote":
+	case "atoi", "parseBool", "parseInt", "parseUint", "parseFloat", "Quote", "QuoteToASCII", "QuoteToGraphic", "unquote":
 		size = args[0].R*8 + 256
 	case "FormatFloat":
 		if args[3].R != 32 && args[3].R != 64 {
@@ -96,6 +96,21 @@ func standardStrconv(c *Call) error {
 	case "QuoteToASCII":
 		v0 := strconv.QuoteToASCII(args[0].AsString())
 		c.result(0, values.String(v0))
+	case "QuoteToGraphic":
+		v0 := strconv.QuoteToGraphic(args[0].AsString())
+		c.result(0, values.String(v0))
+	case "QuoteRune":
+		c.result(0, values.String(strconv.QuoteRune(rune(args[0].R))))
+	case "QuoteRuneToASCII":
+		c.result(0, values.String(strconv.QuoteRuneToASCII(rune(args[0].R))))
+	case "QuoteRuneToGraphic":
+		c.result(0, values.String(strconv.QuoteRuneToGraphic(rune(args[0].R))))
+	case "CanBackquote":
+		c.result(0, values.Bool(strconv.CanBackquote(args[0].AsString())))
+	case "IsPrint":
+		c.result(0, values.Bool(strconv.IsPrint(rune(args[0].R))))
+	case "IsGraphic":
+		c.result(0, values.Bool(strconv.IsGraphic(rune(args[0].R))))
 	case "unquote":
 		v0, v1 := strconv.Unquote(args[0].AsString())
 		c.result(0, values.String(v0))

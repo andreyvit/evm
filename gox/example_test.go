@@ -5,7 +5,6 @@ import (
 	"embed"
 	"fmt"
 	"testing"
-	"unsafe"
 
 	"github.com/andreyvit/evm/gox"
 	"github.com/andreyvit/evm/values"
@@ -60,11 +59,7 @@ func TestExampleComponents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	names := []values.Value{values.String("Alice & Bob")}
-	output, err := program.Render(context.Background(), []values.Value{
-		values.String("Customers"),
-		values.SliceValue(unsafe.Pointer(unsafe.SliceData(names)), 1, 1),
-	}, gox.RenderOptions{Strict: true})
+	output, err := program.RenderNative(context.Background(), []any{"Customers", []string{"Alice & Bob"}}, gox.RenderOptions{Strict: true})
 	if err != nil {
 		t.Fatal(err)
 	}

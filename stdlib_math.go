@@ -166,6 +166,53 @@ func standardMath(c *Call) error {
 	case "Float64frombits":
 		v0 := math.Float64frombits(uint64(c.argument(0).R))
 		c.result(0, values.Float(v0))
+	case "Erfinv":
+		v0 := math.Erfinv(c.argument(0).AsFloat())
+		c.result(0, values.Float(v0))
+	case "Erfcinv":
+		v0 := math.Erfcinv(c.argument(0).AsFloat())
+		c.result(0, values.Float(v0))
+	case "Gamma":
+		v0 := math.Gamma(c.argument(0).AsFloat())
+		c.result(0, values.Float(v0))
+	case "J0":
+		v0 := math.J0(c.argument(0).AsFloat())
+		c.result(0, values.Float(v0))
+	case "J1":
+		v0 := math.J1(c.argument(0).AsFloat())
+		c.result(0, values.Float(v0))
+	case "Y0":
+		v0 := math.Y0(c.argument(0).AsFloat())
+		c.result(0, values.Float(v0))
+	case "Y1":
+		v0 := math.Y1(c.argument(0).AsFloat())
+		c.result(0, values.Float(v0))
+	case "Logb":
+		v0 := math.Logb(c.argument(0).AsFloat())
+		c.result(0, values.Float(v0))
+	case "Ilogb":
+		v0 := math.Ilogb(c.argument(0).AsFloat())
+		c.result(0, values.Int(int64(v0)))
+	case "Jn":
+		v0 := math.Jn(int(c.argument(0).AsInt()), c.argument(1).AsFloat())
+		c.result(0, values.Float(v0))
+	case "Yn":
+		v0 := math.Yn(int(c.argument(0).AsInt()), c.argument(1).AsFloat())
+		c.result(0, values.Float(v0))
+	case "Ldexp":
+		v0 := math.Ldexp(c.argument(0).AsFloat(), int(c.argument(1).AsInt()))
+		c.result(0, values.Float(v0))
+	case "Frexp":
+		v0, v1 := math.Frexp(c.argument(0).AsFloat())
+		c.result(0, values.Float(v0))
+		c.result(1, values.Int(int64(v1)))
+	case "Lgamma":
+		v0, v1 := math.Lgamma(c.argument(0).AsFloat())
+		c.result(0, values.Float(v0))
+		c.result(1, values.Int(int64(v1)))
+	case "Nextafter32":
+		v0 := math.Nextafter32(math.Float32frombits(uint32(c.argument(0).R)), math.Float32frombits(uint32(c.argument(1).R)))
+		c.result(0, values.Value{R: uint64(math.Float32bits(v0))})
 	default:
 		return fmt.Errorf("unknown math primitive")
 	}

@@ -338,6 +338,10 @@ compile error at the reference, and the message names the import:
 greeting.gox:3:18: undefined: gox (add import "github.com/andreyvit/evm/gox")
 ```
 
+Besides host packages, a template can import the VM's own `errors`, `fmt`,
+`log`, `math`, `strconv` and `strings`, and the [`evmstd`](../evmstd/API.md)
+standard packages such as `time`, `slices`, `maps`, `net/url` and `regexp`.
+
 This covers package-qualified tags such as `<ui.Button>`. A local value with a
 package's name is an ordinary value. `gox fmt` and `gox.FormatSource` add
 missing imports; see [formatting rules](#formatting-rules).

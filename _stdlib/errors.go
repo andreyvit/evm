@@ -60,3 +60,26 @@ func Join(errs ...error) error {
 	}
 	return &joinError{out}
 }
+
+// AsType finds the first error in err's tree that has type E, and if one is
+// found, returns that error value and true.
+func AsType[E error](err error) (E, bool) {
+	var zero E
+	if err == nil {
+		return zero, false
+	}
+	if e, ok := err.(E); ok {
+		return e, true
+	}
+	if e, ok := err.(interface{ Unwrap() error }); ok {
+		return AsType[E](e.Unwrap())
+	}
+	if e, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, child := range e.Unwrap() {
+			if found, ok := AsType[E](child); ok {
+				return found, true
+			}
+		}
+	}
+	return zero, false
+}

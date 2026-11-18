@@ -54,7 +54,7 @@ func (options Options) preprocessSources(entry string, sources map[string]string
 		files:         token.NewFileSet(),
 		mappings:      map[string][]evm.SourcePosition{}, originals: map[string]*token.File{},
 		outputMaps: map[string]*generatedMap{},
-		packages:   append(slices.Clone(packages), runtimePackage()),
+		packages:   withBuiltinPackages(packages),
 		template:   &Template{sources: maps.Clone(sources), format: options.Format, GeneratedSources: map[string]string{}},
 	}
 	keys := slices.Sorted(maps.Keys(sources))

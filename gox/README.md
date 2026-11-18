@@ -7,7 +7,7 @@ escaped for the HTML, attribute, URL, JavaScript or CSS context where they appea
 
 GoX runs through [EVM](../README.md). You can compile templates once, link them
 to host APIs, and render them repeatedly without rebuilding the host application.
-It can be used independently of EDB's database and KVO models.
+It needs no database and no KVO models.
 
 ## One example to show a friend
 
@@ -50,9 +50,7 @@ func Updates(b *gox.Builder, viewer string, accent string) {
 			</p>
 			<List items={items}>
 				<slot-row>
-					<strong>
-						item.Name | strings.ToUpper
-					</strong>
+					<strong>item.Name | strings.ToUpper</strong>
 					" "
 					<Badge label={status(item.Done)} />
 				</slot-row>
@@ -109,8 +107,9 @@ With `viewer` set to `<Ada & Bob>`, the greeting contains
 `&lt;Ada &amp; Bob&gt;`, and the script receives a quoted, escaped JavaScript
 string. The native-build entry deliberately says “on the roadmap.”
 
-[Copy the source](testdata/examples/showcase.gox). The [showcase test](showcase_test.go)
-compiles, links and renders it, verifies escaping, checks formatting preserves
+The same source, as `package plugin`, is
+[testdata/examples/showcase.gox](testdata/examples/showcase.gox). The
+[showcase test](showcase_test.go) compiles, links and renders it, verifies escaping, checks formatting preserves
 output, then edits its heading and compiles and renders the new version in the
 same process.
 
@@ -144,14 +143,15 @@ subset and registered packages, not unrestricted access to every Go package.
 - [Run your first template](#run-your-first-template)
 - [Syntax](#syntax), [what produces output](#what-produces-output) and [values by position](#values-by-position)
 - [Attributes and escaping](#attributes-and-escaping)
-- [Compile, link, render](#compile-link-render)
-- [Components, slots and helpers](#components-slots-and-helpers)
-- [Implicit arguments](#implicit-arguments) and [ambient context](#ambient-context)
+- [Components](#components): [slots](#slots-are-typed-callbacks), [implicit arguments](#implicit-arguments), [optional and map inputs](#xml-parameter-conventions), [helpers and pipelines](#attribute-helpers-and-pipelines)
+- [Ambient context](#ambient-context)
+- [Compile, link, render](#compile-link-render) and [files and frontmatter](#files-and-frontmatter)
 - [Whitespace and output formats](#whitespace-and-output-formats)
 - [Safety and failures](#safety-and-failures)
-- [Host integration](#native-host-callbacks) and [class discovery](#class-discovery)
+- [Host integration](#host-integration), [class discovery](#class-discovery) and [execution coverage](#execution-coverage)
 - [Formatting and tooling](#source-tooling)
 - [Troubleshooting](#troubleshooting)
+- [Tests and benchmarks](#tests-and-benchmarks)
 
 ## Run your first template
 
@@ -219,15 +219,14 @@ once and renders two requests; its test recompiles a template between renders.
   a tag unless protected by parentheses or brackets. Strings and Go comments
   protect their contents; multiline opening tags continue through `>`.
 - Parenthesize comparisons: `if (age < minimumAge) { ... }` and
-  `for i := 0; (i < count); i++ { ... }`. Operators `<=`, `<<`, `<<=` and `<-`
-  keep their Go meanings. Ordinary `{` enables markup, even inside a callback
+  `for i := 0; (i < count); i++ { ... }`. Operators `<=`, `<<` and `<<=` keep
+  their Go meanings. Ordinary `{` enables markup, even inside a callback
   passed within parentheses; `}` restores the enclosing delimiter mode.
   Attribute `{expression}` is Go throughout.
 - Tags provide statement separators: `<p>name<strong>"VIP"</strong></p>` works.
   Adjacent Go expressions still need a newline or semicolon: `<p>"Hi, "; name</p>`.
   Go blocks keep their scopes; body braces are not interpolation delimiters.
-  To migrate older templates, replace `{a}{b}` with `a; b` and parenthesize
-  bare `<` comparisons. A single `{a}` still works as a Go block.
+  A single `{a}` is a Go block.
 - Inside elements/fragments, standalone expressions render. Assignments,
   conditions and arguments do not. Outside them, write ordinary Go.
 - Text output takes strings and trusted content. Convert other values
@@ -238,11 +237,11 @@ once and renders two requests; its test recompiles a template between renders.
 - Attributes accept quoted strings with interpolation or `{expression}`.
   They take strings and integers, and a whole `{expression}` value can be a
   bool. Boolean HTML attributes omit false; others print it.
-- Attributes are for the browser, text is for people. See
+- Each position accepts its own value types; see
   [values by position](#values-by-position).
 - JS/CSS bodies retain their syntax. Insert Go data with `{=expression}`.
-- Inputs are typed. Inside markup, omitted arguments bind by name; explicit
-  inputs win and incompatible matching types fail compilation.
+- Inputs are typed. A call can omit an
+  [implicit argument](#implicit-arguments); an explicit input wins.
 - KVO selectors use model aliases. Go fields also accept unambiguous JSON names
   and snake_case (`AppIDs` → `app_ids`, `URLs` → `urls`).
 
@@ -334,7 +333,7 @@ numbers a browser expects, written as they are.
 | Whole attribute value | `colspan={n}`, `hidden={flag}` | strings, integers, `bool` |
 | Interpolated attribute | `href="/items/{id}"`, `title="{count} items"` | strings, integers |
 | CSS | `{=value}` in `<style>`, `style="width: {percent}%"` | strings, integers, floats |
-| JavaScript | `{=value}` in `<script>`, `onclick="go({id})"` | any value, as JSON |
+| JavaScript | `{=value}` in `<script>`, `onclick="go({id})"` | JSON-compatible values |
 
 Anything else goes through a function that returns a string. A function's
 extra parameters are filled like [implicit arguments](#implicit-arguments) of
@@ -352,7 +351,7 @@ any GoX call, so a host function such as
 - **Integers in attributes** are Go's own `int`, `int8`, `int16`, `int32`,
   `int64`, `uint`, `uint16`, `uint32` and `uint64`. `byte`, `uint8` and `rune`
   usually hold a character, so GoX refuses to guess: convert to a string or to
-  `int`. `uintptr` is refused too.
+  `int`. `uintptr` is refused too. CSS takes all of these as numbers.
 - **Named types** other than strings are not integers here, even over `int64`:
   `Money` in cents is not what a reader or the browser expects. Convert it
   (`int64(price)`) or call a function.
@@ -396,8 +395,10 @@ page.gox:25:22: cannot interpolate a value of type rune into an attribute: an at
 ```
 
 A `style` attribute is CSS and takes strings, integers and floats, like
-`{=value}` in a style body. An event-handler attribute takes any value as
-JSON, like `{=value}` in a script body.
+`{=value}` in a style body. An event-handler attribute takes a
+JSON-compatible value, like `{=value}` in a script body: a bool, a number, a
+string, a time, or a slice, array or map of those. A struct compiles and then
+fails the render; pass a map or a string.
 
 Escaping is contextual: text and attribute values are escaped differently, and
 URLs, JavaScript and CSS receive their own filtering. Put ordinary data into
@@ -405,159 +406,7 @@ expressions; do not pre-escape it. Explicit trusted-content types such as
 `gox.HTML` are for content the application has already decided to trust, not a
 way to display arbitrary user-provided markup. See [safety](#safety-and-failures).
 
-## Compile, link, render
-
-There are three distinct stages:
-
-| Stage | Input | Result |
-| --- | --- | --- |
-| Compile | Source and package descriptions | Checked EVM bytecode and rendering plan |
-| Link | Compiled template and compatible host implementations | Reusable rendering program |
-| Render | Program, context and ordered input values | Escaped output or an error |
-
-`Compile` accepts the same `evm.Package` descriptions as EVM's compiler. `Link`
-accepts their implementations; the two sets must have compatible signatures.
-Every GoX file starts with a Go package clause after any frontmatter and
-leading comments, then imports each package its source names: standard library
-packages such as `fmt`, `github.com/andreyvit/evm/gox` for the builder, and
-supplied host packages. Naming a known package without importing it is a
-compile error at the reference, and the message names the import:
-
-```text
-greeting.gox:3:18: undefined: gox (add import "github.com/andreyvit/evm/gox")
-```
-
-Besides host packages, a template can import the VM's own `errors`, `fmt`,
-`log`, `math`, `strconv` and `strings`, and the [`evmstd`](../evmstd/API.md)
-standard packages such as `time`, `slices`, `maps`, `net/url` and `regexp`.
-
-This covers package-qualified tags such as `<ui.Button>`. A local value with a
-package's name is an ordinary value. `gox fmt` and `gox.FormatSource` add
-missing imports; see [formatting rules](#formatting-rules).
-
-`gox.Options` holds compile settings; its `Compile`, `CompileSources` and
-`CompileFiles` methods match the package functions, which use the zero value.
-
-| Option | Purpose |
-| --- | --- |
-| `Format` | [Output language](#whitespace-and-output-formats): HTML (default), text or CSS |
-| `ImplicitTypes` | Types whose parameters are [implicit](#implicit-arguments) |
-| `ParseFrontmatter` | Parser for [file metadata](#host-frontmatter) |
-| `AllowMissingPackage` | Accept legacy files without a package clause |
-
-To let templates use a Go package, give [`evmbind.New`](../evmbind/README.md)
-that package's own source; it exposes every exported type, method, function
-and constant. Pass `schema.Package()` to `Compile` and `schema.Bind(nil)` to
-`Link`.
-
-`RenderNative(ctx, []any{user, cart, query}, options)` passes ordinary Go
-values: strings and other scalars, time values, and pointers to bound native
-structs, which the template shares with the host. A Go slice or map passes
-when a linked schema binds its type. Each value must have the Go type of its
-parameter; there are no implicit numeric conversions. `RenderFuncNative`
-selects a renderer by name.
-
-`Template.Parameters` gives the entry argument order. `Render` and `RenderFunc`
-take arguments in the existing EVM value ABI, including host types, script
-structs and KVO models. Compiled
-`Module`, original source positions, `GeneratedSources` and class metadata are
-available for tooling. Keep the template's rendering plan with its module.
-
-A linked `Program` supports concurrent renders. Each render gets isolated VM
-globals and builder state; registered host implementations retain their own
-state. Context cancellation and `RenderOptions.Budget` apply to execution.
-Output is capped at 16 MiB by default (`MaxOutputBytes` overrides it). Failed
-renders return an error and no partial document.
-
-## Ambient context
-
-`evmruntime.Ambient` is a persistent map of `string` to `any`. A nil pointer is
-an empty context. `Get(key)` searches from the newest node to its parents;
-`CloneWith(map[string]any{...})` copies a delta map and shares its parent.
-An explicit nil value hides the parent value. Stored values are not deep-copied.
-`Values()` returns a separate flattened map for interop with older extras APIs.
-Files that name the type import `"evmruntime"`.
-
-Pass it as an ordinary optional parameter, usually `ambient *evmruntime.Ambient`.
-Calls inside tags and fragments inherit it by name like other parameters. A local
-override can use `ambient = ambient.CloneWith(...)`; callers keep their original context.
-
-## Building class arguments
-
-Use separate `b.Class` or class-helper calls when styling the current element.
-When another renderer needs a combined string, use `ClassList`:
-
-```gox
-var classes gox.ClassList
-classes.Add("button")
-classes.Add(extraClass)
-if disabled {
-    classes.Add("opacity-50")
-}
-<Button class={classes.String()} />
-```
-
-`Add` skips empty groups, trims surrounding whitespace, and inserts a space
-between groups. It does not deduplicate or reorder classes. The zero value is
-ready to use. It wraps `strings.Builder`; do not copy a list after its first
-addition. `String()` does not copy the buffer, and later additions leave earlier
-strings unchanged.
-
-## Components, slots and helpers
-
-### Host frontmatter
-
-A `.gox` file may start with a `---` line, opaque metadata, and a closing
-`---` line. Both delimiters occupy whole lines. Metadata belongs to every
-named function declared in that file; use separate files for different metadata.
-
-```gox
----
-title: "Rewards"
----
-
-package rewards
-
-import "github.com/andreyvit/evm/gox"
-
-func Render(b *gox.Builder) {
-    <h1>{"Rewards"}</h1>
-}
-```
-
-Set `gox.Options.ParseFrontmatter` to `func([]byte) (any, error)`. GoX calls
-it during preprocessing, before Go compilation, with bytes between the delimiter
-lines. The host chooses the format (YAML, JSON, NAML, or something else).
-An error fails parsing with the filename; frontmatter without a callback fails
-as well. Files without frontmatter need no callback.
-
-`Template.Files()` lists all GoX files in filename order, including files
-without metadata or functions. `Template.File(filename)` looks up an exact
-source-map key; `Template.FunctionFile(functionName)` finds a function's file.
-Each `gox.File` contains `Filename`, `Name` (basename without `.gox`),
-`Functions` in declaration order, `Frontmatter`, and `HasFrontmatter`.
-The first function is `Functions[0]` when the list is nonempty. Methods,
-`init`, blank names, and anonymous functions are excluded. Ordinary `.go`
-files are excluded too. `Program` exposes the same methods after linking.
-Returned function slices are copies; host metadata remains shared and immutable.
-
-`Template.Frontmatter(functionName)` and `Program.Frontmatter(functionName)`
-return `(value, present)`. Presence remains true if the callback returns nil.
-Treat the parsed value as immutable. Metadata stays with the template/program;
-serializing an EVM module alone does not serialize host objects.
-
-`Options.CheckSyntax` also validates frontmatter. `FormatSource` preserves its
-opaque bytes without interpreting them, so formatters need no host callback.
-The editor grammar recognizes the block without imposing a metadata language.
-
-`CompileSources(sources, packages...)` compiles a map of filenames to source text.
-Call `program.RenderFunc(ctx, "Page", args, options)` to select a renderer; `args`
-omits the builder. `CompileFiles(entry, sources, ...)` also selects a default
-renderer for `Render`: `entry` can be a function name or a GoX filename (its first
-renderer). Go and GoX files each need their own imports; they are file-local.
-Go and GoX files in one package must declare the same name.
-Hosts can opt into `Options.AllowMissingPackage` for legacy sources. Files that
-omit the clause then inherit the package name, defaulting to `plugin`.
+## Components
 
 Function names identify components: `func Button(...)` is `<Button>`;
 `func EarnCard(...)` is `<EarnCard>`. They also work as ordinary function
@@ -691,7 +540,6 @@ Component calls support three explicit conventions:
   `ambient:{key}={value}` also works, with a string key.
 - Do not combine `someExtras={wholeMap}` with entries for that same map in one
   call. Other maps remain independent. Bare `someExtras:enabled` means `true`.
-  The old `ambient-` and `extra-` prefixes have no special meaning.
 
 See [the runnable map-input example](testdata/examples/map-inputs.gox) for two
 map parameters, a dynamic key, and ambient inheritance.
@@ -804,7 +652,8 @@ func decorate(b *gox.Builder, disabled bool) {
 
 Call `decorate(disabled)` inside a pending opening tag. `b.Class("...")` appends
 classes to the fixed class attribute; empty strings do nothing. `b.Attr("class", "")`
-explicitly clears classes; other attributes replace the earlier value.
+explicitly clears classes and a nonempty `b.Attr("class", ...)` appends; other
+attributes replace the earlier value.
 `b.AttrOrOmit("id", anchor)` skips nil and empty strings, including named string
 types. It preserves trusted content types and normal attribute escaping and
 filtering. Zero, false, and whitespace keep normal `Attr` behavior. Omitted
@@ -835,8 +684,7 @@ decorate(false)
 
 `value | format` means `format(value)`. In `value | format(arg)` the value is
 the last argument you write: `format(arg, value)`. Implicit arguments are
-filled after it, as in any call. Write `_` where the value goes when it
-is not last:
+filled as in any call. Write `_` where the value goes when it is not last:
 
 ```gox
 name | strings.ToUpper                  // strings.ToUpper(name)
@@ -845,9 +693,66 @@ count | fmt.Sprintf("%d items", _)      // fmt.Sprintf("%d items", count)
 name | strings.TrimSpace | strings.ToUpper
 ```
 
-A call takes one `_`, as a whole argument. Pipelines require a callable right
-side with a single result. Integer bitwise OR keeps its Go meaning, unless the
+A call takes one `_`, as a whole argument of the call itself: `x | f(g(_))`
+does not compile. Pipelines require a callable right side with a single
+result. They work wherever a GoX file has an expression: output, attribute
+values, component arguments and assignments. Integer bitwise OR keeps its Go meaning, unless the
 right side has a `_`.
+
+### Building class arguments
+
+Use separate `b.Class` or class-helper calls when styling the current element.
+When another renderer needs a combined string, use `ClassList`:
+
+```gox
+var classes gox.ClassList
+classes.Add("button")
+classes.Add(extraClass)
+if disabled {
+    classes.Add("opacity-50")
+}
+<Button class={classes.String()} />
+```
+
+`Add` skips empty groups, trims surrounding whitespace, and inserts a space
+between groups. It does not deduplicate or reorder classes. The zero value is
+ready to use. It wraps `strings.Builder`; do not copy a list after its first
+addition. `String()` does not copy the buffer, and later additions leave earlier
+strings unchanged.
+
+### Plain text or trusted HTML
+
+Use `gox.Content` for inputs such as titles that accept either text or markup:
+
+```go
+func Title(b *gox.Builder, title gox.Content) { <h1>title</h1> }
+// XML callers use title={gox.Text("<plain text>")} or
+// title={gox.TrustedHTML(gox.HTML("<em>trusted markup</em>"))}.
+```
+
+`Content` has `Content string` and `TrustedHTML bool` fields. Its zero value is
+empty plain text. `Text` escapes text for its output context; `TrustedHTML`
+asserts that the caller trusts the markup, without sanitizing it. Attribute
+contexts still apply contextual escaping. Native helpers can accept the same
+struct. `b.Text(...)` remains the imperative builder operation.
+
+EVM stores Content and common Optional specializations in one cell. Public Go
+fields and pointer semantics are preserved. See [compact value representations](_docs/COMPACT_VALUES.md)
+for supported optional payloads, fallback layouts, and host binding details.
+
+## Ambient context
+
+`evmruntime.Ambient` is a persistent map of `string` to `any`. A nil pointer is
+an empty context. `Get(key)` searches from the newest node to its parents;
+`CloneWith(map[string]any{...})` copies a delta map and shares its parent.
+An explicit nil value hides the parent value. Stored values are not deep-copied.
+`Values()` returns a separate flattened map for interop with older extras APIs.
+Files that name the type import `"evmruntime"`.
+
+Pass it as an ordinary optional parameter, usually `ambient *evmruntime.Ambient`.
+Calls inherit it by name, because `*evmruntime.Ambient` is an
+[implicit](#implicit-arguments) type. A local
+override can use `ambient = ambient.CloneWith(...)`; callers keep their original context.
 
 ### Typed ambient inputs
 
@@ -879,6 +784,124 @@ Host adapters can inspect `Parameter.Ambient`. `gox.AmbientSchema()` exposes the
 native Ambient type and its methods for host-bound helpers; register its bound
 package and use its full Go import path when crossing native boundaries.
 
+## Compile, link, render
+
+There are three distinct stages:
+
+| Stage | Input | Result |
+| --- | --- | --- |
+| Compile | Source and package descriptions | Checked EVM bytecode and rendering plan |
+| Link | Compiled template and compatible host implementations | Reusable rendering program |
+| Render | Program, context and ordered input values | Escaped output or an error |
+
+`Compile` accepts the same `evm.Package` descriptions as EVM's compiler. `Link`
+accepts their implementations; the two sets must have compatible signatures.
+Every GoX file starts with a Go package clause after any frontmatter and
+leading comments, then imports each package its source names: standard library
+packages such as `fmt`, `github.com/andreyvit/evm/gox` for the builder, and
+supplied host packages. Naming a known package without importing it is a
+compile error at the reference, and the message names the import:
+
+```text
+greeting.gox:3:18: undefined: gox (add import "github.com/andreyvit/evm/gox")
+```
+
+Besides host packages, a template can import the VM's own `errors`, `fmt`,
+`log`, `math`, `strconv` and `strings`, and the [`evmstd`](../evmstd/API.md)
+standard packages such as `time`, `slices`, `maps`, `net/url` and `regexp`.
+
+This covers package-qualified tags such as `<ui.Button>`. A local value with a
+package's name is an ordinary value. `gox fmt` and `gox.FormatSource` add
+missing imports; see [formatting rules](#formatting-rules).
+
+`gox.Options` holds compile settings; its `Compile`, `CompileSources` and
+`CompileFiles` methods match the package functions, which use the zero value.
+
+| Option | Purpose |
+| --- | --- |
+| `Format` | [Output language](#whitespace-and-output-formats): HTML (default), text or CSS |
+| `ImplicitTypes` | Types whose parameters are [implicit](#implicit-arguments) |
+| `ParseFrontmatter` | Parser for [file metadata](#files-and-frontmatter) |
+| `AllowMissingPackage` | Accept legacy files without a package clause |
+
+To let templates use a Go package, give [`evmbind.New`](../evmbind/README.md)
+that package's own source; it exposes every exported type, method, function
+and constant. Pass `schema.Package()` to `Compile` and `schema.Bind(nil)` to
+`Link`; the bound package serves for both.
+
+`RenderNative(ctx, []any{user, cart, query}, options)` passes ordinary Go
+values: strings and other scalars, time values, and pointers to bound native
+structs, which the template shares with the host. A Go slice or map passes
+when a linked schema binds its type. Each value must have the Go type of its
+parameter; there are no implicit numeric conversions. `RenderFuncNative`
+selects a renderer by name.
+
+`Template.Parameters` gives the entry argument order. `Render` and `RenderFunc`
+take arguments in the existing EVM value ABI, including host types, script
+structs and KVO models. Compiled
+`Module`, original source positions, `GeneratedSources` and class metadata are
+available for tooling. Keep the template's rendering plan with its module.
+
+A linked `Program` supports concurrent renders. Each render gets isolated VM
+globals and builder state; registered host implementations retain their own
+state. Context cancellation and `RenderOptions.Budget` apply to execution.
+Output is capped at 16 MiB by default (`MaxOutputBytes` overrides it). Failed
+renders return an error and no partial document.
+
+## Files and frontmatter
+
+`CompileSources(sources, packages...)` compiles a map of filenames to source text.
+It selects no entry: call `program.RenderFunc(ctx, "Page", args, options)` to
+name a renderer; `args` omits the builder. `CompileFiles(entry, sources, ...)` also selects a default
+renderer for `Render`: `entry` can be a function name or a GoX filename (its first
+renderer). Go and GoX files each need their own imports; they are file-local.
+Go and GoX files in one package must declare the same name.
+Hosts can opt into `Options.AllowMissingPackage` for legacy sources. Files that
+omit the clause then inherit the package name, defaulting to `plugin`.
+
+A `.gox` file may start with a `---` line, opaque metadata, and a closing
+`---` line. Both delimiters occupy whole lines. Metadata belongs to every
+named function declared in that file; use separate files for different metadata.
+
+```gox
+---
+title: "Rewards"
+---
+
+package rewards
+
+import "github.com/andreyvit/evm/gox"
+
+func Render(b *gox.Builder) {
+    <h1>"Rewards"</h1>
+}
+```
+
+Set `gox.Options.ParseFrontmatter` to `func([]byte) (any, error)`. GoX calls
+it during preprocessing, before Go compilation, with bytes between the delimiter
+lines. The host chooses the format (YAML, JSON, NAML, or something else).
+An error fails parsing with the filename; frontmatter without a callback fails
+as well. Files without frontmatter need no callback.
+
+`Template.Files()` lists all GoX files in filename order, including files
+without metadata or functions. `Template.File(filename)` looks up an exact
+source-map key; `Template.FunctionFile(functionName)` finds a function's file.
+Each `gox.File` contains `Filename`, `Name` (basename without `.gox`),
+`Functions` in declaration order, `Frontmatter`, and `HasFrontmatter`.
+The first function is `Functions[0]` when the list is nonempty. Methods,
+`init`, blank names, and anonymous functions are excluded. Ordinary `.go`
+files are excluded too. `Program` exposes the same methods after linking.
+Returned function slices are copies; host metadata remains shared and immutable.
+
+`Template.Frontmatter(functionName)` and `Program.Frontmatter(functionName)`
+return `(value, present)`. Presence remains true if the callback returns nil.
+Treat the parsed value as immutable. Metadata stays with the template/program;
+serializing an EVM module alone does not serialize host objects.
+
+`Options.CheckSyntax` also validates frontmatter. `FormatSource` preserves its
+opaque bytes without interpreting them, so formatters need no host callback.
+The editor grammar recognizes the block without imposing a metadata language.
+
 ## Whitespace and output formats
 
 Indentation and newlines between Go/markup statements emit nothing. Add spaces
@@ -900,8 +923,8 @@ Inline JS/CSS retain their native source whitespace and use `{=value}` for data:
 
 Rendered output has no automatic pretty-print mode: it could change inline text or `<pre>`
 semantics. `gox.Options{Format: gox.TextFormat}` renders top-level expressions as plain
-text; they follow the [text output rule](#what-produces-output): strings
-only. `gox.CSSFormat` treats literal strings as CSS source and
+text; they follow the [text output rule](#what-produces-output): strings and
+trusted content. `gox.CSSFormat` treats literal strings as CSS source and
 dynamically rendered expressions as contextually escaped CSS data. Both use the same Go frontend,
 type analysis, nil guards and EVM compiler; HTML markup requires `HTMLFormat`.
 
@@ -914,7 +937,7 @@ and CSS. Runtime calls those filters directly; it never executes a Go template.
 The copied upstream tests and end-to-end comparisons cover the escaping behavior.
 
 Template source and host packages are trusted code. Data is untrusted.
-`gox.HTML`, `CSS`, `JS`, `JSStr`, `URL` and `Srcset` have Go's explicit trusted-content
+`gox.HTML`, `CSS`, `JS`, `JSStr`, `URL`, `Srcset` and `HTMLAttr` have Go's explicit trusted-content
 semantics; converting untrusted data to one of these types bypasses protection.
 Dynamic `script`/`style` types are rejected. Runtime attribute helpers cannot
 change those types or meta-refresh parsing. Their other attribute names and
@@ -934,7 +957,7 @@ Branches, loop iterations and components must contain complete elements.
 open elements are rejected. Malformed syntax, incompatible input types and
 ambiguous escaping contexts fail compilation with source positions.
 
-## Native host callbacks
+## Host integration
 
 For a renderer returned by guest code, retain its value with
 `program.EVM().FunctionValue(value)` and call
@@ -974,17 +997,45 @@ Native helpers taking `*gox.Builder` receive that same pointer and can call its
 normal methods. As in native Go, do not retain or concurrently use the builder
 outside its render.
 
+Native component bindings preserve parameter names and declaration comments.
+`//gox:arg` optional overrides also apply to imported native functions exposed
+through `evmbind`, so their XML callers can omit optional plain-typed inputs.
+
+`gox.PackageSource` and `gox.PackagesSource` preserve argument annotations in
+printed package declarations. They use `evmcompiler.DeclarationOptions.Annotations`,
+a generic comment-selection callback; the EVM printer has no GoX-specific rules.
+
+`gox.TrustedContentSchema()` shares the trusted content types the same way
+`gox.Schema()` shares the builder. `gox.LinkModule(module, packages...)` links
+a plain EVM module that uses the builder, `gox.ProgramOf(program)` finds the
+GoX program of a linked `*evm.Program`, and `gox.SplitFrontmatter` splits a
+file without parsing its metadata. `Template.FunctionParameters(name)`
+describes the inputs of any renderer before linking.
+
 ## Class discovery
 
 `Template.Classes` includes static class attributes, constant interpolations and
-constant arguments to `class`, `Class` and `b.Attr("class", ...)`, with source
-positions. `bg-{tone}` is dynamic and does not falsely contribute `bg-`.
+constant arguments to `b.Class`, `b.Attr("class", ...)`,
+`b.AttrOrOmit("class", ...)` and `ClassList.Add`, with source positions. `bg-{tone}` is dynamic and does not falsely contribute `bg-`.
 `DynamicClasses` flags values that need a separate Tailwind safelist or host
 policy. Arbitrary host helper output cannot be enumerated by this compiler.
 
+## Execution coverage
+
+Pass `evm.NewCoverage(program.EVM())` as `RenderOptions.Coverage` to collect
+instruction counts and branch outcomes across renders. Reports use original
+GoX source locations. Use one collector per concurrent run, then merge them.
+A render without this option does not collect coverage, including when it
+reuses a previously instrumented render session. Rendering inside a native
+call inherits that call's collector; set it on the enclosing EVM session.
+
+Source coverage excludes compiler-generated nil guards and their fallback
+paths. Raw instruction coverage still records them. Explicit template
+conditions require both outcomes.
+
 ## Source tooling
 
-[GoX editor support](../_editors) covers Zed, Vim, VS Code, TextMate, Sublime Text, Neovim, and Helix.
+[GoX editor support](../_editors) covers Zed, Vim, Neovim, VS Code, TextMate, Sublime Text and Helix.
 
 From a checkout, install the standalone tool:
 
@@ -1040,9 +1091,10 @@ exported map as immutable.
 | `Compile` | Yes, for referenced host packages | The result can be represented as EVM bytecode |
 | `Link` | Compatible implementations | Required runtime bindings are available |
 
-A generic CLI does not know an application's virtual packages. Full preprocessing
-belongs in the application or tooling that supplies that environment. The EDB
-CLI provides syntax checking and formatting without requiring it.
+A generic CLI does not know an application's packages. Full preprocessing
+belongs in the application or tooling that supplies that environment. `gox
+check` also has no frontmatter parser: it rejects a file that starts with
+frontmatter, while `gox fmt` accepts it.
 
 ### Formatting rules
 
@@ -1090,7 +1142,7 @@ func Card(b *gox.Builder, name string) {
 | --- | --- |
 | Text is treated as an identifier | Quote literal text: `<p>"Hello"</p>` |
 | A `<` comparison looks like markup | Parenthesize it: `if (a < b) { ... }` |
-| A missing argument is not inherited | Check its parameter name, lexical scope, type and whether the call is inside markup |
+| A missing argument is not inherited | Only implicit parameters are inherited. Check for `//gox:arg name implicit` or an `ImplicitTypes` entry, then the name, scope and type of the caller's variable |
 | A component is unknown | Use its exact case-sensitive Go name and make its package available |
 | `undefined: x (add import "...")` | The file names package `x` without importing it. Add the import, or run `gox fmt` / `FormatSource` |
 | `cannot output a value of type int` | Text takes strings and trusted content. Convert it (`strconv.Itoa(n)`, `fmt.Sprint(v)`) or pipe it through a function (`price \| app.FormatMoney`) |
@@ -1110,7 +1162,7 @@ implicit arguments, component calls and output operations after lowering.
 Compile the result to check EVM-specific restrictions, then link and render with
 strict diagnostics. Preserve the original filename so errors identify the source.
 
-## Validation
+## Tests and benchmarks
 
 ```sh
 go test ./...
@@ -1128,44 +1180,3 @@ On Apple M5 Max with Go 1.27.3, GoX uses 27–40% less execution time than cache
 `html/template` across these six workloads (eight samples, 2026-11-06). The report
 includes allocation counts, before/after samples, EVM regression controls and
 reproduction commands. `BenchmarkRender` remains a small diagnostic workload.
-
-### Plain text or trusted HTML
-
-Use `gox.Content` for inputs such as titles that accept either text or markup:
-
-```go
-func Title(b *gox.Builder, title gox.Content) { <h1>title</h1> }
-// XML callers use title={gox.Text("<plain text>")} or
-// title={gox.TrustedHTML(gox.HTML("<em>trusted markup</em>"))}.
-```
-
-`Content` has `Content string` and `TrustedHTML bool` fields. Its zero value is
-empty plain text. `Text` escapes text for its output context; `TrustedHTML`
-asserts that the caller trusts the markup, without sanitizing it. Attribute
-contexts still apply contextual escaping. Native helpers can accept the same
-struct. `b.Text(...)` remains the imperative builder operation.
-
-EVM stores Content and common Optional specializations in one cell. Public Go
-fields and pointer semantics are preserved. See [compact value representations](_docs/COMPACT_VALUES.md)
-for supported optional payloads, fallback layouts, and host binding details.
-
-Native component bindings preserve parameter names and declaration comments.
-`//gox:arg` optional overrides also apply to imported native functions exposed
-through `evmbind`, so their XML callers can omit optional plain-typed inputs.
-
-`gox.PackageSource` and `gox.PackagesSource` preserve argument annotations in
-printed package declarations. They use `evmcompiler.DeclarationOptions.Annotations`,
-a generic comment-selection callback; the EVM printer has no GoX-specific rules.
-
-## Execution coverage
-
-Pass `evm.NewCoverage(program.EVM())` as `RenderOptions.Coverage` to collect
-instruction counts and branch outcomes across renders. Reports use original
-GoX source locations. Use one collector per concurrent run, then merge them.
-A render without this option does not collect coverage, including when it
-reuses a previously instrumented render session. Rendering inside a native
-call inherits that call's collector; set it on the enclosing EVM session.
-
-Source coverage excludes compiler-generated nil guards and their fallback
-paths. Raw instruction coverage still records them. Explicit template
-conditions require both outcomes.

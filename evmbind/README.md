@@ -62,7 +62,7 @@ Complete constant blocks are checked so `iota`, omitted expressions and
 aliases keep their native values; constants of unrelated types are not
 exported. Struct pointers retain the native layout. Exported embedded structs
 and struct pointers keep Go field promotion, value copying and pointer
-aliasing semantics. `Options.Omit` does not apply: a selective schema lists
+aliasing semantics. `Options.Omit` is an error here: a selective schema lists
 what it exposes.
 
 ## Concrete generic structs
@@ -241,10 +241,11 @@ options as `New`, including `Only`, `Selective`, `Omit` and `Imports`.
 
 Pass &apibindings.Bindings in Options.Static. Automatic selects generated
 wrappers when the source fingerprint and complete set of wrapper names match.
-Missing or stale bindings select reflection. StaticOnly panics on mismatch.
+Missing or stale bindings select reflection. With StaticOnly, `New` panics
+on a mismatch and `RegisterMethods` returns an error.
 The evmreflect build tag excludes generated Go references, so native API
 renames/removals can be developed before regeneration. A package imported in
-both builds can supply a zero Static under that tag, as Fire's bhbindings does.
+both builds can supply a zero Static under that tag.
 
 Native package functions and methods support variadic arguments, including
 interface dispatch and bound method values. Calls use ordinary Go semantics:
@@ -291,8 +292,8 @@ elements and map values preserve the concrete native object and typed nils.
 Their values must be registered native implementations; guest-only types cannot
 be stored in a native method-interface slot. Reading a native-written value
 whose concrete type is not registered fails with an unregistered-type error,
-including error implementations; no proxy is created. Interface map keys,
-embedded data fields require further binding support. Unsupported declarations fail schema creation.
+including error implementations; no proxy is created. Interface map keys
+are not supported. Unsupported declarations fail schema creation.
 
 Ordinary `any` works in arguments, results, struct fields and typed slices.
 Registered native values retain their Go types and reference identity. Values

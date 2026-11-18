@@ -84,7 +84,7 @@ captures alive without copying them and rejects invocation in another program.
 The receiving VM supplies globals and initialization; mutable captured state
 remains shared even across VMs or a VM reset. Synchronize concurrent calls and
 validate any captured host resource lifetimes. Signature inspection returns a
-copy. `NamedFunctionValue` remains the stricter public, noncapturing entry API.
+copy. `NamedFunctionValue` is the stricter public, noncapturing entry API.
 
 ### Native field codecs
 
@@ -99,7 +99,7 @@ copy codec declarations; conflicting declarations for one type fail linking.
 
 A package may also supply Go `Source`. Its shared scalar types and methods can
 compile as guest code; see [shared scalar source](#shared-scalar-source).
-`PackageSource`, `PackagePaths` and `PackagesSource` print the script-facing API
+`evmcompiler.PackageSource`, `PackagePaths` and `PackagesSource` print the script-facing API
 for tooling or an agent writing a plugin.
 
 Use `evmcompiler.DeclarationOptions.Annotations` to select application-specific
@@ -133,8 +133,8 @@ isolation boundary.
 
 ## Standard packages and output
 
-The VM implements `errors`, `fmt`, `log`, `math`, `strconv` and `strings`
-itself; every script can import them. Formatting supports flags, aggregates,
+The VM implements `errors`, `fmt`, `log`, `math`, `strconv`, `strings`,
+`evmruntime` and `evmruntime/log` itself; every script can import them. Formatting supports flags, aggregates,
 custom formatting methods and wrapped errors. `errors.As` is not exposed.
 `log` has no process-exit or configuration APIs.
 
@@ -144,9 +144,9 @@ reformatting only), `html`, `iter`, `maps`, `math/bits`, `net/url`, `path`,
 `path/filepath`, `regexp`, `slices`, `sort`, `time`, `unicode`,
 `unicode/utf8` and `unicode/utf16`. Pass `evmstd.Packages()` to Compile and
 Link next to the host's packages; GoX does so by default. Nothing in them
-reads files, the network, the environment or the host's time zone:
-`time.Local`, `time.Sleep`, `filepath.Glob` and their kind are left out.
-`time.Now` is exposed. `evmstd/API.md` lists, per package, every exposed
+reads files, the network or the environment: `time.Sleep`, `filepath.Glob`
+and their kind are left out. `time.Now` is exposed, and its values carry the
+host's time zone; `time.Local` and `time.LoadLocation` are left out. `evmstd/API.md` lists, per package, every exposed
 declaration and every one left out with the reason. Unlisted symbols fail
 type checking.
 
@@ -346,5 +346,5 @@ Coverage selects a generated interpreter at invocation entry. The ordinary
 interpreter has no per-instruction coverage checks. Fused operations remain
 fused; their source positions attribute the execution. Fused comparisons also
 record the consumed jump's outcome. Coverage bypasses float-loop acceleration
-to observe each iteration. Regenerate with `go generate ./evm`; a test rejects
+to observe each iteration. Regenerate with `go generate .`; a test rejects
 stale generated code.

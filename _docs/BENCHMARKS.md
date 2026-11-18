@@ -25,7 +25,7 @@ allocate. GoX uses `VM values → owned Go JSON data → rendering`; its convers
 shares traversal with the existing JSON encoder and meters output allocations.
 
 ```sh
-go test ./evm ./gox -run '^$' \
+go test . ./gox -run '^$' \
   -bench 'Benchmark(RecordJSON|ValueRendering)$' -benchmem -benchtime=200ms -count=3
 ```
 

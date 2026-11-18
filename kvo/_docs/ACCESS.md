@@ -1,31 +1,38 @@
-# Storage and access are separate choices
+# Reading and editing records
 
-`Record` provides `Get`, `Has`, `Child`, `ToJSON`, `Snapshot`, and `Edit` over
-MessagePack, Fast2, Compact2, a Go struct, or decoded memory. Choosing an access strategy does
-not change the stored format. EDB attaches the table's binding automatically.
+A `kvo.Record` reads and edits one value of a model. The data behind it is a
+Fast2, Compact2 or MessagePack row, a Go struct, or decoded memory, and the
+same calls work on all five. How you access a record is a choice separate from
+how it is stored: no access strategy changes the stored format.
 
-Operations panic on error by default. Use `TrySet`, `TrySetValue`, `TrySetAs`, `TryToJSON`,
-`TryEncode`, `TryDecode`, `TryDecodeProperty`, `TryValidate`, and `TryGenerate`
-when errors need explicit handling. Codec packages follow the same convention:
-`Open` returns a view, while `TryOpen` returns a view and error. Database
-`Record`/`GetRecord` return only the record; their `Try...` forms also return
-`ValueMeta` and an error.
+This guide goes from the typed API that ordinary code uses, through decoding
+strategies and lifetimes, down to the codec level. The
+[KVO overview](../README.md) introduces the terms. [Using edb](#using-edb)
+collects what applies when a database hands out the records.
 
-Build bindings during setup. `Bind(goType, model)` and
-`Project(goType, model, nil)` cache default plans; full bindings and projections
-remain distinct. Custom field maps and `WithGenerated`/`WithNativeSchema`
-configurations create separate plans: construct once and reuse.
+## Conventions
 
-Representation IDs and metadata are never reclaimed. Per-row or per-request
-binding construction leaks permanent metadata. Reads use flat descriptor tables.
+**Errors.** Operations panic on an error. The `Try` forms return it:
+`TrySet`, `TrySetValue`, `TrySetAs`, `TryToJSON`, `TryEncode`, `TryDecode`,
+`TryDecodeProperty`, `TryValidate`, `TryGenerate`. The codec packages follow
+suit: `row2.Open` returns a view, `row2.TryOpen` a view and an error.
 
-## Typed properties (Go 1.27+)
+**Setup.** Build schemas, properties, models and bindings at package scope or
+during initialization. `kvo.Bind(goType, model)` and
+`kvo.Project(goType, model, nil)` return a cached plan, and a binding and a
+projection of one pair are distinct plans. A plan with a custom field map,
+`WithGenerated` or `WithNativeSchema` is separate: build it once and reuse it.
+Representation IDs and their metadata are never reclaimed, so a binding built
+per row or per request leaks.
 
-Declare scalar references with `NewSignedProp[T]`, `NewUnsignedProp[T]`,
-`NewStringProp[T]`, `NewBoolProp[T]`, `NewFloat32Prop[T]`, `NewFloat64Prop[T]`, or
-`NewBytesProp[T]`. `Bind…Prop` attaches access to a property already declared in
-KVO. Registration validates the Go type; reads and writes use direct conversions
-without reflection. Named integer/string types retain their declared Go type.
+## Typed properties
+
+Declare a scalar property with `NewSignedProp[T]`, `NewUnsignedProp[T]`,
+`NewStringProp[T]`, `NewBoolProp[T]`, `NewFloat32Prop[T]`, `NewFloat64Prop[T]`
+or `NewBytesProp[T]`. The matching `Bind…Prop` function gives typed access to
+a property declared elsewhere. Registration checks the Go type. Reads and
+writes convert directly, without reflection, and a named integer or string
+type keeps its Go type.
 
 ```go
 points := kvo.NewSignedProp[int64](schema, 1, "customer:points", kvo.TInt64)
@@ -33,61 +40,55 @@ tags := kvo.NewListProp(schema, 2, "customer:tags",
     kvo.ListOf(kvo.TMachineString), values.StringCodec[string]())
 
 n := r.Get(points) // int64, not values.Value
-n = points.Get(r) // same result; fastest scalar syntax
-edit.Set(points, n + 1)
+n = points.Get(r)  // the same read; the shortest path for a scalar
+edit.Set(points, n+1)
 tags.SetSlice(edit, []string{"vip"})
 for tag := range r.Get(tags).Iter() { _ = tag }
-list := r.Get(tags) // kvo.List[string], exactly 16 bytes
+list := r.Get(tags) // kvo.List[string], 16 bytes
 _ = list.Len()
 copyOfElements := list.Slice()
 _ = copyOfElements
 ```
 
-Scalar refs contain only an eight-byte code. `PropRef[T]` is the alternative
-shared descriptor for custom conversion and object views; `NewRecordProp` returns
-`Record` without decoding, and `NewRecordListProp` returns `RecordList` whose
-items are ordinary `Record` values. Object list access does not require a native
-Go type parameter. `NewScalarProp`/`BindProp` accept a `values.Codec[T]` for custom scalar
-conversion. Only conversion is reflection-free; native access still follows the
-attached generated or reflective host binding.
+A scalar reference holds only its eight-byte code. `PropRef[T]` is the shared
+descriptor behind custom conversions and record views:
 
-`List[T]` and `RecordList` each contain one tagged `values.Value`: a GC-visible
-pointer, representation ID, and 32-bit byte length (native slices point to their
-existing header). They do not allocate a per-value box. Shared representation
-metadata is registered once per property/access layout on first use. Warm access
-and immediate `range` allocate nothing for ordinary scalar and object elements.
+- `NewScalarProp` and `BindProp` take a `values.Codec[T]` for a custom scalar.
+- `NewRecordProp` returns the child as a `Record`, without decoding it.
+- `NewRecordListProp` returns a `RecordList` whose items are `Record` values.
+  It needs no Go type for the element.
 
-`Cursor()` creates stack traversal state; `Next()` advances it and `Len()` reports
-remaining elements. `Iter()` returns a single-pass range-over-function sequence:
-breaking stops immediately, and reusing that sequence resumes it. Call `Iter()`
-again for an independent traversal. `Slice()` allocates a result slice; strings,
-bytes and child records still borrow the original storage. Retaining an iterator
-closure can allocate like other escaping Go closures. The source transaction must
-outlive all borrowed views, elements and iterators.
+Only the conversion is free of reflection by construction. Access to a Go
+struct follows the binding attached to the record, generated or reflective.
 
-Use `list.OwnedSlice()` to copy strings and byte spans as well as the slice.
-`RecordList.OwnedSlice()` applies `Own()` to each record; native objects retain
-their identity. Use `RecordList.CloneSlice()` for independent records. The same
-methods are available on cursors and copy their remaining elements without
-advancing the original cursor.
+## Lists
 
-Use `tags.SetSlice(edit, items)` or `edit.Set(tags, tags.FromSlice(items))` for
-list assignments; encoding/editing allocates. Generic `Editor.Get/Set/TrySet`
-operate on a direct property. Untyped `GetValue(code)` and `SetValue(code, value)`
-also address one property; `SetValue` derives compact/zero-preservation policy
-from the model. `GetPathValue(path)` reads a nested path.
+`List[T]` and `RecordList` each hold one tagged `values.Value`: a pointer the
+garbage collector sees, a representation ID and a 32-bit byte length. For a Go
+slice the pointer is the existing slice header. Nothing is boxed per value.
+Metadata is registered once per property and layout, on first use. After
+that, access and an immediate `range` allocate nothing for scalar and record
+elements.
 
-`FastSetPathValue(path, value)` accepts `[]row2.Step` with precomputed options.
-EVM computes them at link time to avoid model-policy lookups on every write.
-Use `kvo.WriteOptions(model.PropFlags(code))` when preparing a step; options
-are used as supplied, without merging model defaults. `TryFastSetPathValue`
-returns errors, and the `WithWriter` variants accept reusable encoding scratch.
-Ordinary edits should use typed `Set`, untyped `SetValue`, or attached child
-editors. `Delete` explicitly removes a field even when the model preserves zero.
-`ValuePropRef` remains available for
-raw encoded aggregate access; prefer typed dictionaries for ordinary code.
+| Call | Result |
+| --- | --- |
+| `Len()` | Number of elements. |
+| `Iter()` | A single-pass sequence for `range`. Breaking stops it; ranging over the same sequence again resumes. Call `Iter()` again for an independent pass. |
+| `Cursor()` | Traversal state on the stack: `Next()` advances, `Len()` reports what remains. |
+| `Slice()` | A new slice. Strings, byte spans and child records still borrow the source. |
+| `OwnedSlice()` | A new slice with strings and byte spans copied. On a `RecordList` it applies `Own()` to each record; a Go struct keeps its identity. |
+| `RecordList.CloneSlice()` | Independent records. |
 
-## Dictionaries and attached editors
+`Slice`, `OwnedSlice` and `CloneSlice` also exist on a cursor, where they copy
+the remaining elements and leave the cursor in place. An iterator closure that
+escapes can allocate like any Go closure. The source of the data must outlive
+every borrowed view, element and iterator; see
+[lifetimes](#lifetimes-and-compatibility).
+
+Assign a list with `tags.SetSlice(edit, items)` or
+`edit.Set(tags, tags.FromSlice(items))`. Encoding and editing allocate.
+
+## Maps
 
 ```go
 appIDs := kvo.NewMapProp(schema, 3, "integration:app_ids",
@@ -107,29 +108,41 @@ edit.List(tags).AddUnique("vip")
 edit.List(tags).Remove("inactive")
 ```
 
-`Get(key)` returns zero when absent; `Lookup` distinguishes absence from a
-present zero. `Keys()` traverses without decoding values. Map reads borrow the
-original bytes without converting MessagePack to another encoding. Native
-scalar maps and encoded scalar/record maps support allocation-free warmed
-lookup and iteration. Native maps containing struct values must copy a selected
-entry into addressable storage; that case can allocate. Custom object codecs
-can also require decoding. Retain the owning record with `Own()` before keeping
-a map beyond the source transaction.
+A map property takes a key codec and a value codec, as a list takes an element
+codec. `kvo.Map[K, V]` is a 16-byte borrowed view. `Get(key)` returns zero for
+an absent key; `Lookup(key)` also reports presence. `Keys()` walks the keys
+without decoding values.
 
-`NewRecordMapProp` returns `Map[K, Record]`. `NewNestedMapCodec` combines reusable
-map codecs; its `.Prop(schema, code, name)` declares a nested map property.
-`NewJSONMapProp` returns `Map[K, any]`, decoding only the requested dynamic value;
-object/array materialization allocates. `Len` and `Keys` do not decode those
-values. There is no JSON serialization round trip for MessagePack lookup.
+- **No conversion.** A read borrows the stored bytes. A MessagePack map is
+  never transcoded to be read.
+- **Allocation.** Lookup and iteration allocate nothing, once warm, on a Go
+  map of scalars and on an encoded map of scalars or records. A Go map of
+  struct values must copy the selected entry into addressable storage and can
+  allocate. A custom record codec can require decoding.
+- **Other value kinds.** `NewRecordMapProp` returns `Map[K, Record]`.
+  `NewNestedMapCodec` combines map codecs, and its
+  `.Prop(schema, code, name)` declares a map of maps. `NewJSONMapProp` returns
+  `Map[K, any]` and decodes only the value asked for; an object or array
+  value allocates, and `Len` and `Keys` decode none.
+- **MessagePack.** Key adapters normalize older key encodings before a lookup
+  and apply Go's rule that the last duplicate key wins. A lookup scans the map
+  once, so a large map read at random belongs in Fast2. Iteration handles
+  duplicate keys without allocating, at quadratic cost.
 
-Typed map declarations preserve zero entries by default, including in nested
-maps. `Set(key, zero)` retains an entry; `Delete(key)` removes it. On a JSON
-dictionary, `SetNull(key)` stores a present null, returned as `(nil, true)` by
-`Lookup`. `Clear()` keeps an empty collection. `edit.Delete(prop)` removes an
-encoded property or resets a native field; native zero/absence distinctions
-follow the model and its Go field type. `Missing()` distinguishes a missing/nil
-collection from a present empty one. Native `omitempty` serialization can omit
-empty collections; direct encoded Clear retains them.
+Zero and absence in an editor:
+
+- A typed map keeps zero entries, nested maps included. `Set(key, zero)`
+  keeps the entry and `Delete(key)` removes it.
+- On a JSON map, `SetNull(key)` stores a present null, which `Lookup` returns
+  as `(nil, true)`.
+- `Clear()` leaves an empty collection. `edit.Delete(prop)` removes an encoded
+  property, or resets a Go field; whether a Go struct can tell zero from
+  absent depends on the model and the field's type.
+- `Missing()` tells a missing or nil collection from a present empty one. A Go
+  struct serialized with `omitempty` can drop an empty collection. A `Clear`
+  on an encoded row keeps it.
+
+## Child records
 
 ```go
 profile := edit.EditOrCreate(profileProp) // Edit returns nil if absent; New requires absence
@@ -144,64 +157,79 @@ fresh := edit.List(venuesProp).New() // appends and returns an attached record e
 fresh.Set(enabledProp, true)
 ```
 
-Map entry `Edit`, `New`, and `EditOrCreate` follow the same explicit creation
-rules as record children. Nested dictionaries use `kvo.EditMap(outer, key)`,
-`NewMap`, or `EditOrCreateMap`; these free functions infer both nested key types.
-Changes stay attached through snapshots and saves. Replacement/deletion
-invalidates old child editors. Structural record-list changes (append/remove/
-clear) invalidate element editors because native slice storage can move.
+A child editor is attached to its parent: its changes are part of the parent's
+next snapshot or save. A record property and a map entry have `Edit`, `New`
+and `EditOrCreate`. A list of records has `Edit(index)` and `New()`. For a map
+of maps use `kvo.EditMap(outer, key)`, `NewMap` or `EditOrCreateMap`, which
+infer both key types.
 
-Edits coalesce before serialization in MessagePack, Fast2, and Compact2. Typed
-map/list editor reads see pending changes without rebuilding the enclosing row.
-`edit.Get(collectionProp)` produces a read snapshot of that collection; use the
-collection editor's lookup/iteration methods in a mutation loop. `Snapshot`,
-`MessagePack`, and `Record` cache immutable encoded output until another change.
-Native editors write through; native/generic-memory collection mutation can
-allocate. The older `EditEncoded` wrapper deliberately writes through to its
-caller-owned codec editor; use `Record.Edit()` for ordinary batched editing.
-See the [batching measurements](BENCH-RECORD-ACCESS.md#batched-writes-and-borrowed-dictionaries).
+Replacing or deleting a child invalidates its editors. Appending to, removing
+from or clearing a list of records invalidates the editors of its elements,
+because the slice behind it can move.
 
-[Typed access measurements and representation tradeoffs](BENCH-TYPED-ACCESS.md).
+## How edits apply
 
-## Read a few properties directly
+An editor of a Go struct, or of decoded memory, writes through at once. An
+editor of a MessagePack, Fast2 or Compact2 row collects changes and encodes
+when asked.
+
+- `Record`, `Snapshot` and `MessagePack` return encoded output and cache it
+  until the next change.
+- Reads through a list or map editor see pending changes without rebuilding
+  the row. `edit.Get(collectionProp)` takes a read snapshot of that
+  collection, so inside a loop that mutates, read through the collection
+  editor.
+- Changing a collection of a Go struct or of decoded memory can allocate.
+- `Delete` removes a property even when the model keeps zero values.
+- `kvo.EditEncoded(codecEditor)` wraps a `row2.Editor` the caller owns and
+  writes through to it. Ordinary code uses `Record.Edit()`.
+
+Without a typed reference, `Editor.GetValue(code)` and `SetValue(code, value)`
+address one property; `SetValue` takes the compact and zero-preservation
+policy from the model. `GetPathValue(path)` reads through children.
+
+`FastSetPathValue(path, value)` takes a `[]row2.Step` whose write options are
+already computed, and applies them as given, without consulting the model. EVM
+computes them at link time. Prepare a step with
+`kvo.WriteOptions(model.PropFlags(code))`. `TryFastSetPathValue` returns the
+error, and the `WithWriter` forms reuse encoding scratch. `ValuePropRef` gives
+raw access to an encoded aggregate; prefer a typed map.
+
+Measurements: [typed access](BENCH-TYPED-ACCESS.md) and
+[batched writes](BENCH-RECORD-ACCESS.md#batched-writes-and-borrowed-dictionaries).
+
+## Access by code
+
+Code that works from numeric codes, such as analytics over a schema built at
+run time, reads without typed references:
 
 ```go
-r := tx.GetRecord(accounts, key)
 if r.Missing() { return nil }
 name := r.GetOwnedString(nameCode).AsString()
 balance := r.Child(row2.Step{Key: profileCode}).GetValue(balanceCode).AsUint()
-_ = name
-_ = balance
 ```
 
-The same code works with `cursor.Record()` in table and index scans, including
-scans containing both MessagePack and row2 rows. Pass the model after the name in `edb.DefineTable`. MessagePack is the default;
-`b.SetRecordStorage` selects Fast2/Compact2. The model and its registered native
-mapping determine which properties are exposed.
+`GetValue` returns a `values.Value`, the carrier EVM uses. Integers are
+normalized, a float32 holds float32 bits, and a string is a pointer and a
+length.
 
-MessagePack access follows encoded map entries using the Go fields' `msgpack`
-names. `Child` borrows the child's encoded bytes. Reading ordinary scalar
-properties does not construct a Go row, map, slice, or string. MessagePack must
-scan field boundaries, including nested values it skips; Fast2/Compact2 have
-more efficient field addressing. None of these strategies performs a database
-format conversion.
+- `GetValue(code).AsString()` borrows from the record. To keep a string, use
+  `GetOwnedString(code).AsString()`: it copies out of an encoded row, and
+  returns the string as it is from a Go struct or owned memory.
+- `Child` borrows the child's bytes. Use it to reach a few properties below a
+  child record.
+- `GetValue` on a whole child, map or list returns a byte span holding a row2
+  container; the container's trailer says whether it is Fast2 or Compact2. A
+  MessagePack row transcodes that one aggregate. A Go struct materializes it.
+  Calling it again repeats the work and can allocate, so prefer the typed list
+  and map views.
 
-`GetValue` returns the shared `values.Value` runtime carrier. Integers are normalized,
-float32 uses float32 bits, and strings use the same pointer and length as EVM.
-`GetValue(code).AsString()` borrows the record's lifetime. Use
-`GetOwnedString(code).AsString()` when retaining a string beyond the transaction;
-it copies encoded strings and directly returns native/owned-memory strings.
+Reading a scalar from a MessagePack row builds no Go struct, map, slice or
+string. MessagePack is addressed by scanning: a read walks the encoded map by
+the `msgpack` names of the Go fields and skips the values before the one it
+wants. Fast2 and Compact2 address a field directly.
 
-`GetValue` on a whole object, map or list returns a byte span containing a row2
-container (Fast2 or Compact2, as identified by the container's trailer).
-For MessagePack it transcodes only that aggregate, without first building its
-Go containers. For a native record it materializes that aggregate from the Go
-value. Use `Child` to navigate objects when only a few descendant properties
-are needed. Repeated collection `GetValue` calls can repeat this work.
-
-## Borrow lists and inline fields
-
-Use `ListValue` for scalar/string list access without constructing a Go or guest slice:
+`ListValue` reads a list of scalars or strings without building a slice:
 
 ```go
 it := customer.ListValue(tagsKey).Iter()
@@ -212,17 +240,17 @@ for {
 }
 ```
 
-`ListValue.Len`, `ListValue.At`, and `ListValue.Iter` work across MessagePack, Fast2,
-Compact2, native structs and decoded memory. Use the iterator for sequential
-access: MessagePack and Compact2 indexed reads may scan earlier elements.
-Borrowed strings share the source lifetime. To retain a list beyond its source
-transaction, own the record first. Aggregate/custom-codec elements can still
-materialize; this API does not promise zero allocations for arbitrary decoders.
+`ListValue.Len`, `At` and `Iter` work on every representation. Iterate when
+reading in order: `At` on MessagePack or Compact2 can scan the elements before
+it. Elements with a custom codec can materialize, so this API does not promise
+zero allocations for every decoder.
 
-Use `kvo:",inline"` on a value-struct field to expose its properties directly on
-the containing KVO model. Include the same declarations with
-`b.Inline(childModel)`; codes, local/qualified names, and storage policies are
-preserved. There is no container property:
+## Embedded structs
+
+`kvo:",inline"` on a struct-valued field promotes its properties into the
+containing model. Add the same declarations to the model with
+`b.Inline(childModel)`. Codes, local and qualified names and storage policies
+carry over, and no container property exists:
 
 ```go
 type CustomerState struct {
@@ -230,91 +258,82 @@ type CustomerState struct {
 }
 // In the CustomerState model builder:
 b.Inline(customerStatValuesModel)
-// Access the promoted property directly:
+// Read the promoted property directly:
 points := state.Get(PointsEarned)
 ```
 
-Field paths and native offsets are resolved at registration. Generated bindings
-include the embedded structs' accessors, so decoded reads/writes still use the
-shared native binding implementation. MessagePack reads stay borrowed when the
-embedding also shares its enclosing wire map. Pointer inlining is rejected;
-value fields stored under a separate MessagePack key use the existing decoder
-fallback. Duplicate property codes/names panic during model registration.
+Field paths and offsets are resolved at registration, and generated bindings
+include the embedded struct's accessors. A MessagePack read stays borrowed
+when the embedded struct shares the enclosing wire map. A value field stored
+under its own MessagePack key goes through the decoder instead. Inlining a
+pointer is rejected. A duplicate code or name panics at model registration.
 
-Without the KVO inline tag, ordinary value-struct embedding, including
-`msgpack:",inline"`, keeps a logical KVO child that borrows the enclosing map;
-reads and edits resolve its flattened field names. Untouched parent fields are
-preserved. Pointer embeddings, conflicting names, and unusual payloads using
-nested embedding aliases retain the standard decoder's semantics via fallback.
+Without the `kvo` inline tag, an embedded struct value is a child record,
+`msgpack:",inline"` or not. The child borrows the enclosing map, reads and
+edits resolve its flattened field names, and untouched parent fields are
+preserved. Embedded pointers, conflicting names and payloads that rely on
+nested embedding aliases keep the standard decoder's behavior.
 
-For custom scalar codecs, register `kvo.RegisterMessagePackScalar` during
-initialization, before binding the Go type. Its direct decoder must match every
-supported wire form, including historical forms and nil. The callback is cached
-in the access plan; reads perform no registry lookup. Edits still use the Go
-encoder. Unregistered custom codecs retain the ordinary decoder fallback.
+A Go type with a custom MessagePack scalar encoding can be read directly:
+call `kvo.RegisterMessagePackScalar` during initialization, before binding the
+type. The decoder it registers must accept every wire form the data has ever
+used, nil included. The access plan caches it, so a read performs no registry
+lookup. Edits still use the Go encoder. A custom codec that is not registered
+is read through the ordinary decoder.
 
-EVM specializes local read-only scalar/string lists used through `range`,
-indexing, `len`, or `cap`. It uses the same 16-byte `ListCell` as `List[T]` and
-`RecordList`, with one reusable iterator workspace per indexing instruction,
-allocated with the VM. A list expression resolves its property once; range traversal is
-linear and allocates nothing per row. The compiler requires all consumers to be
-known and rejects mutation, escaping slices/strings, and calls or writes while
-a borrowed list/element is live. Those cases keep materialized slice semantics.
-This optimization does not remove ownership copies required at scope boundaries.
+## Lists in scripts
 
-Guest syntax stays `for _, tag := range customer.tags`; no `.Iter()` is needed.
-Adjacent single-consumer `len(customer.tags)` and index reads can be fused into
-one instruction. Other local uses transport the list's own cell through R/P;
-it carries the data span and shared representation metadata. The VM validates
-the declared element type when accepting a new cell. Go still uses `.Iter()`
-because its native range syntax cannot iterate an arbitrary struct.
+A script writes `for _, tag := range customer.tags`; there is no `.Iter()`.
+Go needs `.Iter()` only because its `range` cannot iterate an arbitrary
+struct.
 
-[Paired EVM/Go collection benchmarks](../../_docs/LIST-CELLS.md).
+When a script only reads a list of scalars or strings locally, through
+`range`, indexing, `len` or `cap`, EVM leaves the list in the row. The script
+holds the same 16-byte list cell as `List[T]`. The VM owns one reusable
+iterator workspace per indexing instruction, and a list expression resolves
+its property once. A range is linear and allocates nothing per record. An
+adjacent `len(customer.tags)` or index read with a single consumer fuses into
+one instruction.
 
+The compiler does this only when it knows every consumer of the list. A list
+that is modified, a slice or string that escapes, and a call or write while a
+borrowed element is live all get an ordinary materialized slice. The ownership
+copies at scope boundaries still happen. The VM checks the element type when
+it accepts a cell.
 
-Index scans reuse their tuple and data-lookup cursors. Advancing and accessing
-records can be allocation-free once those cursors are initialized. Opening a
-fresh database transaction and constructing its cursors still has a fixed cost;
-compilation, metadata registration and VM construction are separate startup work.
-For joins, pass the cursor's `RawKey()` to `GetRecordByKeyRaw`. Hosts that already
-keep typed key storage can use `GetRecordByKeyVal` / `TryGetRecordByKeyVal` with a
-reflected reference to it, avoiding boxing a new key into `any` for every lookup.
+[Paired EVM and Go measurements](../../_docs/LIST-CELLS.md).
 
-## Keep Fast2; accelerate other formats
+## Decoding once
+
+Start with direct access. Decode when one record is read many times.
 
 ```go
-hot := r.Fast() // keep an existing Fast2 view, otherwise use Fastest
-```
-
-`Fast` preserves Fast2 without decoding or allocation, including attached model
-and binding metadata. Compact2 and MessagePack materialize just as with
-`Fastest`. Already decoded and missing records remain unchanged. A retained
-Fast2 view still borrows bytes: `Fast` does not guarantee ownership beyond a
-transaction. Use `Fastest` when you explicitly need an owned decoded value.
-
-## Decode once when you will reuse many fields
-
-```go
-hot := r.Fastest() // Go struct if bound; indexed decoded memory otherwise
+hot := r.Fastest() // a Go struct if bound; indexed decoded memory otherwise
 for range passes {
     balance := hot.Child(row2.Step{Key: profileCode}).GetValue(balanceCode).AsUint()
-    // Read more properties through the same Record API.
     _ = balance
 }
 ```
 
-Keep the returned record: repeatedly calling
-`r.Fastest()` on the original encoded record repeats the decode. Calling it on
-an already decoded record is a no-op. A bound missing child remains missing.
-No binding is required. A missing record remains missing.
+`Fastest` decodes the whole record and returns it as a `Record`, so the code
+that reads it does not change. Keep the result: calling `r.Fastest()` on the
+encoded record again decodes again. On a record already decoded, and on a
+missing record, it does nothing. It needs no binding.
 
-This is a concrete `Record` value with internal dispatch, so callers do not
-need a new interface or type assertion. Full decoding uses the registered Go
-type and existing MessagePack decoder or row2 binding. Generated row2 bindings
-are used when attached. It includes unexposed MessagePack fields: the hint pays
-for a complete Go row, even if the access model exposes only a projection.
+With a binding, decoding uses the registered Go type and the MessagePack
+decoder or the row2 binding, generated if one is attached. The result is a
+complete Go struct: it includes MessagePack fields the model does not expose,
+and its cost is that of the whole struct however few properties are read.
 
-For standalone use, attach the binding when opening bytes:
+```go
+hot := r.Fast() // keep a Fast2 view; otherwise the same as Fastest
+```
+
+`Fast` returns a Fast2 record unchanged, with its model and binding, and
+decodes anything else as `Fastest` does. A Fast2 view still borrows its bytes.
+Use `Fastest` when the result must be owned.
+
+A record outside a database gets its binding when the bytes are opened:
 
 ```go
 b := kvo.Bind(reflect.TypeFor[Account](), accountModel)
@@ -324,24 +343,39 @@ _ = a.Fastest()
 _ = z.Fastest()
 ```
 
-A partial projection uses `kvo.Project(...).MessagePack(bytes)`. For a model
-without a Go struct, use `kvo.Encoded(view).WithModel(model).Fastest()`.
-This owns the bytes, normalizes scalar words, and eagerly indexes nested model
-objects. A plain `kvo.Encoded(view).Fastest()` also works: it owns a copy
-of the encoded bytes. Without a model, use `GetAs(code, row2.Signed)` (or
-`Word`, `Float32`, `Data`) to interpret a field explicitly. `Child` still
-navigates lazily; attach a model for eager nested indexing. Collections retain
-their encoded values because `Get` exposes collection bytes.
+- With a projection: `kvo.Project(...).MessagePack(bytes)`.
+- With a model and no Go struct: `kvo.Encoded(view).WithModel(model).Fastest()`
+  owns the bytes, normalizes scalar words and indexes child records eagerly.
+  `WithModel` attaches the model, not a Go binding.
+- With neither: `kvo.Encoded(view).Fastest()` owns a copy of the bytes. Read a
+  field with an explicit encoding, `GetAs(code, row2.Signed)` or `Word`,
+  `Float32`, `Data`. `Child` navigates lazily.
 
-EDB's `GetRecord` and cursor `Record` attach native bindings for every supported
-storage format. `WithModel` attaches logical metadata, not a Go binding.
+In decoded memory a collection stays encoded, because `Get` hands out
+collection bytes.
 
-## Share Go fields and methods with EVM
+## Choosing a strategy
 
-`nativebind` owns the shared field operations. `evmbind` and the record codec
-compiler both emit typed Go getters/setters using its generator. Without
-compiled bindings, both use the same reflected implementation. Model property
-codes map to these operations once during registration.
+Measure the complete operation, decoding included.
+
+| Stored as | Direct access | Decoding first |
+| --- | --- | --- |
+| MessagePack | Good for sparse reads and edits. | Wins when many properties are read repeatedly, and sometimes on the first full pass. |
+| Fast2 | Scalar reads are already cheap. | Generated field access and indexed memory are faster per read, and need enough reads to repay the decode. |
+| Compact2 | Good for a sparse single pass. | Repays over repeated passes; generated fields lower the threshold a lot. `Fast` decodes here, so keep the original record for sparse access. |
+
+Decoding does not cache collections: `Get` on a Go struct still builds the
+collection value each time. Keep the value if you traverse it repeatedly.
+
+`Fastest` is a request to decode fully. It does not predict a workload or pick
+the faster path. [Measurements and commands](BENCH-RECORD-ACCESS.md).
+
+## Go structs shared with scripts
+
+`nativebind` implements field access to Go structs. `evmbind` and the record
+codec generator both emit typed getters and setters through it, and both fall
+back to the same reflective implementation. A model's property codes are
+mapped to these operations once, at registration.
 
 ```go
 binding := kvo.Bind(reflect.TypeFor[Account](), accountModel).
@@ -349,197 +383,141 @@ binding := kvo.Bind(reflect.TypeFor[Account](), accountModel).
 // When this type also has an evmbind schema:
 binding = binding.WithNativeSchema(hostSchema)
 hot := binding.Encoded(view).Fastest()
-account := hot.Native().(*Account) // original decoded object; no extra copy
+account := hot.Native().(*Account) // the decoded struct itself
 vmArg, err := hostSchema.NativePointer(account)
-_ = vmArg
-_ = err
 ```
-
-For tables, call `b.SetNativeSchema(hostSchema)` in the definition callback. `GetRecord` and cursor records then
-retain that binding automatically. Traditional Go row APIs still populate the Go primary key. Decoding an encoded
-record with `Fastest` cannot invent a key omitted from its stored payload; retain
-the lookup ID or obtain it separately from the cursor.
 
 `Projection.WithNativeSchema` works with selected fields and custom property
-mappings too. `hot.NativeType()` is the same `values.Type` exposed by that
-schema. EVM fields and generated native methods act on the same Go object;
-changes are visible through KVO. Methods continue to use evmbind's existing
-call wrappers. KVO does not introduce a second method invocation engine.
-Go callers can invoke methods directly on `Native()`'s typed pointer.
+maps. `hot.NativeType()` is the `values.Type` that the schema exposes. A
+script's field access and the host's methods then act on one Go struct, and
+KVO sees every change. Methods are called through `evmbind`'s wrappers; KVO
+has no method calls of its own. Go code calls methods on the pointer that
+`Native()` returns.
 
-Host-origin data pointers preserve identity across EVM field addresses, aliases,
-and native calls. Structs passed by value remain copies. Guest allocations of registered structs/scalars also use native storage.
-Other guest pointers backed by VM cells retain call-scoped temporary/copyback semantics. evmbind's existing
-host field-type restrictions still apply; registering a persistent Go binding
-does not automatically expose every field/type to guest scripts.
+- A pointer that comes from the host keeps its identity through field
+  addresses, aliases and native calls in a script. A struct passed by value is
+  a copy.
+- A registered struct or scalar that a script allocates uses Go storage.
+  Other script pointers live in VM cells and reach Go through a temporary
+  that is copied back after the call.
+- `evmbind`'s limits on field types still apply. A KVO binding does not expose
+  a field to scripts by itself.
+- Generated field accessors must be attached with `WithGenerated`; generating
+  the codec functions is not enough. Regenerate when declarations change:
+  `Automatic` falls back to reflection for stale code and `StaticOnly`
+  rejects it.
 
-Regenerate record and evmbind bindings after this change. The ABI fingerprints
-changed; automatic mode falls back for stale code, while `StaticOnly` rejects it.
-Generated field callbacks must be attached, not just generated codec functions.
+## MessagePack edits
 
-## Edit without decoding the whole MessagePack row
+An edit to a MessagePack row copies and rewrites the encoded maps along the
+changed path. It encodes the new value and keeps the bytes of every other
+field: fields the model or the Go type does not know, and unknown extension
+values. The input bytes and earlier snapshots stay as they were.
 
 ```go
-// Inside a write transaction:
-edit := tx.OpenRecordEdit(accounts, key)
-if edit == nil { return nil }
-edit.Editor().Edit(profileProp).Set(balanceProp, uint64(900))
-tx.SaveRecord(edit)
-return nil
+e := a.Edit()
+e.Edit(profileProp).Set(balanceProp, uint64(900))
+edited := e.MessagePack()
 ```
 
-MessagePack edits copy and rewrite encoded maps along the changed path. They
-encode the replacement value and preserve every untouched field's bytes,
-including fields absent from the access model or Go type and unknown extension
-values. Input bytes and earlier snapshots remain unchanged. Edits are not
-in-place writes to Bolt memory. Replacing an entire aggregate with unexposed
-Go fields is rejected; edit its individual properties instead.
-
-`SaveRecord` keeps the row's format, checks for intervening changes, updates
-indexes and revision metadata, and runs the normal notification path. A
-property-based `SetIndexer` and record notifications read the edited
-MessagePack directly. Notifications requesting Go structs decode at the
-notification boundary; they do not force decoding for indexing.
-`NewRecordEdit` creates new MessagePack rows through a native Go value because
-there is no existing payload to preserve.
-
-For standalone edits, use `e := a.Edit()` and `e.MessagePack()` to obtain the
-edited MessagePack bytes. `Snapshot()` returns the exposed properties in row2
-format, not a lossless copy of the MessagePack payload. Persisted edits belong
-to `RecordEdit`; `r.Fastest().Edit()` alone does not save an EDB row.
+`e.MessagePack()` returns the edited row. `e.Snapshot()` returns the modeled
+properties in row2 format, which is not a lossless copy of the MessagePack
+payload. Replacing a whole child whose Go type has fields outside the model is
+rejected: edit its properties.
 
 ## JSON
 
 `r.ToJSON(model, kvo.JSONOptions{})` returns detached JSON-compatible data: a
-`map[string]any` keyed by local property names. Native and MessagePack records
-are traversed directly, without converting them to another encoding first.
-A nil entry in a list of child records becomes null. A present empty list or
-map stays empty; a nil list, map or child is null. `TryToJSON` returns
-conversion errors. `JSONOptions.Charge` lets a host meter the result.
+`map[string]any` keyed by local property names. A Go struct and a MessagePack
+row are walked directly, without converting to another encoding first.
 
-A value that converts to JSON does not always encode as row2: `Encode` rejects
-a nil entry in a list of records.
+- A present empty list or map stays empty. A nil list, map or child is null,
+  and so is a nil entry in a list of records.
+- `TryToJSON` returns conversion errors. `JSONOptions.Charge` lets a host
+  meter the result.
+- Not everything that converts to JSON encodes as row2: `Encode` rejects a nil
+  entry in a list of records.
 
 ## Lifetimes and compatibility
 
-Choose the boundary operation explicitly:
+A record views its data. Decide at each boundary what must survive it:
 
 | Need | Operation |
 | --- | --- |
-| Read the latest state in a later transaction | Keep a primary key or `edb.Ref`, then reload |
-| Retain encoded data after the transaction closes | `r.Own()` |
-| Modify an independent snapshot for a hypothetical calculation | `r.Clone()` |
+| The latest state, in a later transaction | Keep the key and load the record again. |
+| The data, after its source is gone | `r.Own()` |
+| An independent copy to modify | `r.Clone()` |
 
 ```go
-saved := customer.Own()         // retains encoded bytes; native identity may be shared
-alternate := customer.Clone()  // independent, even if customer is already native
+saved := customer.Own()       // keeps the encoded bytes; a Go struct may be shared
+alternate := customer.Clone() // independent, even if customer is a Go struct
 edit := alternate.Edit()
-edit.Set(pointsRedeemed, edit.Get(pointsRedeemed) + proposedRedemption)
+edit.Set(pointsRedeemed, edit.Get(pointsRedeemed)+proposedRedemption)
 balance := edit.Get(pointsEarned) - edit.Get(pointsRedeemed)
-// This has not changed customer or saved, and has not saved anything to EDB.
+// customer and saved are unchanged, and nothing has been saved anywhere.
 ```
 
-`Clone()` preserves the encoded format, native binding and unknown fields of
-encoded records. Native clones keep their Go type and copy nested pointers,
-maps, interfaces, slices (including capacity), strings, and fields outside the
-KVO model. Repeated pointers/maps and identical slice views remain shared within
-the clone; distinct overlapping slice views are copied separately. Immutable
-`time.Time` location metadata is retained. Non-nil functions, channels and unsafe
-pointers cannot be independently copied and cause a panic. Native cloning uses
-reflection only at this explicit boundary; generated/reflective reads are unchanged.
+**Own.** `Own()` is idempotent, and returns a record that is already owned,
+or backed by a Go struct, as it is. Own the record before keeping one of its
+strings, lists or maps past the source.
 
-`Own()` is idempotent and can return an already owned/native value unchanged.
-`Clone()` always detaches data. Neither operation adds lifetime checks to reads.
+**Clone.** `Clone()` always detaches. A clone of an encoded record keeps its
+format, its binding and its unknown fields. A clone of a Go struct keeps its
+Go type and copies what it reaches: pointers, maps, interfaces, slices with
+their capacity, strings, and fields outside the model. Sharing inside the
+struct is preserved: a pointer or map reached twice is copied once, as are
+identical slice views, while distinct overlapping slice views are copied
+separately. A `time.Time` keeps its location. A non-nil function, channel or
+unsafe pointer cannot be copied and panics. Cloning a struct uses reflection;
+reads are unaffected.
 
-Direct views borrow immutable bytes and are transaction-scoped when read from
-EDB. Treat returned byte slices as read-only. Decoding an encoded record with
-`Fastest` produces an owned Go value or decoded memory; it can outlive the source transaction.
-An already native projection remains a view of its existing Go object, so
-`Fastest` does not clone that object. Edits to native projections mutate their
-Go object; decoded-memory edits similarly update that owned object. Edits to encoded views copy bytes. `Snapshot` freezes decoded memory into independent row2 bytes.
+**Views.** Neither call adds a lifetime check to reads. A view borrows bytes
+that must not change: treat a returned byte slice as read-only.
 
-Types with custom MessagePack or binary/text methods, embedded fields, struct-array
-layouts, aliases, interning and duplicate field names retain decoder semantics.
-A custom child or a map with custom key codecs is decoded only when accessed or edited; a custom root is decoded
-when opened. JSON and time values use their native property codecs. Some `Has`
-checks (such as fixed arrays and JSON values) decode that property to preserve
-Go zero-value semantics. EDB schema migrators use the same editor over encoded
-records or decoded Go structs; migration alone does not require full decoding. These compatibility cases never
-silently reinterpret a recognized custom encoding as an ordinary map. Out-of-band
-`msgpack.Register` handlers are not discoverable through Go reflection. If such
-a handler changes the ordinary wire layout, expose codec methods on a named
-Go type or use `Projection.Record` over a row decoded by the existing handler.
+- Decoding an encoded record with `Fastest` yields an owned Go struct or
+  decoded memory, which outlives the source.
+- A record that already views a Go struct stays a view of it; `Fastest` does
+  not clone the struct.
+- Editing a Go struct or decoded memory changes it in place. Editing an
+  encoded view copies bytes. `Snapshot` freezes decoded memory into
+  independent row2 bytes.
 
-## Choosing an access strategy
+**Go types with their own encoding.** A type with custom MessagePack, binary
+or text methods, embedded fields, struct-as-array layout, aliases, interning
+or duplicate field names is read with the decoder's semantics.
 
-Start with direct access. Use `Fastest` explicitly around a workload that reads
-many fields repeatedly, then measure the complete operation including decoding.
+- A custom child, or a map with custom key codecs, is decoded when it is read
+  or edited. A custom root is decoded when opened.
+- JSON and time values use their property codecs. Some `Has` checks, on fixed
+  arrays and JSON values for example, decode the property to give Go's
+  zero-value answer.
+- A recognized custom encoding is never reinterpreted as an ordinary map.
+- A handler installed with `msgpack.Register` cannot be found by reflection.
+  If it changes the wire layout, put codec methods on a named Go type, or use
+  `Projection.Record` over a struct that the handler decoded.
 
-- **MessagePack:** direct reads and edits help sparse access. Decoding once wins
-  when repeatedly consuming many properties; it may win on the first full pass.
-- **Fast2:** direct scalar access is already very cheap. Generated-native and
-  indexed-memory access can be faster after decoding, but the initial decoding
-  cost requires enough repeated reads to pay back.
-- **Compact2:** decoding can pay back across repeated passes; generated fields
-  reduce the threshold substantially. Sparse one-pass reads still favor direct
-  access. `Fast` requests decoding here; retain the original record when you
-  know the access will be sparse.
-- **Collections:** native `Get` still materializes the common collection value.
-  Decoding is not an automatic cache for those values. Retain a requested
-  collection value if you will traverse it repeatedly.
+## Names, tags and timestamps
 
-See [measurements and reproduction commands](BENCH-RECORD-ACCESS.md). `Fastest` names an
-explicit full-decode hint; it neither predicts your workload nor automatically
-chooses the faster strategy.
+**Names.** A property is declared once, with a stable code and a type. Its
+qualified name, such as `customer:full_name`, is unique in the schema. A model
+exposes the local name `full_name`, and lookups also accept
+`customer:full_name` and `customer_full_name`. A script selects
+`row.full_name` or `row.customer_full_name` on a record of a known model; both
+compile to the code. A script value of type `any` has no record selectors.
 
-## Low-level codec access
+A duplicate code, a duplicate local name or a conflicting alias panics when
+the schema is built. A code is persistent: never renumber one or reuse a
+retired one. A property can belong to several models when its meaning and type
+are the same.
 
-Use `values.Int`, `values.Uint`,
-`values.Float32`, `values.Float`, `values.String`, and `values.Bytes`. The
-`values.Bytes` span has pointer + byte length; it is distinct from the mutable
-slice representation used inside EVM. The declared type supplies its meaning.
-
-Modeled `Record` APIs choose the wire conversion. Raw `row2.View` and `Writer`
-APIs require an explicit encoding:
-
-```go
-n := view.Get(code, row2.Signed).AsInt()
-writer.Put(code, "", values.Int(n), row2.Signed)
-```
-
-`row2.Field` holds raw codec metadata for schema-free traversal. `RawField`,
-`RawString`, `RawAt`, and `Iterator.Next` return fields. Call `Decode(encoding)`
-to get a runtime value, or `Writer.PutRaw` to copy unknown fields without
-reinterpreting their bytes. `Field.Container` opens an encoded child. No wire
-markers or deferred integer decoding escape into `values.Value`.
-
-Generated record bindings use ABI `record3`; regenerate them after migrating.
-This changes Go APIs, not the stored Fast2/Compact2 formats.
-
-### Property names and native tags
-
-Declare a property once with a stable code and logical type. A qualified name
-such as `customer:full_name` is unique within its schema. Models automatically
-expose its local name `full_name`; lookups also accept `customer:full_name` and
-`customer_full_name`. Duplicate codes, local names and conflicting aliases panic
-at schema construction. EVM selectors accept both `row.full_name` and
-`row.customer_full_name` on a statically known record model; both compile to the
-same property code. An untyped EVM `any` does not support record selectors.
-
-Codes are persistent identifiers: do not renumber them, and do not reuse a
-retired code for another meaning. A property can belong to several models when
-its meaning and type are the same. Declare schemas, properties and models at
-package scope or during initialization, not per request or per scan.
-
-Register native structs with the entity type and use `kvo:"full_name"` or
-`kvo:"customer:full_name"` on fields to bind them. Use `kvo:"-"` for excluded
-fields. Existing `edb` mapping tags remain supported when no `kvo` tag is present.
-Names and tags are resolved during binding, not during record access; MessagePack
-wire names remain controlled by the separate `msgpack` tags.
+**Tags.** Register a Go struct with the entity type and tag its fields
+`kvo:"full_name"` or `kvo:"customer:full_name"`; `kvo:"-"` excludes a field.
+An `edb` tag serves when there is no `kvo` tag. Names and tags are resolved
+when the binding is built, not on access. MessagePack wire names come from the
+separate `msgpack` tags.
 
 `model.RegisterNativeType(goType)` attaches a Go struct after the model is
-declared, using its `kvo` tags. Pass a field map when adding tags is
-impractical:
+declared, by its `kvo` tags. Pass a field map when tags are impractical:
 
 ```go
 model.RegisterNativeType(reflect.TypeFor[Row](), map[kvo.PropCode]string{
@@ -548,44 +526,103 @@ model.RegisterNativeType(reflect.TypeFor[Row](), map[kvo.PropCode]string{
 })
 ```
 
-The map names a direct exported field for every property of the model; other
-fields stay unexposed. Leave such a struct out of `NewEntityType`, which
-requires tags. Call `RegisterNativeType` during single-threaded setup, before
-building bindings. Registering a type twice panics.
+The map names an exported field for every property of the model. Other fields
+stay unexposed. Leave such a struct out of `NewEntityType`, which requires
+tags. Call `RegisterNativeType` during single-threaded setup, before building
+bindings; registering a type twice panics.
 
-Timestamp properties use `kvo.NewTimeProp(schema, code, name)` and return
-`time.Time`, including `IsZero`, `Before`, and the other Go methods. Their logical
-type is `kvo.TTimestamp`; lists can use `values.TimeCodec()`.
+**Timestamps.** `kvo.NewTimeProp(schema, code, name)` declares a property of
+logical type `kvo.TTimestamp` that reads as a `time.Time`. A list of times
+uses `values.TimeCodec()`.
 
-Fast2 and Compact2 store ordinary timestamps as integer Unix nanoseconds plus
-one (zero denotes Go's zero time). Dates outside the signed nanosecond range,
-and the reserved -1 ns instant, use two integers: 64-bit Unix seconds and 32-bit
-nanoseconds. Reads preserve nanoseconds and the full date range. They normalize
-to UTC and do not retain a monotonic clock. MessagePack timestamps remain in
-MessagePack's existing 32/64/96-bit integer format and are read directly.
-Historical RFC3339 row2 values remain readable; new writes use integers.
-`kvo.TTime` retains its original offset-microsecond encoding for Fast1 users.
+- Fast2 and Compact2 store a timestamp as integer Unix nanoseconds plus one;
+  zero is Go's zero time. A date outside the signed nanosecond range, and the
+  reserved −1 ns instant, use two integers: 64-bit Unix seconds and 32-bit
+  nanoseconds.
+- Reads keep nanoseconds and the full date range, normalize to UTC and carry
+  no monotonic reading.
+- MessagePack timestamps use MessagePack's 32, 64 and 96-bit forms and are
+  read directly. RFC 3339 strings in row2 rows are readable; writes use
+  integers.
+- `kvo.TTime`, declared with `NewLegacyTimeProp`, keeps the offset-microsecond
+  encoding for Fast1 data.
+- Timestamp access allocates nothing, wide dates included. Building a wide
+  date from a `time.Time` needs one 12-byte payload.
+- JSON output is RFC 3339, a presentation format. Scripts see `time.Time`
+  with `IsZero`, `Before`, `After`, `Equal` and the Unix accessors.
 
-Normal timestamp access allocates nothing. Reading extended MessagePack or row2
-payloads also borrows their bytes without allocation; constructing a wide date
-from a native `time.Time` needs one 12-byte payload. JSON still emits RFC3339,
-which is a presentation format, not the stored representation. EVM exposes
-`time.Time` with `IsZero`, `Before`, `After`, `Equal`, and Unix time accessors.
+## Codec level
 
-Typed scalar dictionaries use `kvo.NewMapProp` with a key codec and a value
-codec, just as lists specify an element codec. The returned `kvo.Map[K, V]`
-is a 16-byte borrowed view supporting `Get(key)`, `Lookup(key)` (value/presence),
-`Len()`, and `Iter()` for `for key, value := range view.Iter()`.
+Raw values are built with `values.Int`, `values.Uint`, `values.Float32`,
+`values.Float`, `values.String` and `values.Bytes`. A `values.Bytes` span is a
+pointer and a byte length; it is not the mutable slice representation EVM
+uses. The declared type gives a value its meaning.
 
-For example, declare an ID-to-string property with
-`values.UnsignedCodec[IntegrationID]()` and `values.StringCodec[string]()`. Then
-`customer.Get(AppIDs).Get(integrationID)` reads directly without materializing a
-Go map. Zero values remain distinguishable from missing entries through `Lookup`.
-MessagePack key adapters normalize historical encodings before lookup and apply
-Go's last-key-wins rule. Direct lookup scans MessagePack once; use Fast2 for large
-maps needing repeated random access. Iteration handles duplicate normalized keys
-without allocation, with quadratic lookahead in the MessagePack case.
+A modeled `Record` chooses the wire conversion. A raw `row2.View` or `Writer`
+needs the encoding stated:
 
-`GetValue` on a whole collection requests a row2 encoding and can allocate. Prefer
-typed list/map views for access. As with lists, retain the source record with
-`Own()` before carrying its borrowed strings or collection views beyond a transaction.
+```go
+n := view.Get(code, row2.Signed).AsInt()
+writer.Put(code, "", values.Int(n), row2.Signed)
+```
+
+`row2.Field` holds raw codec metadata for traversal without a schema.
+`RawField`, `RawString`, `RawAt` and `Iterator.Next` return fields.
+`Decode(encoding)` turns one into a value, `Writer.PutRaw` copies an unknown
+field without reinterpreting it, and `Field.Container` opens an encoded child.
+No wire marker and no deferred decoding reaches a `values.Value`.
+
+Generated record bindings carry the ABI tag `record3`. Code generated for
+another tag is stale. The tag covers Go APIs, not the stored formats.
+
+## Using edb
+
+`kvo` has no database. The points below describe
+[edb](https://github.com/andreyvit/edb), which stores rows and hands out
+records; its own documentation is the reference for these calls.
+
+**Reading.** `tx.GetRecord(table, key)` and a cursor's `Record()` return
+records with the table's binding attached, for every storage format, including
+a scan that meets both MessagePack and row2 rows. Pass the model after the
+name in `edb.DefineTable`. MessagePack is the default storage and
+`b.SetRecordStorage` selects Fast2 or Compact2. `Record` and `GetRecord`
+return only the record; their `Try` forms also return `ValueMeta` and an
+error.
+
+**Scans.** An index scan reuses its tuple and data-lookup cursors, so
+advancing and reading can be allocation-free once they exist. Opening a
+transaction and building its cursors has a fixed cost. For a join, pass the
+cursor's `RawKey()` to `GetRecordByKeyRaw`. A host that already holds typed
+key storage can call `GetRecordByKeyVal` or `TryGetRecordByKeyVal` with a
+reflected reference to it, which avoids boxing a key per lookup.
+
+**Lifetimes.** A record read in a transaction borrows the transaction's bytes.
+To read the latest state later, keep the primary key or an `edb.Ref` and load
+again.
+
+**Keys.** The Go row APIs fill in the Go primary key. `Fastest` cannot restore
+a key that the stored payload omits: keep the lookup key or take it from the
+cursor.
+
+**Shared Go structs.** Call `b.SetNativeSchema(hostSchema)` in the table
+definition, and `GetRecord` and cursor records carry that binding.
+
+**Editing a stored row.**
+
+```go
+// Inside a write transaction:
+edit := tx.OpenRecordEdit(accounts, key)
+if edit == nil { return nil }
+edit.Editor().Edit(profileProp).Set(balanceProp, uint64(900))
+tx.SaveRecord(edit)
+```
+
+`SaveRecord` keeps the row's format, checks that the row has not changed since
+it was opened, updates indexes and revision metadata, and runs notifications.
+An edit never writes into Bolt's memory. A property-based `SetIndexer` and
+record notifications read the edited MessagePack directly; a notification that
+asks for a Go struct decodes at that point. `NewRecordEdit` builds a new
+MessagePack row from a Go value, since there is no payload to preserve. A
+persisted edit belongs to `RecordEdit`: `r.Fastest().Edit()` alone saves
+nothing. Schema migrators use the same editor over encoded records or decoded
+structs, so a migration does not need full decoding.

@@ -19,7 +19,8 @@ firstMatches := customer.tags[0] == wanted
 
 Native Go uses `for tag := range customer.Get(Customer_Tags).Iter()`. Its
 16-byte struct also exposes `Len()`, `Cursor()` and `Slice()`; Go cannot range
-directly over that struct. `Slice()` deliberately materializes an owned slice.
+directly over that struct. `Slice()` deliberately materializes a slice; its strings still borrow, and
+`OwnedSlice()` copies them.
 
 The VM resolves the list at acquisition and keeps traversal state in a reusable
 workspace per index site. The workspace caches an expanded `ListValue` view
@@ -131,8 +132,8 @@ claim. The tests separately check empty/nil lists, incompatible cell types,
 multiple/nested lists, bounds, evaluation order, and materialization across an
 invalidating call.
 
-Validation: `go test ./...`, `go test -race ./kvo ./evm/...`, and
-`go test -gcflags=all=-d=checkptr=1 ./kvo ./evm/...` passed. Back3's full
+Validation: `go test ./...`, `go test -race ./...`, and
+`go test -gcflags=all=-d=checkptr=1 ./...` passed. Back3's full
 `plugins/tenantenv` and `fire/business/superadmin/suscripts` tests and live
 `TestCustomerSnapshotAllocations` / `TestCustomerSnapshotPublicAllocations`
 gates also passed, retaining 44 / 44 / 57 full-scan allocations.

@@ -1,26 +1,39 @@
-# Shared binding declarations and registration
+# Bindings: hand-written declarations and Go-backed storage
 
-Host functions and registered KVO methods share signature classification and
-scalar wrapper generation. Both use `DirectBinding`; generated calls stay typed
-Go calls, without reflection.
+A binding is the Go code behind something a script can name. This file covers
+two things the [`evmbind` guide](../evmbind/README.md) leaves out: how to
+declare a package by hand, and what a script sees when a value is stored in
+Go's own memory layout. It ends with the measurements for direct calls.
 
-## Choose declarations once
+## Three ways to bind
 
-- For a Go API package, use `evmbind.New` and generated `Options.Static` bindings.
-  Compile with `schema.Package()` and link with `schema.Bind(host)`.
-- For helpers over a KVO model, use `evmbind.RecordMethod`, `GenerateMethods`, and
-  `RegisterMethods`. This explicitly maps a helper to its model and script name.
-- For manual declarations, use `Package.Types`, `Functions`, and `Methods`.
-  Types use `values.Shape` for both VM cells and optional native layouts. A small
-  call supplies `DirectBinding`; an arbitrary signature supplies `Call`.
+| You have | Use | Result |
+| --- | --- | --- |
+| A Go API package | `evmbind.New`, with generated `Options.Static` bindings | Compile with `schema.Package()`, link with `schema.Bind(host)`. |
+| A Go helper over a KVO model | `evmbind.RecordMethod`, `GenerateMethods`, `RegisterMethods` | The helper becomes a method of the model's script type. |
+| Neither, or full control | `evm.Package` with `Types`, `Functions` and `Methods` | You write each signature and each call. |
 
-Direct functions support up to two arguments; pointer methods support one explicit
-argument. Both support zero or one result. Record receivers occupy the first
-function argument as a 16-byte pair, leaving room for one explicit argument.
-Unsupported direct signatures use the ordinary ABI. Function values, interface
-methods and deferred calls retain their normal behavior.
+All three end in the same declarations. Host functions and record methods
+share one classification of signatures and one generator of scalar wrappers,
+so a generated call is a typed Go call with no reflection on any path.
 
-A word-only function uses the same declaration, with a convenience constructor:
+## Hand-written declarations
+
+An `evm.ExternalFunction` has a name, a signature and one of two
+implementations:
+
+- `Call`, a `func(*evm.Call) error`, serves any signature. It reads
+  `c.Argument(i)` and writes `c.SetResult(i, value)`.
+- `Direct`, an `evm.DirectBinding`, serves a small signature. The VM passes
+  the operands from registers in one instruction, with no argument window.
+
+A direct function takes up to two arguments. A direct pointer method takes its
+receiver and up to one argument. Both return zero or one result. A record
+receiver occupies the first argument as a 16-byte pair, which leaves room for
+one more. Any other signature uses `Call`. Function values, interface methods
+and deferred calls behave the same whichever implementation a function has.
+
+A function of one word to one word has a constructor:
 
 ```go
 next := evm.ExternalFunction{
@@ -33,12 +46,13 @@ next := evm.ExternalFunction{
 }
 ```
 
-`DirectUnary` keeps the faster word-only instruction internally. It also supplies
-an ordinary ABI adapter; an optional explicit `Call` overrides that adapter as
-with any other `DirectBinding`. There is no `ExternalFunction.RawUnary` path.
-Treat the returned binding as immutable setup metadata.
+`DirectUnary` selects the fastest word-only instruction and also supplies an
+ordinary `Call` adapter for indirect uses. An explicit `Call` overrides the
+adapter, as with any `DirectBinding`. Build bindings during setup and do not
+change them afterwards.
 
-For a hand-declared VM struct:
+A type is declared by its `values.Shape`. A shape describes VM cells, and
+optionally a Go memory layout:
 
 ```go
 text := &values.Shape{Type: values.StringType, Kind: values.StringKind, Cells: 1}
@@ -57,39 +71,234 @@ customer.SetField(p, 0, values.String("Ada"))
 name := customer.GetField(p, 0).AsString()
 ```
 
-Use `customerPtr.Type` in signatures. These helpers access VM cells. Native Go
-pointers require native layouts. Both use `Shape`; retired struct opcodes 36–39
-remain reserved.
+Use `customerPtr.Type` in signatures. `New`, `SetField` and `GetField` work on
+VM cells. A pointer to a real Go struct needs a shape with a native layout,
+which `evmbind` builds from the Go type.
 
-## Metadata lifetime and memory
+## Package functions bound by value
 
-`kvo.Bind(goType, model)` and `kvo.Project(goType, model, nil)` return
-cached default plans by Go type/model identity. Repeated calls allocate neither
-plans nor representation IDs. Full bindings and projections remain distinct.
-Explicit field maps and `WithGenerated`/`WithNativeSchema` configurations are
-independent: construct once and retain them, rather than constructing per row or
-transaction. Models, schemas and typed properties also belong in setup.
+`evmbind.Options.Functions` binds a source function name to a Go function
+value: a package function or a closure. `evmbind.New` reads the signature and
+the types it mentions from the source and never runs a body. The value
+receives the declared arguments only, with no host receiver and no `*evm.Call`.
 
-Record and collection descriptor tables share registration, growth, locking,
-and atomic publication. Hot lookup remains one atomic slice load and a flat
-representation-ID index, with no additional Shape lookup. IDs and their reachable
-metadata are process-lifetime and never reclaimed. The shared global ID space
-still produces unused slots in each table; this change deliberately retains the
-existing storage/lookup tradeoff.
+`evmbind.Generate` generates wrappers from the same options. A generated
+wrapper calls the registered function value, so arguments and results behave
+as in the reflective path. A function bound by value and a host method of the
+same name have different fingerprints: generated wrappers for one are stale
+for the other. `Automatic` then falls back to reflection and `StaticOnly`
+fails. When both exist, the function value wins.
 
-On arm64, record entries remain 48 bytes, collection entries remain 64 bytes,
-and each registry's lock/publication header is 16 bytes. A record layout lazily
-publishes eight representation entries. These sizes exclude spare array capacity,
-global Shape slots, Shapes and binding plans; they are not a claim of total
-metadata cost. `Record`, `ListCell` and typed list handles remain 16 bytes.
+## Records backed by Go structs
+
+`evm.RecordType.NativeAllocation` names the Go struct type that a model uses
+when a script allocates a value of it. The host opts in per model; nil keeps
+the generic record storage. The rules below hold for a model with this
+setting, and for host structs that contain such models. Keep the setting
+unchanged between compiling and linking.
+
+Two rules run through all of it. Go semantics apply: a copy is a shallow Go
+copy, a pointer keeps its identity, a slice keeps its backing array. And
+nothing converts implicitly: bindings never decode an encoded record, cache a
+converted one, or copy changes back.
+
+### Pointer fields
+
+A host struct field `Customer *T`, where `T` is the struct of a registered
+model, appears to scripts as a read-only record. Reading it returns the
+original pointer. Assigning another Go-backed record, or nil, writes the Go
+pointer field. The containing struct can be copied or allocated by a script as
+any struct can. Generated and reflective bindings use the same field layout.
+
+To store an encoded record in such a field, convert it to the field's Go type
+first (see [explicit copies](#explicit-copies)).
+
+### Slices
+
+A host `[]*T` appears as a slice of read-only records. It keeps its Go backing
+array, length and capacity. Element assignment, `copy`, `clear` and `append`
+follow Go: read-only record fields do not make the slice read-only. A subslice
+keeps the backing array through a small view descriptor.
+
+- A slice crosses the host boundary with its original backing, also when the
+  host retains it or calls back into the script.
+- Different Go pointer types can back slices of the same model. Storage
+  travels with each slice value, and a store or a native argument needs the
+  matching backing.
+- A slice the script built in VM cells cannot be passed to a native slice
+  parameter. `copy` and `append` move compatible elements between the two
+  kinds.
+- A slice of pointers, and a decoded list of records, can still hold encoded
+  records. A Go-backed typed collection holds only matching Go pointers.
+- When a script creates a collection with a literal, `make`, or `append` to
+  nil, `NativeAllocation` decides its storage.
+
+Maps of models are not supported.
+
+### Values
+
+`saved := *p` takes a shallow Go struct copy. Scalar fields become
+independent; pointer, slice and map fields keep sharing. Fields that the model
+does not expose are copied too, and take part in equality and hashing as they
+do in Go. A struct that Go cannot compare cannot be compared in a script.
+
+Such a value has real addressable Go storage wherever it lives: a local, a
+package variable, a field of a script struct, an array element. `&saved` keeps
+its identity through a record-pointer binding, and reassigning the variable
+writes that storage. A zero value reads zero properties. A nil pointer fails
+on dereference. A property can be read from a function result or a map entry
+without an addressable temporary.
+
+What a script cannot do:
+
+- Assign a property. Records are read-only; use an editor.
+- Write a whole record through a pointer, `*p = ...`, wherever the pointer
+  came from. Assigning a record variable, or a struct or array that contains
+  one, is allowed.
+- Define a new type from a model, `type R db.Customer`, or from a pointer to
+  one. It would lose the model. Write an alias, `type R = db.Customer`.
+- Dereference an encoded record into a Go-backed value without converting it.
+
+Native code that receives a pointer treats it as an ordinary Go pointer. No
+origin or ownership check applies there.
+
+Signatures keep the difference between value and pointer. `Copy(*row)` passes
+a `T`; `Echo(row)` passes a `*T`. Value parameters, results and callbacks use
+shallow copies, hidden fields included. A zero value is a valid argument and
+nil is not. A by-value declaration needs `T` to be the model's
+`NativeAllocation`; other layouts cross by pointer.
+
+Model values also cross `any`, where a model binding takes precedence over an
+ordinary struct binding. A host struct field can hold a model value when its
+Go type is the declared allocation: assigning it copies, and taking its
+address refers to the real field. Slices of model values share their backing
+arrays across calls. Maps of model values, and formatting a record value with
+`fmt`, are not supported.
+
+### Explicit copies
+
+After setting `NativeAllocation`, call `evm.RegisterNativeCopies(&pkg)` before
+publishing the package. Read-only records of that model gain `NativeCopy()`,
+which returns a new Go-backed record pointer, or nil for a nil receiver:
+
+```go
+native := encoded.NativeCopy()
+rows := []*db.Document{native}
+value := *native
+```
+
+- An encoded record is decoded.
+- A record already backed by the selected Go type gets a shallow struct copy:
+  reference fields stay shared, and fields outside the model survive.
+- A MessagePack row bound to that Go type keeps its stored fields that the
+  model does not know.
+- A record backed by another Go type keeps only modeled fields.
+
+Nothing is cached and the original is unchanged. The VM charges the allocation
+of the root struct. Allocations inside the record decoder are host work and
+are not fully charged.
+
+Ordinary reads never decode. A `[]any` can hold encoded records as they are,
+and a type assertion recovers the typed record. Putting encoded records into a
+Go-backed typed collection costs one `NativeCopy` each.
+
+## Selecting fields
+
+`evmbind.Options.Fields` maps a struct name to the fields scripts may see. No
+entry exposes every exported field; an empty list exposes none:
+
+```go
+Fields: map[string][]string{"Page": {"Title", "Count"}}
+```
+
+A field added to `Page` later stays out of the script API until it is listed.
+An embedded field is selected by its declared name. An unknown or repeated
+name fails schema construction. Do not give one type both `Fields` and
+`OmitFields`.
+
+Selection changes declarations, not storage. A pointer still points at the
+whole struct, and a struct copy keeps the hidden fields. A model's record
+type takes its fields from the model; selection cannot override that. A struct
+with more than one blank (`_`) padding field cannot be selected and reports an
+error.
+
+## Type aliases
+
+Source bindings keep Go aliases, including aliases of imported and builtin
+types such as `type Key = string`. In a hand-written package,
+`evm.Package.Aliases` gives an existing VM type a second name. An alias adds
+no runtime type, layout, allocation or conversion.
+
+- The target must be declared in the same environment.
+- Inside pointers, collections and signatures, an alias resolves to its
+  target. Printed declarations show `type X = Y`.
+- When packages are merged, a redundant alias of the same name is dropped and
+  a conflicting exported name is an error.
+- An alias supports what its target supports. Generic aliases without type
+  arguments and aliases of EVM function handles are not supported.
+
+## Time
+
+`time.Time` in a source binding is the VM's `time.Time`. Go's private fields
+are not exposed.
+
+- A `time.Time` that crosses through `any` keeps its zone and monotonic
+  reading. `==` and map keys compare the complete Go value; `Equal` compares
+  instants. Formatting uses the value's offset.
+- Reading a `time.Time` field takes a snapshot. A field address or a
+  `*time.Time` argument is the original pointer. A time pointer created by a
+  script uses Go storage. Slices and maps keep their Go backing and Go key
+  equality.
+- A UTC value in the nanosecond range allocates nothing. Any other Go time is
+  one immutable 24-byte copy. A UTC value outside the nanosecond range uses a
+  12-byte instant.
+- Storing a boxed Go time into a Go field copies from that immutable payload
+  without allocating, and so does storing zero. Storing a compact UTC instant
+  needs one charged 24-byte temporary for the field setter.
+- Nothing is cached or written back. A KVO time property reads as a UTC
+  instant, and timestamp serialization normalizes to one.
+
+## Empty structs and unnamed pointers
+
+`struct{}` and pointers to it work in source bindings, including set maps
+(`map[string]struct{}`) and slices. Unnamed pointer types share one identity
+across packages by their element type: pointers to primitives, to timestamps
+and to empty structs. Go collections keep their backing storage, and a
+collection a script creates can be passed to Go. An anonymous struct with
+fields is not supported.
+
+## Metadata lifetime
+
+`kvo.Bind(goType, model)` and `kvo.Project(goType, model, nil)` return a
+cached plan for that Go type and model. Calling either again allocates no plan
+and no representation ID. A binding and a projection of the same pair are
+distinct plans. A plan with an explicit field map, `WithGenerated` or
+`WithNativeSchema` is built each time it is requested: build it once and keep
+it. Schemas, models and typed properties belong in setup for the same reason.
+
+Records and collections find their metadata through descriptor tables indexed
+by representation ID. A lookup is one atomic slice load and one index.
+Registration, growth and publication share one locked path. An ID and the
+metadata it reaches live as long as the process. Both tables index one global
+ID space, so each has unused slots.
+
+On arm64 a record entry is 48 bytes, a collection entry 64 bytes, and each
+table's lock and publication header 16 bytes. A record layout publishes eight
+representation entries, on first use. These figures leave out spare array
+capacity, shapes and binding plans, so they are not a total. `Record`,
+`ListCell` and the typed list handles are 16 bytes.
 
 ## Measurements
 
-Measured on Apple M5 Max, Go 1.27.3, darwin/arm64. Medians of three 200 ms
-samples, with warm metadata. Baseline/current benchmark binaries were built first
-and alternated in three rounds, with no task test suites running concurrently.
-Times include the benchmark's entire operation;
-small changes are descriptive, not statistical significance claims.
+Apple M5 Max, Go 1.27.3, darwin/arm64. Each figure is the median of three
+200 ms samples with warm metadata. The two benchmark binaries were built
+first and run alternately in three rounds on an otherwise idle machine. Times
+cover the benchmark's whole operation. Differences of a few percent are within
+noise.
+
+"Before" is the code without direct void calls and without the cached default
+plan; "after" has both. The revisions are `4b0e318` and `cb72134` in the edb
+repository, where this code was developed.
 
 | Workload | Before | After | Allocations before → after | Bytes before → after |
 |---|---:|---:|---:|---:|
@@ -105,22 +314,19 @@ small changes are descriptive, not statistical significance claims.
 | Word-only specialization, 256 calls | 2.058 µs | 1.992 µs | 0 → 0 | 0 → 0 |
 | Struct construction + two host calls | 159.3 ns | 163.2 ns | 2 → 2 | 64 → 64 |
 
-Void functions improved 57%; void methods improved 67%. Existing field/list
-access and generated record methods stayed within a few percent, with unchanged
-allocation counts. Struct construction was 2.4% slower in this small sample.
-The word-only specialization is still worth retaining: its current 1.992 µs
-compares with 3.300 µs for the ordinary `DirectFunc` implementation.
+- Void functions took 57% less time and void methods 67% less.
+- Field access, list access and record methods stayed within a few percent
+  with the same allocation counts. Struct construction was 2.4% slower in this
+  small sample.
+- The word-only specialization earns its place: 1.992 µs against 3.300 µs for
+  the same function through the ordinary `DirectFunc`.
+- The one allocation left in the void-method row is the Go struct the
+  benchmark builds per run, not the 256 calls.
+- The `Bind` row warms one default binding and measures repeated `Bind` for
+  the same type and model. It does not measure the first construction or a
+  custom configuration.
 
-An initial unpaired rerun slowed unchanged controls as well as changed code by
-roughly 40%. The table uses only the interleaved baseline/current runs above;
-allocation conclusions were identical in both runs.
-
-`VoidMethod` constructs one native row per run; its remaining allocation belongs
-to that row, not to the 256 calls. The repeat-binding benchmark warms one default
-binding and then measures repeated `Bind` for the same Go type/model. It does not
-measure the first binding construction or custom configurations.
-
-Commands (run separately from other benchmark/test loads):
+Run each command on its own, with nothing else loading the machine:
 
 ```sh
 go test ./evmbind -run '^$' -bench '^BenchmarkGeneratedHost$' -benchmem -benchtime=200ms -count=3
@@ -132,197 +338,9 @@ go test ./bench -run '^$' -bench '^BenchmarkUnaryBinding$' -benchmem -benchtime=
 go test ./evmcompiler -run '^$' -bench '^BenchmarkCompileAndInitialize/Run$' -benchmem -benchtime=200ms -count=3
 ```
 
-The baseline is commit `4b0e318`; the implementation is `cb72134`.
-Raw paired samples are in [bindings-consolidation.tsv](../bench/bindings-consolidation.tsv).
-Tests cover generated/general/reflected calls,
-void mutation, indirect/deferred calls, cancellation, ownership boundaries,
-concurrent registration/reuse, nominal shape identity, aggregate copies, unused
-scalar lanes, and linked metadata snapshots. The executable book validates all
-29 examples and the complete public instruction table.
-
-## Native package functions
-
-Use `Options.Functions` to bind selected source function names to actual Go
-function values. `New` reads their signatures and referenced types from the
-embedded source; it does not execute their bodies. The supplied values may be
-ordinary package functions or closures. They receive the declared arguments,
-without a synthetic host receiver or `*Call` parameter.
-
-`Generate` generates wrappers from the same options and selection. Generated
-ordinary and direct wrappers invoke the registered function value, preserving
-native argument and result behavior. Function-backed declarations have distinct
-binding fingerprints from host-method-backed declarations, so stale generated
-wrappers fail registration. An explicit function binding takes precedence over
-a same-named host method.
-
-## Native model pointer fields
-
-A native struct field `Customer *T`, where `T` is a registered model, exposes
-an immutable typed row. Reading retains the original pointer. Assigning another
-native-backed row or nil updates the actual Go pointer slot. The containing
-struct may be copied or allocated by the script with ordinary Go semantics.
-Generated and reflected bindings use the same physical field layout.
-
-Assigning an encoded record requires explicit conversion to the field's native
-Go type; bindings do not decode or copy it implicitly. Inline model values use
-the selected native allocation type and preserve ordinary shallow copies.
-
-## Native model slices
-
-A host `[]*T` whose `T` is a registered model appears as a slice of immutable
-model rows. The slice retains its Go backing array, length and capacity.
-Element assignment, copy, clear and append follow Go slice semantics; immutable
-row fields do not make the slice itself immutable. Native row pointers retain
-identity. Stores and native arguments require matching backing. Encoded records
-and other native layouts require an explicit conversion; bindings never decode,
-cache converted identities or copy mutations back.
-
-Physical storage travels with each native slice value. Different native pointer
-types can back the same logical model-row slice. Native subslices retain their
-backing array through a small view descriptor.
-
-`RecordType.NativeAllocation` selects the native model type used when scripts
-allocate collections with literals, `make` or append to nil. The host opts into
-a registered native type; the default nil uses generic record storage.
-Pointer rows and decoded record lists can still refer to encoded records.
-Native-backed collections require explicit conversion before storing them.
-The same allocation choice also determines the storage of row values below.
-
-Matching slices cross the host boundary with their original backing, including
-when the host retains them or invokes callbacks. Cell-backed slices cannot be
-passed to a native slice parameter. Normal copy/append operations can transfer
-compatible elements between cell-backed and native-backed slices.
-
-Native model value slices and model maps are not yet supported.
-
-## Native-backed row values
-
-For a row with `NativeAllocation`, `saved := *p` takes an ordinary shallow Go
-struct copy. Scalar fields become independent; pointer, slice and map fields
-retain their Go sharing semantics. Fields omitted from the model API are
-preserved too and participate in equality and hashing as they do in Go.
-Noncomparable native structs remain noncomparable in scripts.
-
-Local variables, globals, and rows inside script structs and arrays have real
-native addressable storage. `&saved` retains identity when passed through a row
-pointer binding. Reassigning the variable updates that storage. A zero row reads
-zero properties; a nil row pointer still fails on dereference. Property reads
-also work on function results and map entries without creating an addressable
-temporary.
-
-Row properties are read-only. Explicit whole-row writes through `*p` are also
-compile errors, regardless of where the pointer came from. Assigning a row
-variable or a containing struct/array remains legal. Native code receiving the
-pointer retains its ordinary Go behavior; no origin or ownership checks apply.
-
-A new defined type such as `type R db.Customer` is unsupported because it would
-lose the model representation. Use `type R = db.Customer` to preserve identity.
-This also applies to new defined pointer types based on model rows.
-
-Dereferencing an encoded row into a native-backed value requires explicit
-conversion to the selected native type first. No decoding or copyback happens
-implicitly. Native signatures preserve value versus pointer parameters:
-`Copy(*row)` passes
-`T` by value, while `Echo(row)` passes `*T`. Value parameters, results and callbacks
-use shallow Go copies, including hidden fields; zero values are supported and
-nil is not a value argument. By-value declarations require `T` to match the
-model's `NativeAllocation`; other layouts remain available through pointers.
-Allocation metadata must stay unchanged between compilation and linking.
-
-Native model values also cross `any` as row values, with model bindings taking
-precedence over ordinary native struct bindings. Native struct fields may
-store model values when their native type matches
-the declared allocation. Field assignment copies the native value; taking its
-address refers to the actual native field. Native value slices share their
-backing arrays across calls. Guest slice and array allocations use the declared
-native type, including append, copy and slicing. Maps of model values and
-row-value formatting remain unfinished.
-
-## Selecting native fields
-
-`evmbind.Options.Fields` maps native struct names to the direct fields exposed
-to scripts. A missing entry exposes all fields; an empty list exposes none.
-For example, `Fields: map[string][]string{"Page": {"Title", "Count"}}` keeps
-new native fields outside the script API until explicitly selected. Embedded
-fields use their declared field name. Unknown or duplicate selections fail
-schema construction. Do not combine `Fields` and `OmitFields` for one type.
-
-Field selection changes declarations, not storage. Native pointers still
-point at the original structs, and native struct copies retain hidden fields.
-Model rows use their model metadata instead; field selection cannot override
-that metadata. Source selection is resolved once when building the schema.
-
-The existing omission machinery cannot describe multiple blank (`_`) padding
-fields in one struct. Selecting such a struct currently reports an error.
-
-## Native type aliases
-
-Source bindings preserve ordinary Go aliases, including renamed imports and
-builtin aliases such as `type Key = string`. `evm.Package.Aliases` gives an
-existing VM type another source name. It introduces no runtime type, layout,
-allocation or conversion. The target declaration must be included in the same
-environment; a missing target is an error. Consolidated packages omit redundant
-same-name aliases, and conflicting exported names remain errors.
-
-Aliases inside pointers, collections and function signatures resolve to the
-same types as their targets. Package declaration output uses `type X = Y`.
-Uninstantiated generic alias declarations and aliases of EVM function handles
-are not supported. Other aliases retain the binding restrictions of their
-target type; aliases do not add support for anonymous struct/interface targets.
-
-## Native time values
-
-Native `time.Time` values crossing through `any` retain their timezone and
-monotonic clock reading. Go equality (`==`) and map keys compare the complete
-Go value; `Equal` still compares instants. Formatting keeps the native offset.
-
-Canonical UTC values in the nanosecond range allocate nothing. Other native
-time values use one immutable 24-byte copy; UTC values outside that range keep
-the existing 12-byte instant payload. There are no value caches or write-back
-steps. Database timestamp serialization explicitly normalizes to a UTC instant
-and retains the existing wire format.
-
-Source bindings recognize native `time.Time` fields and signatures as the
-existing VM `time.Time`, without exposing Go's private fields. Native field
-reads snapshot the value; field addresses and `*time.Time` arguments keep the
-original pointer. Guest-created time pointers use native Go storage. Slices
-and maps retain native backing and Go key equality.
-
-Writing a boxed native time into a native slot copies from its immutable
-payload without another allocation. Zero stores also allocate nothing.
-Writing a compact UTC instant needs one charged 24-byte temporary for the
-native field setter. This is value assignment, not a retained mirror or
-mutation copyback. KVO field reads still return database UTC instants.
-
-Anonymous empty structs (`struct{}`) and pointers to them are supported in
-source bindings, including native set maps (`map[string]struct{}`) and slices.
-Unnamed pointers share identity across packages by their element type,
-including primitive, timestamp and empty-struct pointers. Native collections retain
-their backing storage; guest-created collections can pass to native code.
-Nonempty anonymous structs remain unsupported by source bindings.
-
-## Explicit native row copies
-
-After selecting `RecordType.NativeAllocation`, the host calls
-`evm.RegisterNativeCopies(&pkg)` before publishing the package. This adds
-`row.NativeCopy()` to immutable rows with a selected allocation. It returns a
-fresh native-backed row pointer, or nil for a nil receiver. For example:
-
-```go
-native := encoded.NativeCopy()
-rows := []*db.Document{native}
-value := *native
-```
-
-An encoded row is decoded explicitly. A native row of the selected Go type
-uses a shallow struct copy: its reference fields remain shared, and fields
-outside the model survive. MessagePack with that same native binding preserves
-stored unmodeled fields. Converting another native projection preserves only
-modeled fields. No result is cached, and the original row remains unchanged.
-The VM charges the root struct allocation; allocations made by the native
-record decoder are native host work and are not fully included in that charge.
-
-Ordinary reads remain encoded. Generic `[]any` collections can retain encoded
-row handles without decoding; type assertions recover their typed row API.
-Native-backed typed collections require matching native pointers, so converting
-before insertion is explicit and costs a decode per encoded row.
+The paired samples are in
+[bindings-consolidation.tsv](../bench/bindings-consolidation.tsv). The tests
+cover generated, general and reflective calls, void mutation, indirect and
+deferred calls, cancellation, ownership boundaries, concurrent registration
+and reuse, nominal shape identity, aggregate copies and linked metadata
+snapshots.

@@ -28,6 +28,36 @@ func writePtrBase(f *evmbind.Frame, x *api.Base) values.Value {
 	}
 	return values.Value{R: values.NativeAddress, P: unsafe.Pointer(x)}
 }
+func readPtrPointer(f *evmbind.Frame, v values.Value) *api.Pointer {
+	if v.P == nil {
+		return nil
+	}
+	if v.R != values.NativeAddress {
+		panic("native pointer *Pointer requires native storage")
+	}
+	return (*api.Pointer)(v.P)
+}
+func writePtrPointer(f *evmbind.Frame, x *api.Pointer) values.Value {
+	if x == nil {
+		return values.Value{}
+	}
+	return values.Value{R: values.NativeAddress, P: unsafe.Pointer(x)}
+}
+func readPtrValue(f *evmbind.Frame, v values.Value) *api.Value {
+	if v.P == nil {
+		return nil
+	}
+	if v.R != values.NativeAddress {
+		panic("native pointer *Value requires native storage")
+	}
+	return (*api.Value)(v.P)
+}
+func writePtrValue(f *evmbind.Frame, x *api.Value) values.Value {
+	if x == nil {
+		return values.Value{}
+	}
+	return values.Value{R: values.NativeAddress, P: unsafe.Pointer(x)}
+}
 func readTypeBase(f *evmbind.Frame, v values.Value) api.Base {
 	return api.Base{
 		Title: readScalarString(f, evmbind.Field(v, 0, false)),

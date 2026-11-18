@@ -36,7 +36,7 @@ func TestGeneratedSelectedFields(t *testing.T) {
 func testGeneratedFieldSelection(t *testing.T, opt evmbind.Options) {
 	t.Helper()
 	opt.Host = reflect.TypeFor[*omittedHost]()
-	generated, err := evmbind.GenerateWithOptions("page", "github.com/andreyvit/evm/evmbind/internal/omittedfixture", "omittedbindings", omittedfixture.Source, opt)
+	generated, err := evmbind.Generate("page", "github.com/andreyvit/evm/evmbind/internal/omittedfixture", "omittedbindings", omittedfixture.Source, opt)
 	if err != nil {
 		t.Fatal(err)
 	}

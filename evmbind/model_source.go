@@ -73,7 +73,7 @@ func prepareModels(files []*ast.File, selected []string, typesOnly bool, opt Opt
 	}
 	for _, name := range slices.Sorted(maps.Keys(result)) {
 		if !typesOnly {
-			return nil, nil, fmt.Errorf("local model %s requires NewTypes; import its schema for callable declarations", name)
+			return nil, nil, fmt.Errorf("local model %s requires a selective schema (Options.Only or Options.Selective); import its schema for callable declarations", name)
 		}
 		base := modelBaseName(name)
 		if _, selectedFields := opt.Fields[base]; selectedFields || len(opt.OmitFields[base]) != 0 {

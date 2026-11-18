@@ -113,7 +113,7 @@ func smallHost(t testing.TB, direct bool) (*evm.VM, context.Context) {
 		index++
 		return v
 	}
-	add("Next", cur, evm.OpCallHostMethodP, nil, row.Pointer,
+	add("Next", cur, evm.OpCallHostMethodS, nil, row.Pointer,
 		func(c *evm.Call) error { return c.SetRecordResult(model, next()) },
 		func(c *evm.Call, _, _ values.Value) (values.Value, error) { return c.RecordValue(model, next()) })
 	m, err := evmcompiler.Compile("small.go", hostCallScript, pkg)
@@ -132,11 +132,27 @@ func smallHost(t testing.TB, direct bool) (*evm.VM, context.Context) {
 	return vm, ctx
 }
 
+var smallHostCases = []struct {
+	name string
+	want uint64
+}{{"Predicate", 128}, {"PointerGetter", 32640}, {"TagCheck", 128}, {"CachedContext", 1536}, {"Cursor", 32640}}
+
+// Benchmarks do not run under go test. This keeps both binding modes linking
+// and returning the expected results.
+func TestSmallHost(t *testing.T) {
+	for _, mode := range []string{"General", "Direct"} {
+		vm, ctx := smallHost(t, mode == "Direct")
+		for _, tc := range smallHostCases {
+			var out [1]values.Value
+			if err := vm.Run(ctx, tc.name, nil, out[:]); err != nil || out[0].R != tc.want {
+				t.Errorf("%s/%s: got %v, %v; want %d", tc.name, mode, out, err, tc.want)
+			}
+		}
+	}
+}
+
 func BenchmarkSmallHost(b *testing.B) {
-	for _, tc := range []struct {
-		name string
-		want uint64
-	}{{"Predicate", 128}, {"PointerGetter", 32640}, {"TagCheck", 128}, {"CachedContext", 1536}, {"Cursor", 32640}} {
+	for _, tc := range smallHostCases {
 		b.Run(tc.name, func(b *testing.B) {
 			for _, mode := range []string{"General", "Direct"} {
 				b.Run(mode, func(b *testing.B) {

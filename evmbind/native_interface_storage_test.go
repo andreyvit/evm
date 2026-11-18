@@ -41,7 +41,8 @@ func TestNativeInterfaceStorage(t *testing.T) {
  func Opaque(t *ReaderTree)
  func Hidden()*ReaderTree
  `)}}
-	s, err := NewTypes("tree", source, []string{"ReaderTree", "InterfaceNode"}, Options{
+	s, err := New("tree", source, Options{
+		Only:            []string{"ReaderTree", "InterfaceNode"},
 		Types:           []reflect.Type{reflect.TypeFor[ReaderTree](), reflect.TypeFor[InterfaceNode]()},
 		Methods:         map[string][]string{"InterfaceNode": {"Read"}},
 		Implementations: []Implementation{Pointer[opaqueReader]()},
@@ -125,7 +126,8 @@ type ImportedReaderTree struct {
 }
 
 func TestImportedNativeInterfaceStorage(t *testing.T) {
-	dep, err := NewTypes("domain", interfacedep.Source, []string{"Named", "NamedValue"}, Options{
+	dep, err := New("domain", interfacedep.Source, Options{
+		Only:    []string{"Named", "NamedValue"},
 		Types:   []reflect.Type{reflect.TypeFor[interfacedep.Named](), reflect.TypeFor[interfacedep.NamedValue]()},
 		Methods: map[string][]string{"NamedValue": {"Label"}},
 	})
@@ -138,7 +140,8 @@ func TestImportedNativeInterfaceStorage(t *testing.T) {
  type ImportedReaderTree struct{Root interfacedep.Named}
  func Get()*ImportedReaderTree
  `)}}
-	s, err := NewTypes("tree", source, []string{"ImportedReaderTree"}, Options{
+	s, err := New("tree", source, Options{
+		Only:      []string{"ImportedReaderTree"},
 		Types:     []reflect.Type{reflect.TypeFor[ImportedReaderTree]()},
 		Imports:   map[string]*Schema{"github.com/andreyvit/evm/evmbind/internal/interfacedep": dep},
 		Functions: map[string]any{"Get": func() *ImportedReaderTree { return tree }},

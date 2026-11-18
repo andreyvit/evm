@@ -34,6 +34,7 @@ func TestSelectedNativeInterface(t *testing.T) {
  func Check(v SelectedService) bool { panic("native") }
  `)}}
 	options := Options{
+		Only:            []string{"SelectedService"},
 		Implementations: []Implementation{Pointer[selectedService]()},
 		Types:           []reflect.Type{reflect.TypeFor[SelectedBase](), reflect.TypeFor[SelectedService]()},
 		Methods:         map[string][]string{"SelectedService": {"SelectedBase", "Add"}},
@@ -42,7 +43,7 @@ func TestSelectedNativeInterface(t *testing.T) {
 			"Check": func(v SelectedService) bool { return v == service },
 		},
 	}
-	schema, err := NewTypes("service", files, []string{"SelectedService"}, options)
+	schema, err := New("service", files, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,12 +76,12 @@ func TestSelectedNativeInterface(t *testing.T) {
 	}
 	for _, name := range []string{"Missing", "Read"} {
 		options.Methods = map[string][]string{"SelectedService": {name}}
-		if _, err := NewTypes("service", files, []string{"SelectedService"}, options); err == nil || !strings.Contains(err.Error(), "not declared") {
+		if _, err := New("service", files, options); err == nil || !strings.Contains(err.Error(), "not declared") {
 			t.Fatalf("selection %s: %v", name, err)
 		}
 	}
 	options.Methods = map[string][]string{"SelectedService": {"Add", "Add"}}
-	if _, err := NewTypes("service", files, []string{"SelectedService"}, options); err == nil || !strings.Contains(err.Error(), "duplicate") {
+	if _, err := New("service", files, options); err == nil || !strings.Contains(err.Error(), "duplicate") {
 		t.Fatalf("duplicate: %v", err)
 	}
 }
@@ -97,7 +98,8 @@ func TestSelectedNativeInterfaceValidation(t *testing.T) {
 		{`type SelectedService interface{ a.Reader; b.Reader }`, []string{"Reader"}, "ambiguous interface member"},
 	} {
 		t.Run(tc.want, func(t *testing.T) {
-			_, err := NewTypes("service", fstest.MapFS{"service.go": {Data: []byte("package service\n" + tc.source)}}, []string{"SelectedService"}, Options{
+			_, err := New("service", fstest.MapFS{"service.go": {Data: []byte("package service\n" + tc.source)}}, Options{
+				Only:  []string{"SelectedService"},
 				Types: []reflect.Type{reflect.TypeFor[SelectedService]()}, Methods: map[string][]string{"SelectedService": tc.methods},
 			})
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
@@ -108,9 +110,10 @@ func TestSelectedNativeInterfaceValidation(t *testing.T) {
 }
 
 func TestUnselectedAmbiguousInterfaceMembers(t *testing.T) {
-	_, err := NewTypes("service", fstest.MapFS{"service.go": {Data: []byte(`package service
+	_, err := New("service", fstest.MapFS{"service.go": {Data: []byte(`package service
  type SelectedService interface { a.Reader; b.Reader; Add(int) }
- `)}}, []string{"SelectedService"}, Options{
+ `)}}, Options{
+		Only:  []string{"SelectedService"},
 		Types: []reflect.Type{reflect.TypeFor[SelectedService]()}, Methods: map[string][]string{"SelectedService": {"Add"}},
 	})
 	if err != nil {

@@ -39,7 +39,8 @@ func TestNativePointerInterfaces(t *testing.T) {
  func(n *InterfaceNode) Error()string{return ""}
  func(n *InterfaceNode) Echo(v any)any{return v}
  `)}}
-	schema, err := NewTypes("native", source, []string{"InterfaceNode"}, Options{
+	schema, err := New("native", source, Options{
+		Only:    []string{"InterfaceNode"},
 		Types:   []reflect.Type{reflect.TypeFor[InterfaceNode]()},
 		Methods: map[string][]string{"InterfaceNode": {"Read", "Mark", "Error", "Echo", "EchoReader"}},
 	})
@@ -160,11 +161,11 @@ func TestNativePointerInterfaces(t *testing.T) {
 }
 
 func TestConflictingNativePointerIdentities(t *testing.T) {
-	declared, err := NewTypes("declared", fstest.MapFS{"api.go": {Data: []byte("package declared;type InterfaceNode struct{Value int}")}}, nil, Options{Types: []reflect.Type{reflect.TypeFor[InterfaceNode]()}})
+	declared, err := New("declared", fstest.MapFS{"api.go": {Data: []byte("package declared;type InterfaceNode struct{Value int}")}}, Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[InterfaceNode]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	opaque, err := NewTypes("opaque", fstest.MapFS{"api.go": {Data: []byte("package opaque;type NativeReader interface{Read()int}")}}, nil, Options{Types: []reflect.Type{reflect.TypeFor[NativeReader]()}, Implementations: []Implementation{Pointer[InterfaceNode]()}})
+	opaque, err := New("opaque", fstest.MapFS{"api.go": {Data: []byte("package opaque;type NativeReader interface{Read()int}")}}, Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[NativeReader]()}, Implementations: []Implementation{Pointer[InterfaceNode]()}})
 	if err != nil {
 		t.Fatal(err)
 	}

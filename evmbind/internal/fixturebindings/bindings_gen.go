@@ -29,6 +29,36 @@ func writePtrCount(f *evmbind.Frame, x *api.Count) values.Value {
 	}
 	return values.Value{R: values.NativeAddress, P: unsafe.Pointer(x)}
 }
+func readPtrDetail(f *evmbind.Frame, v values.Value) *api.Detail {
+	if v.P == nil {
+		return nil
+	}
+	if v.R != values.NativeAddress {
+		panic("native pointer *Detail requires native storage")
+	}
+	return (*api.Detail)(v.P)
+}
+func writePtrDetail(f *evmbind.Frame, x *api.Detail) values.Value {
+	if x == nil {
+		return values.Value{}
+	}
+	return values.Value{R: values.NativeAddress, P: unsafe.Pointer(x)}
+}
+func readPtrLabel(f *evmbind.Frame, v values.Value) *api.Label {
+	if v.P == nil {
+		return nil
+	}
+	if v.R != values.NativeAddress {
+		panic("native pointer *Label requires native storage")
+	}
+	return (*api.Label)(v.P)
+}
+func writePtrLabel(f *evmbind.Frame, x *api.Label) values.Value {
+	if x == nil {
+		return values.Value{}
+	}
+	return values.Value{R: values.NativeAddress, P: unsafe.Pointer(x)}
+}
 func readPtrRow(f *evmbind.Frame, v values.Value) *api.Row {
 	if v.P == nil {
 		return nil
@@ -81,6 +111,9 @@ func readTypeLabel(f *evmbind.Frame, v values.Value) api.Label {
 func writeTypeLabel(f *evmbind.Frame, x api.Label) values.Value {
 	return f.String(string(x))
 }
+func storeTypeLabel(f *evmbind.Frame, v values.Value, x api.Label) {
+	*(*values.Value)(v.P) = writeTypeLabel(f, x)
+}
 func readTypeObserver(f *evmbind.Frame, v values.Value) api.Observer {
 	if v == (values.Value{}) {
 		return nil
@@ -117,19 +150,19 @@ func storeTypeRow(f *evmbind.Frame, v values.Value, x api.Row) {
 	*(*values.Value)(values.CellAt(v.P, 6)) = writeScalarFloat64(f, x.Amount)
 	*(*values.Value)(values.CellAt(v.P, 7)) = writeScalarUint16(f, x.Bits)
 }
-func readCollection8(f *evmbind.Frame, v values.Value) []any {
+func readCollection10(f *evmbind.Frame, v values.Value) []any {
 	return ([]any)(unsafe.Slice((*any)(evmbind.NativeSliceData(v, reflect.TypeFor[any]())), int(v.SliceCap()))[:int(v.SliceLen())])
 }
-func writeCollection8(f *evmbind.Frame, x []any) values.Value {
+func writeCollection10(f *evmbind.Frame, x []any) values.Value {
 	if uint64(cap(x)) > 1<<32-1 {
 		panic("native slice exceeds VM capacity")
 	}
 	return values.SliceValue(unsafe.Pointer(unsafe.SliceData(x)), uint32(len(x)), uint32(cap(x)))
 }
-func readCollection9(f *evmbind.Frame, v values.Value) []string {
+func readCollection11(f *evmbind.Frame, v values.Value) []string {
 	return ([]string)(unsafe.Slice((*string)(evmbind.NativeSliceData(v, reflect.TypeFor[string]())), int(v.SliceCap()))[:int(v.SliceLen())])
 }
-func writeCollection9(f *evmbind.Frame, x []string) values.Value {
+func writeCollection11(f *evmbind.Frame, x []string) values.Value {
 	if uint64(cap(x)) > 1<<32-1 {
 		panic("native slice exceeds VM capacity")
 	}
@@ -168,10 +201,10 @@ func readScalarInt(f *evmbind.Frame, v values.Value) int {
 func writeScalarInt(f *evmbind.Frame, x int) values.Value {
 	return values.Int(int64(x))
 }
-func readCollection16(f *evmbind.Frame, v values.Value) map[string]any {
+func readCollection18(f *evmbind.Frame, v values.Value) map[string]any {
 	return *(*map[string]any)(unsafe.Pointer(&v.P))
 }
-func writeCollection16(f *evmbind.Frame, x map[string]any) values.Value {
+func writeCollection18(f *evmbind.Frame, x map[string]any) values.Value {
 	return values.Value{P: *(*unsafe.Pointer)(unsafe.Pointer(&x))}
 }
 func readScalarString(f *evmbind.Frame, v values.Value) string {
@@ -293,7 +326,7 @@ var Bindings = evmbind.Static{Fingerprint: "3b2fe1871cdc37e1f05bd60826438f714194
 			f.Receiver.(api.Context).Mark()
 		},
 		"Context.Observe": func(f *evmbind.Frame) {
-			f.Receiver.(api.Context).Observe(readCollection9(f, f.Argument(1)), readCollection16(f, f.Argument(2)))
+			f.Receiver.(api.Context).Observe(readCollection11(f, f.Argument(1)), readCollection18(f, f.Argument(2)))
 		},
 		"Context.ResetMark": func(f *evmbind.Frame) {
 			f.Receiver.(api.Context).ResetMark()
@@ -309,7 +342,7 @@ var Bindings = evmbind.Static{Fingerprint: "3b2fe1871cdc37e1f05bd60826438f714194
 			f.Receiver.(api.Observer).Mark()
 		},
 		"Observer.Observe": func(f *evmbind.Frame) {
-			f.Receiver.(api.Observer).Observe(readCollection9(f, f.Argument(1)), readCollection16(f, f.Argument(2)))
+			f.Receiver.(api.Observer).Observe(readCollection11(f, f.Argument(1)), readCollection18(f, f.Argument(2)))
 		},
 		"Observer.ResetMark": func(f *evmbind.Frame) {
 			f.Receiver.(api.Observer).ResetMark()

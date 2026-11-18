@@ -75,6 +75,13 @@ func schemaImporter(_ *token.FileSet, files []*ast.File, imports map[string]*Sch
 	if err := collect(imports); err != nil {
 		return nil, err
 	}
+	nameSchemaImports(files, imports)
+	return nativeSchemaImporter{packages: packages, byPackage: byPackage}, nil
+}
+
+// nameSchemaImports gives each unnamed import of a schema the package name
+// that schema declares, which can differ from the import path's last element.
+func nameSchemaImports(files []*ast.File, imports map[string]*Schema) {
 	for _, f := range files {
 		for _, imp := range f.Imports {
 			path, _ := strconv.Unquote(imp.Path.Value)
@@ -83,7 +90,6 @@ func schemaImporter(_ *token.FileSet, files []*ast.File, imports map[string]*Sch
 			}
 		}
 	}
-	return nativeSchemaImporter{packages: packages, byPackage: byPackage}, nil
 }
 
 // Keep ordinary names stable for generated bindings. Disambiguate native

@@ -3,6 +3,7 @@ package evmbind
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/constant"
@@ -12,6 +13,7 @@ import (
 	"io/fs"
 	"maps"
 	"math"
+	"path"
 	"reflect"
 	"slices"
 	"sort"
@@ -190,6 +192,7 @@ type operation struct {
 	paramNames      []string
 	doc             string
 	packageFunction bool
+	value           bool // a bound package variable, read through its function
 	variadic        bool
 	name, key       string
 	recv            *node
@@ -352,15 +355,46 @@ func parseOptions(path string, files fs.FS, selected []string, typesOnly bool, o
 	if err != nil {
 		return nil, err
 	}
+	// Unexported fields are never script API. Native storage keeps them.
+	omitted = omitUnexportedFields(syntax, omitted)
+	opt.OmitFields = omitted
 	if err := omitTypeFields(syntax, omitted); err != nil {
 		return nil, err
 	}
-	var exposed map[string]bool
-	if typesOnly {
-		syntax, exposed, err = selectTypeSyntaxFunctions(syntax, selected, methods, slices.Sorted(maps.Keys(functionNames(opt))))
+	// Selection keeps the imports that remaining declarations name.
+	nameSchemaImports(syntax, imports)
+	if err := declareBoundValues(syntax, opt); err != nil {
+		return nil, err
+	}
+	functions := functionNames(opt)
+	omit := map[string]bool{}
+	if !typesOnly {
+		selected, methods, functions, omit, err = wholeSelection(syntax, opt)
 		if err != nil {
 			return nil, err
 		}
+	} else if len(opt.Omit) != 0 {
+		return nil, fmt.Errorf("Options.Omit applies to a schema that exposes everything; a selective schema lists what it exposes")
+	}
+	syntax, exposed, err := selectSyntax(syntax, selected, methods, slices.Sorted(maps.Keys(functions)), !typesOnly, omit)
+	if err != nil {
+		return nil, err
+	}
+	// Selection decides what the checked package exports to scripts.
+	exports := func(obj types.Object) bool {
+		switch o := obj.(type) {
+		case *types.TypeName:
+			return exposed[o.Name()]
+		case *types.Func:
+			return functions[o.Name()]
+		case *types.Const:
+			if !typesOnly {
+				return !omit[o.Name()]
+			}
+			named, ok := o.Type().(*types.Named)
+			return ok && exposed[named.Obj().Name()]
+		}
+		return false
 	}
 	importer, err := schemaImporter(fset, syntax, imports)
 	if err != nil {
@@ -368,12 +402,12 @@ func parseOptions(path string, files fs.FS, selected []string, typesOnly bool, o
 	}
 	pkg, err := (&types.Config{GoVersion: "go1.24", Sizes: types.SizesFor("gc", "amd64"), Importer: importer}).Check(path, fset, syntax, nil)
 	if err != nil {
-		return nil, err
+		return nil, explainImportError(err, syntax)
 	}
 	s = &source{cellStructs: opt.CellStructs, mutable: maps.Clone(opt.Mutable), mutableUsed: map[string]bool{}, typeNames: maps.Clone(opt.TypeNames), nativePackage: opt.NativePackage, models: models, nativeImports: importer.(nativeSchemaImporter).byPackage, omittedFields: omitted, imports: imports, importedNodes: map[*node]*node{}, goPackage: pkg, name: pkg.Name(), pkg: evm.Package{Path: path}, nodes: map[string]*node{}}
 	for name, guest := range opt.TypeNames {
 		obj, ok := pkg.Scope().Lookup(name).(*types.TypeName)
-		if !ok || !obj.Exported() || (typesOnly && !exposed[name]) {
+		if !ok || !obj.Exported() || !exposed[name] {
 			return nil, fmt.Errorf("renamed type %s is not exposed", name)
 		}
 		named, ok := obj.Type().(*types.Named)
@@ -387,27 +421,8 @@ func parseOptions(path string, files fs.FS, selected []string, typesOnly bool, o
 	seenNames := map[string]string{}
 	for _, name := range pkg.Scope().Names() {
 		obj := pkg.Scope().Lookup(name)
-		if !obj.Exported() {
+		if !obj.Exported() || !exports(obj) {
 			continue
-		}
-		if typesOnly {
-			switch o := obj.(type) {
-			case *types.TypeName:
-				if !exposed[name] {
-					continue
-				}
-			case *types.Func:
-				if !functionNames(opt)[name] {
-					continue
-				}
-			case *types.Const:
-				named, ok := o.Type().(*types.Named)
-				if !ok || !exposed[named.Obj().Name()] {
-					continue
-				}
-			default:
-				continue
-			}
 		}
 		guest := s.guestTypeName(name)
 		if prev := seenNames[guest]; prev != "" {
@@ -438,27 +453,8 @@ func parseOptions(path string, files fs.FS, selected []string, typesOnly bool, o
 	}
 	for _, name := range pkg.Scope().Names() {
 		obj := pkg.Scope().Lookup(name)
-		if !obj.Exported() {
+		if !obj.Exported() || !exports(obj) {
 			continue
-		}
-		if typesOnly {
-			switch o := obj.(type) {
-			case *types.TypeName:
-				if !exposed[o.Name()] {
-					continue
-				}
-			case *types.Func:
-				if !functionNames(opt)[o.Name()] {
-					continue
-				}
-			case *types.Const:
-				named, ok := o.Type().(*types.Named)
-				if !ok || !exposed[named.Obj().Name()] {
-					continue
-				}
-			default:
-				continue
-			}
 		}
 		switch o := obj.(type) {
 		case *types.TypeName:
@@ -492,10 +488,8 @@ func parseOptions(path string, files fs.FS, selected []string, typesOnly bool, o
 				abi = append(abi, "alias "+name+" = "+n.shape.Type.Name())
 				continue
 			}
-			if typesOnly {
-				if iface, ok := o.Type().Underlying().(*types.Interface); ok && !iface.IsMethodSet() {
-					continue
-				}
+			if iface, ok := o.Type().Underlying().(*types.Interface); ok && !iface.IsMethodSet() {
+				continue // a type constraint, not a value type
 			}
 			if named, ok := o.Type().(*types.Named); ok && named.TypeParams().Len() != 0 {
 				found := false
@@ -522,7 +516,7 @@ func parseOptions(path string, files fs.FS, selected []string, typesOnly bool, o
 				}
 			}
 			n := s.node(o.Type())
-			if typesOnly && (n.kind == nodeStruct || n.kind == nodeRecord || basics[n.kind] != nil) {
+			if n.kind == nodeStruct || n.kind == nodeRecord || basics[n.kind] != nil {
 				s.node(types.NewPointer(o.Type()))
 			}
 			if n.kind == nodeRecord {
@@ -554,9 +548,15 @@ func parseOptions(path string, files fs.FS, selected []string, typesOnly bool, o
 				s.addGenericFunction(o, instances)
 				continue
 			}
+			if o.Signature().TypeParams().Len() != 0 {
+				fail("generic function %s needs its instances in Options.GenericFunctions; Options.Omit leaves it out", name)
+			}
 			op := s.op(o, nil)
 			op.doc = docs[o.Name()]
 			_, op.packageFunction = opt.Functions[o.Name()]
+			if _, op.value = opt.Values[o.Name()]; op.value {
+				op.packageFunction = true
+			}
 			s.ops = append(s.ops, op)
 			abi = append(abi, op.abi())
 		case *types.Const:
@@ -663,6 +663,9 @@ func (op *operation) abi() string {
 	prefix := ""
 	if op.packageFunction {
 		prefix = "package function "
+	}
+	if op.value {
+		prefix = "package value "
 	}
 	return prefix + op.key + "(" + strings.Join(p, ",") + ")(" + strings.Join(r, ",") + ")"
 }
@@ -1178,4 +1181,114 @@ func (s *source) guestTypeName(name string) string {
 		return guest
 	}
 	return name
+}
+
+// explainImportError names the exposed declarations that need a package the
+// binding cannot import, so the host knows what to omit.
+func explainImportError(err error, files []*ast.File) error {
+	var typeErr types.Error
+	if !errors.As(err, &typeErr) {
+		return err
+	}
+	rest, ok := strings.CutPrefix(typeErr.Msg, "could not import ")
+	if !ok {
+		return err
+	}
+	importPath, _, _ := strings.Cut(rest, " ")
+	var users []string
+	for _, file := range files {
+		local := ""
+		for _, imp := range file.Imports {
+			if p, _ := strconv.Unquote(imp.Path.Value); p == importPath {
+				local = path.Base(p)
+				if imp.Name != nil {
+					local = imp.Name.Name
+				}
+			}
+		}
+		if local == "" {
+			continue
+		}
+		for _, decl := range file.Decls {
+			uses := false
+			ast.Inspect(decl, func(n ast.Node) bool {
+				if sel, ok := n.(*ast.SelectorExpr); ok {
+					if id, ok := sel.X.(*ast.Ident); ok && id.Name == local {
+						uses = true
+					}
+				}
+				return !uses
+			})
+			if !uses {
+				continue
+			}
+			switch d := decl.(type) {
+			case *ast.FuncDecl:
+				name := d.Name.Name
+				if d.Recv != nil {
+					name = embeddedFieldName(d.Recv.List[0].Type) + "." + name
+				}
+				users = append(users, name)
+			case *ast.GenDecl:
+				for _, spec := range d.Specs {
+					switch spec := spec.(type) {
+					case *ast.TypeSpec:
+						users = append(users, spec.Name.Name)
+					case *ast.ValueSpec:
+						for _, name := range spec.Names {
+							users = append(users, name.Name)
+						}
+					}
+				}
+			}
+		}
+	}
+	if len(users) == 0 {
+		return err
+	}
+	sort.Strings(users)
+	return fmt.Errorf("%w: needed by %s; import a schema for %s through Options.Imports, omit the field with Options.OmitFields, or leave the declaration out with Options.Omit", err, strings.Join(users, ", "), importPath)
+}
+
+// declareBoundValues rewrites each variable bound in Options.Values into a
+// bodyless function of the same name and type. Selection, type checking and
+// binding then treat reading the variable as calling that function.
+func declareBoundValues(files []*ast.File, opt Options) error {
+	pending := maps.Clone(opt.Values)
+	for name := range opt.Values {
+		if _, ok := opt.Functions[name]; ok {
+			return fmt.Errorf("%s is bound both as a value and as a function", name)
+		}
+	}
+	for _, file := range files {
+		var decls []ast.Decl
+		for _, decl := range file.Decls {
+			decls = append(decls, decl)
+			g, ok := decl.(*ast.GenDecl)
+			if !ok || g.Tok != token.VAR {
+				continue
+			}
+			for _, spec := range g.Specs {
+				v := spec.(*ast.ValueSpec)
+				for _, name := range v.Names {
+					if _, bound := pending[name.Name]; !bound {
+						continue
+					}
+					if !name.IsExported() {
+						return fmt.Errorf("bound value %s is not exported", name.Name)
+					}
+					if v.Type == nil {
+						return fmt.Errorf("bound value %s needs a declared type in source", name.Name)
+					}
+					decls = append(decls, &ast.FuncDecl{Name: ast.NewIdent(name.Name), Type: &ast.FuncType{Func: name.Pos(), Params: &ast.FieldList{}, Results: &ast.FieldList{List: []*ast.Field{{Type: v.Type}}}}})
+					delete(pending, name.Name)
+				}
+			}
+		}
+		file.Decls = decls
+	}
+	for name := range pending {
+		return fmt.Errorf("bound value %s is not declared as a variable in source", name)
+	}
+	return nil
 }

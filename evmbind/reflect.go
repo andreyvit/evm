@@ -45,7 +45,7 @@ func nativeType(n *node, reg map[string]reflect.Type, cache map[*node]reflect.Ty
 		t = reflectBasics[n.kind]
 	}
 	if t == nil {
-		fail("missing native Go type %s", n.name)
+		fail("missing native Go type %s: no bound function, method or field reaches it; add it to Options.Types", n.name)
 	}
 	cache[n] = t
 	switch n.kind {
@@ -134,10 +134,16 @@ func reflectWrapper(op *operation, host reflect.Type, ts map[*node]reflect.Type,
 		if op.recv != nil {
 			t = ts[op.recv]
 		}
+		if t == nil && op.recv == nil {
+			fail("function %s has no native implementation: bind it in Options.Functions, or leave it out with Options.Omit", op.name)
+		}
 		if t == nil {
 			fail("missing host for %s", op.key)
 		}
 		m, ok := t.MethodByName(op.name)
+		if !ok && op.recv == nil {
+			fail("function %s has no native implementation: bind it in Options.Functions or as a method of %s, or leave it out with Options.Omit", op.name, t)
+		}
 		if !ok {
 			fail("missing native method %s", op.key)
 		}

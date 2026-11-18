@@ -17,11 +17,12 @@ import (
 
 func TestContentGeneratedBindings(t *testing.T) {
 	opt := evmbind.Options{
+		Only:      []string{"Envelope"},
 		Types:     []reflect.Type{reflect.TypeFor[contentfixture.Envelope]()},
 		Imports:   map[string]*evmbind.Schema{"github.com/andreyvit/evm/gox": gox.Schema()},
 		Functions: map[string]any{"Echo": contentfixture.Echo, "Wrap": contentfixture.Wrap},
 	}
-	generated, err := evmbind.GenerateTypesWithOptions("host", "github.com/andreyvit/evm/gox/internal/contentfixture", "contentbindings", contentfixture.Source, []string{"Envelope"}, opt)
+	generated, err := evmbind.Generate("host", "github.com/andreyvit/evm/gox/internal/contentfixture", "contentbindings", contentfixture.Source, opt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,13 +35,19 @@ func TestContentGeneratedBindings(t *testing.T) {
 	}
 	opt.Static = &contentbindings.Bindings
 	opt.Mode = evmbind.StaticOnly
-	schema, err := evmbind.NewTypes("host", contentfixture.Source, []string{"Envelope"}, opt)
+	schema, err := evmbind.New("host", contentfixture.Source, opt)
 	if err != nil {
 		t.Fatal(err)
 	}
 	pkg := schema.Bind(nil)
 	tmpl, err := gox.Compile("native.gox", `package plugin
-import "host"
+
+import (
+	"host"
+
+	"github.com/andreyvit/evm/gox"
+)
+
 func Page(b *gox.Builder) {
  text:=gox.Text("<plain>")
  if host.Echo(text)!=text || host.Wrap(text).Title!=text {panic("round trip")}

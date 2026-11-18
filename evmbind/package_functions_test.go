@@ -16,7 +16,8 @@ import (
 )
 
 func TestNativePackageFunctionsFromSource(t *testing.T) {
-	schema, err := evmbind.NewTypes("ranges", rangefixture.Source, []string{}, evmbind.Options{
+	schema, err := evmbind.New("ranges", rangefixture.Source, evmbind.Options{
+		Only:      []string{},
 		Methods:   map[string][]string{"Range": {"Reversed"}},
 		Functions: map[string]any{"Inclusive": rangefixture.Inclusive, "WithPrefix": rangefixture.WithPrefix, "Open": rangefixture.Open},
 	})
@@ -65,14 +66,14 @@ func TestNativePackageFunctionValidation(t *testing.T) {
 		{"result", map[string]any{"Add": func(int) string { return "x" }}, "native result mismatch"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := evmbind.NewTypes("native", files, []string{}, evmbind.Options{Functions: tc.functions})
+			_, err := evmbind.New("native", files, evmbind.Options{Only: []string{}, Functions: tc.functions})
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want %s", err, tc.want)
 			}
 		})
 	}
 	calls := 0
-	schema, err := evmbind.NewTypes("native", files, []string{}, evmbind.Options{Functions: map[string]any{"Add": func(n int) int { calls++; return n + 7 }}})
+	schema, err := evmbind.New("native", files, evmbind.Options{Only: []string{}, Functions: map[string]any{"Add": func(n int) int { calls++; return n + 7 }}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +123,7 @@ func TestNativePackageFunctionAndHostMethods(t *testing.T) {
 
 func TestNativePackageFunctionRejectsHostBindingFingerprint(t *testing.T) {
 	files := fstest.MapFS{"api.go": {Data: []byte(`package native;func Add(n int)int{panic("native")}`)}}
-	old, err := evmbind.Generate("native", "example/native", "bindings", files)
+	old, err := evmbind.Generate("native", "example/native", "bindings", files, evmbind.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +150,7 @@ type SourceRangeBox struct{ Range rangefixture.Range }
 
 func TestNativePackageFunctionImportedTypes(t *testing.T) {
 	const rangePath = "github.com/andreyvit/evm/evmbind/internal/rangefixture"
-	dep, err := evmbind.NewTypes("ranges", rangefixture.Source, []string{}, evmbind.Options{Functions: map[string]any{"Inclusive": rangefixture.Inclusive}})
+	dep, err := evmbind.New("ranges", rangefixture.Source, evmbind.Options{Only: []string{}, Functions: map[string]any{"Inclusive": rangefixture.Inclusive}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +159,8 @@ func TestNativePackageFunctionImportedTypes(t *testing.T) {
  type SourceRangeBox struct{Range rangefixture.Range}
  func Make()SourceRangeBox{panic("native")}
  `)}}
-	schema, err := evmbind.NewTypes("consumer", files, []string{}, evmbind.Options{
+	schema, err := evmbind.New("consumer", files, evmbind.Options{
+		Only:      []string{},
 		Imports:   map[string]*evmbind.Schema{rangePath: dep},
 		Functions: map[string]any{"Make": func() SourceRangeBox { return SourceRangeBox{rangefixture.Inclusive([]byte("a"), []byte("z"))} }},
 	})

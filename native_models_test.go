@@ -104,7 +104,7 @@ func TestNativeModelAny(t *testing.T) {
 		}},
 		{Name: "Change", Call: func(c *evm.Call) error { row.Name = "changed"; return nil }},
 	}}
-	native, err := evmbind.NewTypes("A", fstest.MapFS{"types.go": &fstest.MapFile{Data: []byte("package native; type AnyModelRow struct { Name string `kvo:\"name\"`; Hidden int `kvo:\"-\"`; Shared *int `kvo:\"-\"` }")}}, []string{"AnyModelRow"}, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[AnyModelRow]()}})
+	native, err := evmbind.New("A", fstest.MapFS{"types.go": &fstest.MapFile{Data: []byte("package native; type AnyModelRow struct { Name string `kvo:\"name\"`; Hidden int `kvo:\"-\"`; Shared *int `kvo:\"-\"` }")}}, evmbind.Options{Only: []string{"AnyModelRow"}, Types: []reflect.Type{reflect.TypeFor[AnyModelRow]()}})
 	if err != nil {
 		t.Fatal(err)
 	}

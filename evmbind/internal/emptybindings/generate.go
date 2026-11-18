@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	b, e := evmbind.GenerateTypesWithOptions("sets", "github.com/andreyvit/evm/evmbind/internal/emptydata", "emptybindings", emptydata.Source, []string{"SetHolder"}, evmbind.Options{Methods: map[string][]string{"SetHolder": {"Has"}}})
+	b, e := evmbind.Generate("sets", "github.com/andreyvit/evm/evmbind/internal/emptydata", "emptybindings", emptydata.Source, evmbind.Options{Only: []string{"SetHolder"}, Methods: map[string][]string{"SetHolder": {"Has"}}})
 	if e != nil {
 		panic(e)
 	}

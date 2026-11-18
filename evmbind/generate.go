@@ -15,35 +15,14 @@ import (
 	"golang.org/x/tools/imports"
 )
 
-// Generate emits direct Go conversions and method calls in a separate package.
-func Generate(path, nativeImport, outputPackage string, files fs.FS) ([]byte, error) {
-	return GenerateWithImports(path, nativeImport, outputPackage, files, nil)
-}
-
-// GenerateWithImports preserves types shared with another declaration schema.
-func GenerateWithImports(path, nativeImport, outputPackage string, files fs.FS, imports map[string]*Schema) ([]byte, error) {
-	return GenerateWithOptions(path, nativeImport, outputPackage, files, Options{Imports: imports})
-}
-
-// GenerateWithOptions applies the same source imports and field omissions as New.
-// Runtime binding options are ignored.
-func GenerateWithOptions(path, nativeImport, outputPackage string, files fs.FS, opt Options) ([]byte, error) {
+// Generate emits direct Go wrappers for the schema New builds from the same
+// source and options, including Selective, Only and Omit. nativeImport is the
+// Go import path of the bound package; runtime binding options are ignored.
+func Generate(path, nativeImport, outputPackage string, files fs.FS, opt Options) ([]byte, error) {
 	if opt.NativePackage == "" {
 		opt.NativePackage = nativeImport
 	}
-	s, err := parseOptions(path, files, nil, false, opt)
-	if err != nil {
-		return nil, err
-	}
-	return generateSource(s, nativeImport, outputPackage)
-}
-
-// GenerateTypesWithOptions emits bindings for the same source selection as NewTypes.
-func GenerateTypesWithOptions(path, nativeImport, outputPackage string, files fs.FS, names []string, opt Options) ([]byte, error) {
-	if opt.NativePackage == "" {
-		opt.NativePackage = nativeImport
-	}
-	s, err := parseOptions(path, files, names, true, opt)
+	s, err := parseOptions(path, files, opt.Only, opt.Selective || opt.Only != nil, opt)
 	if err != nil {
 		return nil, err
 	}

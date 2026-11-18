@@ -34,7 +34,7 @@ func TestSelectedNativeMethods(t *testing.T) {
  func (s *SelectedThing) Add(n int)int {implementation.Do();return 0}
  func (s *SelectedThing) Unselected()string{return "hidden"}
  `)}}
-	schema, err := NewTypes("native", files, []string{"SelectedThing"}, Options{Types: []reflect.Type{reflect.TypeFor[SelectedThing]()}, Methods: map[string][]string{"SelectedThing": {"Self", "Add", "Amount"}, "SelectedAmount": {"Double"}}})
+	schema, err := New("native", files, Options{Only: []string{"SelectedThing"}, Types: []reflect.Type{reflect.TypeFor[SelectedThing]()}, Methods: map[string][]string{"SelectedThing": {"Self", "Add", "Amount"}, "SelectedAmount": {"Double"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestSelectedNativeMethods(t *testing.T) {
 		t.Fatal("unselected method exposed")
 	}
 	for _, methods := range []map[string][]string{{"SelectedThing": {"Missing"}}, {"SelectedThing": {"Add", "Add"}}, {"Missing": {"Add"}}} {
-		_, err := NewTypes("native", files, []string{"SelectedThing"}, Options{Types: []reflect.Type{reflect.TypeFor[SelectedThing]()}, Methods: methods})
+		_, err := New("native", files, Options{Only: []string{"SelectedThing"}, Types: []reflect.Type{reflect.TypeFor[SelectedThing]()}, Methods: methods})
 		if err == nil || !strings.Contains(err.Error(), "method") {
 			t.Fatal("invalid method selection", err)
 		}

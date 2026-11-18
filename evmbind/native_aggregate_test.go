@@ -37,7 +37,8 @@ func TestNativeFieldsInGuestAggregates(t *testing.T) {
  func(s *AggregateCell) Add(n int){}
  func(s *AggregateCell) Echo(v any)any{return v}
  `)}}
-	schema, err := NewTypes("native", source, []string{"AggregateCell"}, Options{
+	schema, err := New("native", source, Options{
+		Only:       []string{"AggregateCell"},
 		Types:      []reflect.Type{reflect.TypeFor[AggregateCell]()},
 		OmitFields: map[string][]string{"AggregateCell": {"remembered"}},
 		Methods:    map[string][]string{"AggregateCell": {"Remember", "IsSame", "Add", "Echo"}},

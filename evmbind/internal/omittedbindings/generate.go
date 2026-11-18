@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	b, err := evmbind.GenerateWithOptions("page", "github.com/andreyvit/evm/evmbind/internal/omittedfixture", "omittedbindings", omittedfixture.Source, evmbind.Options{OmitFields: map[string][]string{"Page": {"Private"}}})
+	b, err := evmbind.Generate("page", "github.com/andreyvit/evm/evmbind/internal/omittedfixture", "omittedbindings", omittedfixture.Source, evmbind.Options{OmitFields: map[string][]string{"Page": {"Private"}}})
 	if err != nil {
 		panic(err)
 	}

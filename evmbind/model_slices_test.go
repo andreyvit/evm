@@ -198,7 +198,7 @@ func TestNativeModelSliceDoesNotChangeRecordLists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dep, err := evmbind.NewTypes("model", modeldata.Source, []string{"BoundModel"}, evmbind.Options{Models: &models, NativePackage: reflect.TypeFor[BoundModel]().PkgPath()})
+	dep, err := evmbind.New("model", modeldata.Source, evmbind.Options{Only: []string{"BoundModel"}, Models: &models, NativePackage: reflect.TypeFor[BoundModel]().PkgPath()})
 	if err != nil {
 		t.Fatal(err)
 	}

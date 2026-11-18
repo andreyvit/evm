@@ -30,7 +30,7 @@ func TestGeneratedModelSignatures(t *testing.T) {
 	}
 	models.Records[0].NativeAllocation = reflect.TypeFor[BoundModel]()
 	imports := map[string]*evmbind.Schema{"github.com/andreyvit/evm/evmbind/internal/modeldata": dep}
-	generated, err := evmbind.GenerateWithImports("host", "github.com/andreyvit/evm/evmbind/internal/modelhost", "modelbindings", modelhost.Source, imports)
+	generated, err := evmbind.Generate("host", "github.com/andreyvit/evm/evmbind/internal/modelhost", "modelbindings", modelhost.Source, evmbind.Options{Imports: imports})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,11 +265,11 @@ func TestModelBindingFingerprint(t *testing.T) {
 			row.NativeAllocation = reflect.TypeFor[modeldata.Generic[time.Duration]]()
 		}
 	}
-	duration, err := evmbind.NewTypes("time", fstest.MapFS{"time.go": {Data: []byte("package time; type Duration int64")}}, nil, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[time.Duration]()}})
+	duration, err := evmbind.New("time", fstest.MapFS{"time.go": {Data: []byte("package time; type Duration int64")}}, evmbind.Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[time.Duration]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	dep, err := evmbind.NewTypes("model", modeldata.Source, nil, evmbind.Options{Models: &models, Types: []reflect.Type{reflect.TypeFor[BoundModel]()}, Imports: map[string]*evmbind.Schema{"time": duration}})
+	dep, err := evmbind.New("model", modeldata.Source, evmbind.Options{Selective: true, Models: &models, Types: []reflect.Type{reflect.TypeFor[BoundModel]()}, Imports: map[string]*evmbind.Schema{"time": duration}})
 	if err != nil {
 		t.Fatal(err)
 	}

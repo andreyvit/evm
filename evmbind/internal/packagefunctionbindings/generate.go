@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	b, err := evmbind.GenerateTypesWithOptions("functions", "github.com/andreyvit/evm/evmbind/internal/packagefunctionfixture", "packagefunctionbindings", packagefunctionfixture.Source, []string{}, packagefunctionfixture.Options())
+	b, err := evmbind.Generate("functions", "github.com/andreyvit/evm/evmbind/internal/packagefunctionfixture", "packagefunctionbindings", packagefunctionfixture.Source, packagefunctionfixture.Options())
 	if err != nil {
 		panic(err)
 	}

@@ -44,7 +44,7 @@ func TestVariadicHostFunction(t *testing.T) {
 	if err := evm.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	generated, err := evmbind.Generate("host", "example/host", "bindings", source)
+	generated, err := evmbind.Generate("host", "example/host", "bindings", source, evmbind.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestVariadicNativeSignatureMismatch(t *testing.T) {
 		if decl == "...int" {
 			fn = func([]int) int { return 0 }
 		}
-		_, err := evmbind.NewTypes("host", source, nil, evmbind.Options{Functions: map[string]any{"Sum": fn}})
+		_, err := evmbind.New("host", source, evmbind.Options{Selective: true, Functions: map[string]any{"Sum": fn}})
 		if err == nil || !strings.Contains(err.Error(), "native signature mismatch") {
 			t.Fatalf("%s: %v", decl, err)
 		}

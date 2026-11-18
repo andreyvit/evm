@@ -30,7 +30,7 @@ func TestNativeMethodShadowsPromotedSelector(t *testing.T) {
  func(s *ShadowOuter)Value()int{return s.ShadowInner.Value+1}
  func(*ShadowOuter)Label()string{return "outer"}
  `)}}
-	schema, err := NewTypes("native", source, []string{"ShadowOuter"}, Options{Types: []reflect.Type{reflect.TypeFor[ShadowOuter]()}, Methods: map[string][]string{"ShadowOuter": {"Value", "Label"}, "ShadowInner": {"Label"}}})
+	schema, err := New("native", source, Options{Only: []string{"ShadowOuter"}, Types: []reflect.Type{reflect.TypeFor[ShadowOuter]()}, Methods: map[string][]string{"ShadowOuter": {"Value", "Label"}, "ShadowInner": {"Label"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -57,7 +57,7 @@ func (h *functionHost) RegisterRows(_ *evm.Call, fn *evm.NamedFunctionOf[func(fu
 
 func TestTypedFunctionBindings(t *testing.T) {
 	files := os.DirFS("internal/functionfixture")
-	generated, err := evmbind.Generate("callbacks", "github.com/andreyvit/evm/evmbind/internal/functionfixture", "functionbindings", files)
+	generated, err := evmbind.Generate("callbacks", "github.com/andreyvit/evm/evmbind/internal/functionfixture", "functionbindings", files, evmbind.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

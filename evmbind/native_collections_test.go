@@ -106,7 +106,7 @@ func TestNativeCollectionCallRoundtrip(t *testing.T) {
 }
 
 func TestNativeCollectionGeneratedBindings(t *testing.T) {
-	generated, err := evmbind.Generate("collections", "github.com/andreyvit/evm/evmbind/internal/collectionfixture", "collectionbindings", os.DirFS("internal/collectionfixture"))
+	generated, err := evmbind.Generate("collections", "github.com/andreyvit/evm/evmbind/internal/collectionfixture", "collectionbindings", os.DirFS("internal/collectionfixture"), evmbind.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

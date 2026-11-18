@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io/fs"
+	"maps"
 	"reflect"
 	"slices"
 	"sort"
@@ -42,6 +43,19 @@ type Static struct {
 type MutableSlots struct{ Params, Results []int }
 
 type Options struct {
+	// Selective exposes only what the options name, instead of everything the
+	// source exports: the types in Only (every exported type when Only is nil),
+	// the methods in Methods, the functions in Functions and GenericFunctions,
+	// and the typed constants of exposed types. Use it to pick declarations
+	// out of a large native package.
+	Selective bool
+	// Only lists the types a selective schema exposes, together with the local
+	// types they reference. A non-nil list implies Selective.
+	Only []string
+	// Omit leaves exported declarations out of a schema that exposes everything.
+	// Entries name a type, function or constant, or a method as Type.Method.
+	Omit []string
+
 	// CellStructs replaces value-copy storage while retaining native struct fields.
 	CellStructs map[string]*values.CellStruct
 
@@ -60,8 +74,14 @@ type Options struct {
 	// Instances selects concrete generic struct instantiations. Unlisted
 	// instantiations are rejected; field and method selections use template names.
 	Instances []Instance
+	// Values binds exported package variables to their native Go values. Only
+	// bound variables are exposed; the source must declare their types.
+	// Scripts read a variable and use its methods; they cannot assign it.
+	Values map[string]any
 	// Functions binds package functions to their actual native Go values.
-	// NewTypes selects these declarations and their referenced types from source.
+	// A selective schema exposes exactly these functions. Otherwise every
+	// exported function in the source needs a binding here, in
+	// GenericFunctions or as a Host method.
 	Functions map[string]any
 
 	// Models supplies the shared model package. Native model structs use its
@@ -70,8 +90,9 @@ type Options struct {
 	// NativePackage identifies the original Go package when its script path differs.
 	// If omitted, selected native Types supply the package identity.
 	NativePackage string
-	// Methods selects native methods to include with NewTypes declarations.
-	// For interfaces, a listed type selects direct methods or whole embedded
+	// Methods selects the exposed native methods. A nil map exposes every
+	// exported method, unless the schema is selective. Otherwise, for
+	// interfaces, a listed type selects direct methods or whole embedded
 	// interfaces by name; an empty list exposes none, an absent type keeps all.
 	// For concrete types, unlisted methods remain outside the source API.
 	Methods map[string][]string
@@ -133,6 +154,7 @@ type entry struct {
 	pointer  *nativePointer
 }
 type Schema struct {
+	values          []entry // bound package variables, parallel to pkg.Values
 	src             *source
 	pkg             evm.Package
 	funcs, methods  []entry
@@ -157,22 +179,24 @@ func (s *Schema) Type(name string) *values.Type {
 	}
 	return nil
 }
-func New(path string, files fs.FS, opt Options) (schema *Schema, err error) {
-	src, err := parseOptions(path, files, nil, false, opt)
-	if err != nil {
-		return nil, err
-	}
-	return newSchema(src, opt)
-}
 
-// NewTypes exposes selected native data declarations and their typed constants.
-// A nil selection includes all exported types. Referenced local types are added
-// recursively. Methods listed in Options.Methods retain their native signatures;
-// Options.Functions selects native package functions. Implementation bodies
-// are omitted. Cache the returned schema and
-// reuse it across environments; parsing and type checking happen only here.
-func NewTypes(path string, files fs.FS, names []string, opt Options) (*Schema, error) {
-	src, err := parseOptions(path, files, names, true, opt)
+// New builds a schema from the Go source of a package. It exposes every
+// exported type with its exported methods, every exported package function
+// and every exported constant. Function bodies, variables, unexported
+// declarations and unexported struct fields are ignored, so the package's own
+// source can be embedded and supplied as is.
+//
+// Go cannot look a function or type up by name, so the host supplies them:
+// Options.Functions binds package functions, and Options.Types adds native
+// types that no bound signature or struct field reaches. A declaration with
+// no native counterpart, or with a type the binding does not support, fails
+// schema construction; Options.Omit leaves it out. Options.Selective and
+// Options.Only expose a chosen part of a larger package instead.
+//
+// Cache the returned schema and reuse it across environments; parsing and
+// type checking happen only here.
+func New(path string, files fs.FS, opt Options) (schema *Schema, err error) {
+	src, err := parseOptions(path, files, opt.Only, opt.Selective || opt.Only != nil, opt)
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +221,7 @@ func newSchema(src *source, opt Options) (schema *Schema, err error) {
 	}
 	var expected []*operation
 	expected = append(expected, src.ops...)
-	boundFunctions := make(map[string]any, len(opt.Functions))
+	boundFunctions := make(map[string]any, len(opt.Functions)+len(opt.Values))
 	for name, value := range opt.Functions {
 		fn := reflect.ValueOf(value)
 		if !fn.IsValid() || fn.Kind() != reflect.Func || fn.IsNil() {
@@ -233,6 +257,25 @@ func newSchema(src *source, opt Options) (schema *Schema, err error) {
 	native := resolveNativeTypes(src, opt)
 	for n, t := range native {
 		n.native = t
+	}
+	// A bound variable reads through a function that returns its value, typed
+	// as the source declares it, so the ordinary call machinery converts it.
+	functions := maps.Clone(opt.Functions)
+	for _, op := range src.ops {
+		if !op.value {
+			continue
+		}
+		declared, value := native[op.outs[0]], reflect.ValueOf(opt.Values[op.name])
+		if !value.IsValid() || declared == nil || !value.Type().AssignableTo(declared) {
+			fail("native value %s does not have the declared type %s", op.name, op.outs[0].name)
+		}
+		result := reflect.New(declared).Elem()
+		result.Set(value)
+		if functions == nil {
+			functions = map[string]any{}
+		}
+		functions[op.name] = reflect.MakeFunc(reflect.FuncOf(nil, []reflect.Type{declared}, false), func([]reflect.Value) []reflect.Value { return []reflect.Value{result} }).Interface()
+		boundFunctions[op.name] = functions[op.name]
 	}
 	var fingerprint string
 	compatible := opt.Static != nil && !src.hasGenericInstances()
@@ -409,7 +452,7 @@ func newSchema(src *source, opt Options) (schema *Schema, err error) {
 	wrappers := map[string]Wrapper{}
 	for _, op := range expected {
 		// Validate the actual host ABI once, even when generated code is supplied.
-		w := reflectWrapper(op, opt.Host, native, opt.Functions[op.name])
+		w := reflectWrapper(op, opt.Host, native, functions[op.name])
 		if s.static {
 			w = opt.Static.Calls[op.key]
 		}
@@ -423,7 +466,10 @@ func newSchema(src *source, opt Options) (schema *Schema, err error) {
 			direct.Window = op.recv == nil
 			e.direct = opt.Static.Direct[op.key]
 		}
-		if op.recv == nil {
+		if op.value {
+			s.pkg.Values = append(s.pkg.Values, evm.ExternalValue{Name: op.name, Type: op.outs[0].shape.Type})
+			s.values = append(s.values, e)
+		} else if op.recv == nil {
 			s.pkg.Functions = append(s.pkg.Functions, evm.ExternalFunction{ParamNames: op.paramNames, Doc: op.doc, Direct: direct, Name: op.name, Signature: op.sig(), Variadic: op.variadic})
 			s.funcs = append(s.funcs, e)
 		} else {
@@ -522,6 +568,9 @@ func resolveNativeTypes(src *source, opt Options) map[*node]reflect.Type {
 	}
 	for _, t := range opt.Types {
 		collect(t)
+	}
+	for _, v := range opt.Values {
+		collect(reflect.TypeOf(v))
 	}
 	for _, in := range src.instances {
 		collect(in.native)
@@ -645,6 +694,10 @@ func (s *Schema) Bind(host any) evm.Package {
 		if e.direct != nil {
 			pkg.Functions[i].Direct.Call = e.direct(boundHost)
 		}
+	}
+	pkg.Values = slices.Clone(pkg.Values)
+	for i, e := range s.values {
+		pkg.Values[i].Read = s.bind(e, e.function)
 	}
 	for i, e := range s.methods {
 		pkg.Methods[i].Call = s.bind(e, host)

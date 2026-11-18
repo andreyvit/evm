@@ -11,11 +11,11 @@ import (
 )
 
 func main() {
-	dep, err := evmbind.NewTypes("data", importfixture.Source, nil, evmbind.Options{Instances: []evmbind.Instance{{Type: "Box", Native: reflect.TypeFor[importfixture.Box[importfixture.Permission]](), Args: []reflect.Type{reflect.TypeFor[importfixture.Permission]()}}}, Types: []reflect.Type{reflect.TypeFor[importfixture.Permission](), reflect.TypeFor[importfixture.Child]()}})
+	dep, err := evmbind.New("data", importfixture.Source, evmbind.Options{Selective: true, Instances: []evmbind.Instance{{Type: "Box", Native: reflect.TypeFor[importfixture.Box[importfixture.Permission]](), Args: []reflect.Type{reflect.TypeFor[importfixture.Permission]()}}}, Types: []reflect.Type{reflect.TypeFor[importfixture.Permission](), reflect.TypeFor[importfixture.Child]()}})
 	if err != nil {
 		panic(err)
 	}
-	b, err := evmbind.GenerateWithImports("host", "github.com/andreyvit/evm/evmbind/internal/importconsumer", "importbindings", importconsumer.Source, map[string]*evmbind.Schema{"github.com/andreyvit/evm/evmbind/internal/importfixture": dep})
+	b, err := evmbind.Generate("host", "github.com/andreyvit/evm/evmbind/internal/importconsumer", "importbindings", importconsumer.Source, evmbind.Options{Imports: map[string]*evmbind.Schema{"github.com/andreyvit/evm/evmbind/internal/importfixture": dep}})
 	if err != nil {
 		panic(err)
 	}

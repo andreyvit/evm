@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	b, err := evmbind.GenerateTypesWithOptions("host/timecontext", "github.com/andreyvit/evm/evmbind/internal/timedata", "timebindings", timedata.Source, nil, evmbind.Options{Methods: map[string][]string{"Context": {"Echo", "Pointer"}}})
+	b, err := evmbind.Generate("host/timecontext", "github.com/andreyvit/evm/evmbind/internal/timedata", "timebindings", timedata.Source, evmbind.Options{Selective: true, Methods: map[string][]string{"Context": {"Echo", "Pointer"}}})
 	if err != nil {
 		panic(err)
 	}

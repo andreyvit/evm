@@ -19,7 +19,7 @@ import (
 )
 
 func TestTypedSynchronousCallbacks(t *testing.T) {
-	generated, err := evmbind.Generate("native", "github.com/andreyvit/evm/evmbind/internal/callbackfixture", "callbackbindings", callbackfixture.Source)
+	generated, err := evmbind.Generate("native", "github.com/andreyvit/evm/evmbind/internal/callbackfixture", "callbackbindings", callbackfixture.Source, evmbind.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

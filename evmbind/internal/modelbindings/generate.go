@@ -14,7 +14,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	b, err := evmbind.GenerateWithImports("host", "github.com/andreyvit/evm/evmbind/internal/modelhost", "modelbindings", modelhost.Source, map[string]*evmbind.Schema{"github.com/andreyvit/evm/evmbind/internal/modeldata": dep})
+	b, err := evmbind.Generate("host", "github.com/andreyvit/evm/evmbind/internal/modelhost", "modelbindings", modelhost.Source, evmbind.Options{Imports: map[string]*evmbind.Schema{"github.com/andreyvit/evm/evmbind/internal/modeldata": dep}})
 	if err != nil {
 		panic(err)
 	}

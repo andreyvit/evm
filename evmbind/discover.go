@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"maps"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,6 +33,10 @@ type PackageExposure struct {
 type Discovery struct {
 	Options  Options
 	Packages []PackageExposure
+	// Constants are exposed in the function package under their map keys.
+	// A bool, int, float64 or string value becomes an untyped constant; a
+	// value of another scalar type keeps that type.
+	Constants map[string]any
 }
 
 // Discover binds functions in path and recursively exposes their concrete types.
@@ -63,6 +68,14 @@ func Discover(path string, config Discovery) (*Schema, []evm.Package, error) {
 			return nil, nil, err
 		}
 	}
+	for name, c := range config.Constants {
+		// A typed constant brings its type into the discovered graph.
+		if t := reflect.TypeOf(c); t != nil && t.PkgPath() != "" {
+			if err := d.visit(t); err != nil {
+				return nil, nil, fmt.Errorf("native constant %s: %w", name, err)
+			}
+		}
+	}
 	paths := make([]string, 0, len(d.groups))
 	for p := range d.groups {
 		paths = append(paths, p)
@@ -87,16 +100,76 @@ func Discover(path string, config Discovery) (*Schema, []evm.Package, error) {
 		}
 		fmt.Fprintf(&body, "func %s%s\n", n, sig)
 	}
+	for _, n := range slices.Sorted(maps.Keys(config.Constants)) {
+		decl, err := d.constant(g, n, config.Constants[n])
+		if err != nil {
+			return nil, nil, err
+		}
+		body.WriteString(decl)
+	}
+	discovered := slices.Collect(maps.Values(d.schemas))
 	opt := config.Options
 	opt.Imports = d.schemas
 	opt.Types = nil
 	opt.NativePackage = path
-	s, err := NewTypes(path, discoverySource(g, body.String()), []string{}, opt)
+	s, err := New(path, discoverySource(g, body.String()), opt)
 	if err != nil {
 		return nil, nil, err
 	}
-	d.packages = append(d.packages, s.Bind(nil))
-	return s, d.packages, nil
+	// The returned schema answers for every discovered type, so NativePointer
+	// accepts values of types that no function signature mentions.
+	for _, dep := range discovered {
+		for t, typ := range dep.nativeTypes {
+			if s.nativeTypes[t] == nil {
+				s.nativeTypes[t] = typ
+			}
+		}
+		for t, fields := range dep.fields {
+			if s.fields[t] == nil {
+				s.fields[t] = fields
+			}
+		}
+	}
+	// Types mapped to the function path share its package.
+	packages, err := evm.MergePackages(append(d.packages, s.Bind(nil))...)
+	if err != nil {
+		return nil, nil, err
+	}
+	return s, packages, nil
+}
+
+func (d *discovery) constant(g *discoveryGroup, name string, value any) (string, error) {
+	v := reflect.ValueOf(value)
+	if !token.IsExported(name) || !v.IsValid() {
+		return "", fmt.Errorf("invalid native constant %s", name)
+	}
+	var literal string
+	switch v.Kind() {
+	case reflect.Bool:
+		literal = strconv.FormatBool(v.Bool())
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		literal = strconv.FormatInt(v.Int(), 10)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		literal = strconv.FormatUint(v.Uint(), 10)
+	case reflect.Float32, reflect.Float64:
+		literal = strconv.FormatFloat(v.Float(), 'g', -1, v.Type().Bits())
+		if !strings.ContainsAny(literal, ".eE") {
+			literal += ".0"
+		}
+	case reflect.String:
+		literal = strconv.Quote(v.String())
+	default:
+		return "", fmt.Errorf("native constant %s has unsupported type %s", name, v.Type())
+	}
+	switch v.Type() {
+	case reflect.TypeFor[bool](), reflect.TypeFor[int](), reflect.TypeFor[float64](), reflect.TypeFor[string]():
+		return fmt.Sprintf("const %s = %s\n", name, literal), nil
+	}
+	spelling, err := d.typ(g, v.Type(), false)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("const %s %s = %s\n", name, spelling, literal), nil
 }
 
 type discoveryGroup struct {
@@ -412,7 +485,7 @@ func (d *discovery) build(path string) (*Schema, error) {
 			}
 		}
 	}
-	s, err := NewTypes(g.guest, discoverySource(g, body.String()), names, Options{NativePackage: path, Types: roots, Imports: d.schemas, Methods: g.methods, OmitFields: omitted})
+	s, err := New(g.guest, discoverySource(g, body.String()), Options{Selective: true, Only: names, NativePackage: path, Types: roots, Imports: d.schemas, Methods: g.methods, OmitFields: omitted})
 	if err != nil {
 		return nil, fmt.Errorf("discover %s: %w", path, err)
 	}

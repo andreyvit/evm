@@ -28,11 +28,11 @@ type PointerTarget struct {
 }
 
 func TestNativePointerIdentityAcrossPackages(t *testing.T) {
-	a, err := evmbind.NewTypes("a", fstest.MapFS{"a.go": {Data: []byte(`package a; import "time"; type PointerSource struct { Value *int64; Next *PointerSource; At *time.Time; List []*int64; Map map[string]*int64 }`)}}, nil, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[PointerSource]()}})
+	a, err := evmbind.New("a", fstest.MapFS{"a.go": {Data: []byte(`package a; import "time"; type PointerSource struct { Value *int64; Next *PointerSource; At *time.Time; List []*int64; Map map[string]*int64 }`)}}, evmbind.Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[PointerSource]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := evmbind.NewTypes("b", fstest.MapFS{"b.go": {Data: []byte(`package b; import "time"; type PointerTarget struct { Value *int64; At *time.Time; List []*int64; Map map[string]*int64 }`)}}, nil, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[PointerTarget]()}})
+	b, err := evmbind.New("b", fstest.MapFS{"b.go": {Data: []byte(`package b; import "time"; type PointerTarget struct { Value *int64; At *time.Time; List []*int64; Map map[string]*int64 }`)}}, evmbind.Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[PointerTarget]()}})
 	if err != nil {
 		t.Fatal(err)
 	}

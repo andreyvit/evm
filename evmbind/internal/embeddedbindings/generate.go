@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	b, err := evmbind.Generate("page", "github.com/andreyvit/evm/evmbind/internal/embeddedfixture", "embeddedbindings", embeddedfixture.Source)
+	b, err := evmbind.Generate("page", "github.com/andreyvit/evm/evmbind/internal/embeddedfixture", "embeddedbindings", embeddedfixture.Source, evmbind.Options{})
 	if err != nil {
 		panic(err)
 	}

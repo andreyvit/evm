@@ -236,6 +236,55 @@ func (p Package) Sources() []SourceFile {
 	return append(files, p.SourceFiles...)
 }
 
+// MergePackages combines packages that share a path into one, keeping the
+// order of first appearance. Compile and Link accept each path once; hosts
+// that build one script package from several bindings merge them first.
+// Declarations are concatenated; at most one fragment of a path may carry
+// Source, and StructValues names must not repeat.
+func MergePackages(packages ...Package) ([]Package, error) {
+	merged := make([]Package, 0, len(packages))
+	index := make(map[string]int, len(packages))
+	for _, p := range packages {
+		i, ok := index[p.Path]
+		if !ok {
+			index[p.Path] = len(merged)
+			merged = append(merged, p)
+			continue
+		}
+		m := merged[i]
+		if m.Source != "" && p.Source != "" {
+			return nil, fmt.Errorf("package %q has Source in two fragments", p.Path)
+		}
+		if m.Source == "" {
+			m.Source = p.Source
+		}
+		if len(p.StructValues) != 0 {
+			m.StructValues = maps.Clone(m.StructValues)
+			if m.StructValues == nil {
+				m.StructValues = map[string]func(string, []*values.Shape) *values.CellStruct{}
+			}
+			for name, factory := range p.StructValues {
+				if m.StructValues[name] != nil {
+					return nil, fmt.Errorf("package %q has two struct value rules for %s", p.Path, name)
+				}
+				m.StructValues[name] = factory
+			}
+		}
+		m.SourceFiles = slices.Concat(m.SourceFiles, p.SourceFiles)
+		m.Aliases = slices.Concat(m.Aliases, p.Aliases)
+		m.SharedTypes = slices.Concat(m.SharedTypes, p.SharedTypes)
+		m.Records = slices.Concat(m.Records, p.Records)
+		m.EntryTypes = slices.Concat(m.EntryTypes, p.EntryTypes)
+		m.Types = slices.Concat(m.Types, p.Types)
+		m.Methods = slices.Concat(m.Methods, p.Methods)
+		m.Functions = slices.Concat(m.Functions, p.Functions)
+		m.Constants = slices.Concat(m.Constants, p.Constants)
+		m.Values = slices.Concat(m.Values, p.Values)
+		merged[i] = m
+	}
+	return merged, nil
+}
+
 type linkedFunction struct {
 	definedRaw bool
 	localReads []uint64

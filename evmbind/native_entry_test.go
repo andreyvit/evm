@@ -13,7 +13,7 @@ import (
 type EntryData struct{ Count int }
 
 func TestNativeEntryArgumentWithoutMethods(t *testing.T) {
-	schema, err := NewTypes("native", fstest.MapFS{"types.go": {Data: []byte(`package native;type EntryData struct{Count int}`)}}, nil, Options{Types: []reflect.Type{reflect.TypeFor[EntryData]()}})
+	schema, err := New("native", fstest.MapFS{"types.go": {Data: []byte(`package native;type EntryData struct{Count int}`)}}, Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[EntryData]()}})
 	if err != nil {
 		t.Fatal(err)
 	}

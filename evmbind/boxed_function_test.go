@@ -13,14 +13,14 @@ import (
 func TestSignaturePolymorphicNamedFunction(t *testing.T) {
 	var fn *evm.NamedFunction
 	var ordinary any
-	schema, err := evmbind.NewTypes("host", fstest.MapFS{"api.go": {Data: []byte(`package host
+	schema, err := evmbind.New("host", fstest.MapFS{"api.go": {Data: []byte(`package host
  import "github.com/andreyvit/evm"
  func Register(fn *evm.NamedFunctionOf[any])
  func Typed(fn *evm.NamedFunctionOf[func()])
  func Void(fn func())
  func Ordinary(value any)
  func Native(n int)int
- `)}}, nil, evmbind.Options{Functions: map[string]any{
+ `)}}, evmbind.Options{Selective: true, Functions: map[string]any{
 		"Register": func(v *evm.NamedFunction) { fn = v },
 		"Typed":    func(v *evm.NamedFunction) { fn = v },
 		"Void":     func(v func()) { v() },

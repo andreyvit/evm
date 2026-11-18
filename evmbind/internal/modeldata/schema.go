@@ -36,10 +36,10 @@ func Declarations() (evm.Package, *evmbind.Schema, error) {
 			row.NativeAllocation = reflect.TypeFor[Generic[time.Duration]]()
 		}
 	}
-	duration, err := evmbind.NewTypes("time", fstest.MapFS{"time.go": {Data: []byte("package time; type Duration int64")}}, nil, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[time.Duration]()}})
+	duration, err := evmbind.New("time", fstest.MapFS{"time.go": {Data: []byte("package time; type Duration int64")}}, evmbind.Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[time.Duration]()}})
 	if err != nil {
 		return models, nil, err
 	}
-	dep, err := evmbind.NewTypes("model", Source, nil, evmbind.Options{Models: &models, NativePackage: reflect.TypeFor[BoundModel]().PkgPath(), Imports: map[string]*evmbind.Schema{"time": duration}})
+	dep, err := evmbind.New("model", Source, evmbind.Options{Selective: true, Models: &models, NativePackage: reflect.TypeFor[BoundModel]().PkgPath(), Imports: map[string]*evmbind.Schema{"time": duration}})
 	return models, dep, err
 }

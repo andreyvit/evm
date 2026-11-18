@@ -14,7 +14,7 @@ func TestDiscoverUsesImportedModelRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dep, err := evmbind.NewTypes("model", modeldata.Source, nil, evmbind.Options{Models: &models, Types: []reflect.Type{reflect.TypeFor[BoundModel]()}})
+	dep, err := evmbind.New("model", modeldata.Source, evmbind.Options{Selective: true, Models: &models, Types: []reflect.Type{reflect.TypeFor[BoundModel]()}})
 	if err != nil {
 		t.Fatal(err)
 	}

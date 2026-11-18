@@ -32,7 +32,7 @@ func TestSelectedNativeCollectionFields(t *testing.T) {
   Named map[string]*CollectionItem
   Styles map[string]map[string]string
  }`)}}
-	schema, err := NewTypes("host/collections", files, []string{"CollectionPanel"}, Options{Types: []reflect.Type{reflect.TypeFor[CollectionPanel](), reflect.TypeFor[CollectionItem]()}})
+	schema, err := New("host/collections", files, Options{Only: []string{"CollectionPanel"}, Types: []reflect.Type{reflect.TypeFor[CollectionPanel](), reflect.TypeFor[CollectionItem]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestSelectedNativeSliceFields(t *testing.T) {
 	files := fstest.MapFS{"types.go": {Data: []byte(`package native
  type CollectionItem struct { Title string }
  type SlicePanel struct { Items []*CollectionItem }`)}}
-	schema, err := NewTypes("host/slices", files, []string{"SlicePanel"}, Options{Types: []reflect.Type{reflect.TypeFor[SlicePanel](), reflect.TypeFor[CollectionItem]()}})
+	schema, err := New("host/slices", files, Options{Only: []string{"SlicePanel"}, Types: []reflect.Type{reflect.TypeFor[SlicePanel](), reflect.TypeFor[CollectionItem]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ type ScalarSlices struct {
 func TestNativeScalarSliceWidthsAndConversions(t *testing.T) {
 	files := fstest.MapFS{"types.go": {Data: []byte(`package native
  type ScalarSlices struct { Bytes []byte; Runes []rune; Small []int16 }`)}}
-	schema, err := NewTypes("host/scalars", files, nil, Options{Types: []reflect.Type{reflect.TypeFor[ScalarSlices]()}})
+	schema, err := New("host/scalars", files, Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[ScalarSlices]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func TestNativeScalarSliceWidthsAndConversions(t *testing.T) {
 func TestNativeCollectionsInRecordFields(t *testing.T) {
 	files := fstest.MapFS{"types.go": {Data: []byte(`package native
  type RecordCollectionFields struct { Extra any; Data []byte; Counts []int64; Labels map[string]string }`)}}
-	schema, err := NewTypes("host/fields", files, []string{"RecordCollectionFields"}, Options{Types: []reflect.Type{reflect.TypeFor[RecordCollectionFields]()}})
+	schema, err := New("host/fields", files, Options{Only: []string{"RecordCollectionFields"}, Types: []reflect.Type{reflect.TypeFor[RecordCollectionFields]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +312,7 @@ func TestNativeCollectionsRejectFunctionElements(t *testing.T) {
 
 func TestNativeAnyPreservesTypesAndAliases(t *testing.T) {
 	files := fstest.MapFS{"types.go": {Data: []byte(`package native; type CollectionItem struct { Title string }`)}}
-	schema, err := NewTypes("native", files, nil, Options{Types: []reflect.Type{reflect.TypeFor[CollectionItem]()}})
+	schema, err := New("native", files, Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[CollectionItem]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +374,7 @@ type NativeAnyZ struct {
 func TestNativeAnyAcrossPackages(t *testing.T) {
 	makeSchema := func(path, name string, typ reflect.Type) *Schema {
 		t.Helper()
-		s, err := NewTypes(path, fstest.MapFS{"api.go": {Data: []byte("package native; type " + name + " struct { Value any; Names []string }")}}, nil, Options{Types: []reflect.Type{typ}})
+		s, err := New(path, fstest.MapFS{"api.go": {Data: []byte("package native; type " + name + " struct { Value any; Names []string }")}}, Options{Selective: true, Types: []reflect.Type{typ}})
 		if err != nil {
 			t.Fatal(err)
 		}

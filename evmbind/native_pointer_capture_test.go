@@ -12,7 +12,7 @@ import (
 
 func TestNativePointerCaptureMutation(t *testing.T) {
 	source := fstest.MapFS{"node.go": {Data: []byte(`package native; type InterfaceNode struct { Value int }`)}}
-	schema, err := NewTypes("native", source, []string{"InterfaceNode"}, Options{Types: []reflect.Type{reflect.TypeFor[InterfaceNode]()}})
+	schema, err := New("native", source, Options{Only: []string{"InterfaceNode"}, Types: []reflect.Type{reflect.TypeFor[InterfaceNode]()}})
 	if err != nil {
 		t.Fatal(err)
 	}

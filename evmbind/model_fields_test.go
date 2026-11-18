@@ -23,11 +23,11 @@ func testNativeModelPointerFields(t *testing.T, static *evmbind.Static) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opt := evmbind.Options{Methods: map[string][]string{"Context": {"Clone"}}, Types: []reflect.Type{reflect.TypeFor[modelfielddata.Context]()}, Imports: map[string]*evmbind.Schema{"github.com/andreyvit/evm/evmbind/internal/modeldata": dep}, Static: static}
+	opt := evmbind.Options{Selective: true, Methods: map[string][]string{"Context": {"Clone"}}, Types: []reflect.Type{reflect.TypeFor[modelfielddata.Context]()}, Imports: map[string]*evmbind.Schema{"github.com/andreyvit/evm/evmbind/internal/modeldata": dep}, Static: static}
 	if static != nil {
 		opt.Mode = evmbind.StaticOnly
 	}
-	schema, err := evmbind.NewTypes("ctx", modelfielddata.Source, nil, opt)
+	schema, err := evmbind.New("ctx", modelfielddata.Source, opt)
 	if err != nil {
 		t.Fatal(err)
 	}

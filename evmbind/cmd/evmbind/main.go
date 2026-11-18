@@ -16,7 +16,7 @@ func main() {
 	pkg := flag.String("package", "", "generated package")
 	out := flag.String("o", "", "output file")
 	flag.Parse()
-	b, err := evmbind.Generate(*path, *native, *pkg, os.DirFS(*dir))
+	b, err := evmbind.Generate(*path, *native, *pkg, os.DirFS(*dir), evmbind.Options{})
 	if err != nil {
 		log.Fatal(err)
 	}

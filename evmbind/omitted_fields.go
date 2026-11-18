@@ -157,3 +157,49 @@ func selectedFieldOmissions(files []*ast.File, selected, omitted map[string][]st
 	}
 	return result, nil
 }
+
+// omitUnexportedFields adds the unexported fields of every struct declaration
+// to the omissions. Embedded fields count by their type name.
+func omitUnexportedFields(files []*ast.File, omitted map[string][]string) map[string][]string {
+	var result map[string][]string
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			group, ok := decl.(*ast.GenDecl)
+			if !ok || group.Tok != token.TYPE {
+				continue
+			}
+			for _, spec := range group.Specs {
+				typ := spec.(*ast.TypeSpec)
+				body, ok := typ.Type.(*ast.StructType)
+				if !ok {
+					continue
+				}
+				for _, field := range body.Fields.List {
+					names := make([]string, 0, len(field.Names)+1)
+					for _, name := range field.Names {
+						names = append(names, name.Name)
+					}
+					if len(field.Names) == 0 {
+						names = append(names, embeddedFieldName(field.Type))
+					}
+					for _, name := range names {
+						if name == "" || name == "_" || ast.IsExported(name) || slices.Contains(omitted[typ.Name.Name], name) || result != nil && slices.Contains(result[typ.Name.Name], name) {
+							continue
+						}
+						if result == nil {
+							result = maps.Clone(omitted)
+							if result == nil {
+								result = map[string][]string{}
+							}
+						}
+						result[typ.Name.Name] = append(slices.Clone(result[typ.Name.Name]), name)
+					}
+				}
+			}
+		}
+	}
+	if result == nil {
+		return omitted
+	}
+	return result
+}

@@ -59,7 +59,7 @@ func TestMutableModelAnnotations(t *testing.T) {
 	}
 	imports := map[string]*evmbind.Schema{"github.com/andreyvit/evm/evmbind/internal/modeldata": dep}
 	opt := evmbind.Options{Imports: imports, Host: reflect.TypeFor[*mutableHost](), Mutable: mutablehost.Annotations()}
-	generated, err := evmbind.GenerateWithOptions("host", "github.com/andreyvit/evm/evmbind/internal/mutablehost", "mutablebindings", mutablehost.Source, opt)
+	generated, err := evmbind.Generate("host", "github.com/andreyvit/evm/evmbind/internal/mutablehost", "mutablebindings", mutablehost.Source, opt)
 	if err != nil {
 		t.Fatal(err)
 	}

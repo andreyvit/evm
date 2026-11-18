@@ -1,37 +1,69 @@
 # Source-defined host bindings
 
-Build one schema with `New(guestPath, sourceFS, options)`. Supply a directory of
-self-contained Go API declarations. New parses and type-checks its Go files,
-registers exported types, fields, methods, constants and package functions,
-and validates the native signatures. A host receiver implements each package
-function as a method with a leading *evm.Call. Options.Types supplies native
-type roots that cannot be discovered through host signatures, such as an entry
-interface. Concrete context types register with Pointer[T]().
+`New(guestPath, source, options)` builds a schema from the Go source of a
+package. There is one way to supply source: an `fs.FS` holding the package's
+`.go` files, usually the package's own files through `//go:embed`.
 
-Compile scripts against schema.Package(). For each distinct host receiver,
-link the module against schema.Bind(receiver). Create as many sessions from a
-linked program as needed. A schema owns type identities. A program owns the
-numeric dynamic type IDs used during execution.
+```go
+//go:embed app.go
+var source embed.FS
 
-## Select native data types
+schema, err := evmbind.New("app", source, evmbind.Options{
+    Functions: map[string]any{"Pluralize": Pluralize, "Discount": Discount},
+    Types:     []reflect.Type{reflect.TypeFor[Store](), reflect.TypeFor[User](), reflect.TypeFor[Cart]()},
+})
+```
 
-Use `NewTypes(guestPath, embeddedFS, names, options)` with embedded native Go
-source to expose selected data types without duplicating their declarations.
-A nil names slice selects all exported types. Referenced local types and typed
-enum constants are included automatically. Complete constant blocks are checked
-so `iota`, omitted expressions and aliases keep their native values; constants
-of unrelated types are not exported. Struct pointers retain the native layout.
-Exported embedded structs and struct pointers keep Go field promotion, value
-copying and pointer aliasing semantics.
+By default the schema exposes everything the source exports: every type with
+its exported fields and methods, every package function and every constant.
+Function bodies, unbound variables, unexported declarations, unexported struct
+fields and `_test.go` files are ignored, so real implementation source works
+as is.
+The source supplies declarations, parameter names and doc comments; it is not
+executed. See the [runnable example](../examples/gox-basic).
 
-This entry point selects declarations, not implementation methods or package
-functions. Their bodies, variables and implementation-only imports are excluded.
-The normal binding type restrictions still apply; unsupported field types fail
-explicitly. Supply native types through `Options.Types`, as with `New`.
+Go cannot look a function or a type up by name, so the host supplies them:
+
+- `Options.Functions` maps each exported package function to its Go value.
+  A function can instead be a method of `Options.Host` taking a leading
+  `*evm.Call`; `schema.Bind(host)` then supplies the receiver.
+- Native types are found by reflection through bound function signatures,
+  method signatures and struct fields. `Options.Types` adds types that nothing
+  leads to. Concrete context types register with `Pointer[T]()`.
+
+- `Options.Values` maps an exported package variable to its Go value. Only
+  bound variables are exposed, and the source must declare their types.
+  Scripts read a variable and call its methods; they cannot assign it.
+
+Construction fails, naming the declaration, when an exported function has no
+binding, a type has no native Go type, or a declaration uses a type the
+binding does not support. `Options.Omit` leaves declarations out: a type,
+function or constant by name, a method as `Type.Method`. A type that an
+exposed declaration still refers to stays. `Options.Methods` selects methods
+per type; `Options.Fields` and `Options.OmitFields` select fields.
+
+Compile scripts against `schema.Package()`. For each distinct host receiver,
+link the module against `schema.Bind(receiver)`; use `Bind(nil)` without one.
+Create as many sessions from a linked program as needed. A schema owns type
+identities. A program owns the numeric dynamic type IDs used during execution.
 
 Keep the schema in a host-level `sync.OnceValue`. Parsing, type checking, enum
 extraction and native layout binding then happen once per binary, while every
 environment reuses `schema.Package()` and its type identities.
+
+## Expose part of a package
+
+Set `Options.Only` to pick declarations out of a larger native package without
+duplicating them. The schema then exposes the listed types and the local types
+they reference, the methods listed in `Options.Methods`, the functions bound
+in `Options.Functions` and `GenericFunctions`, and the typed constants of
+exposed types. `Options.Selective` does the same with every exported type.
+Complete constant blocks are checked so `iota`, omitted expressions and
+aliases keep their native values; constants of unrelated types are not
+exported. Struct pointers retain the native layout. Exported embedded structs
+and struct pointers keep Go field promotion, value copying and pointer
+aliasing semantics. `Options.Omit` does not apply: a selective schema lists
+what it exposes.
 
 ## Concrete generic structs
 
@@ -69,7 +101,7 @@ supported by this re-export path.
 ## Native model arguments and results
 
 Pass the shared model package in `Options.Models` when selecting native model
-source with `NewTypes`. The model metadata supplies its native Go types; no
+source with `Options.Only`. The model metadata supplies its native Go types; no
 second Go-type-to-model registry is needed. `NativePackage` identifies the
 original Go package when it differs from the script path. It can also be
 inferred from the selected `Types`, `Implementations`, or generated `Static.Types`.
@@ -130,16 +162,16 @@ use their ordinary storage; no per-object registry is introduced.
 Registered concrete generic models retain their shared model identity. Only
 registered instantiations may cross the model boundary. Aliases resolve to their
 original native types. Reflective and generated wrappers use the same binding
-rules. Local model source belongs in `NewTypes`; callable sources import that
-shared schema.
+rules. Local model source needs a selective schema; callable sources import
+that shared schema.
 
 ## Omit host-only fields
 
 Set `Options.OmitFields` to a map from local type names to field names. Fields
 are removed before dependency selection, so omitted context fields do not pull
 their service interfaces into the script API. Unknown types, unknown fields and
-duplicate omissions fail schema construction. Use `GenerateWithOptions` with
-the same omissions when generating wrappers.
+duplicate omissions fail schema construction. Unexported fields are omitted
+automatically. Pass the same omissions to `Generate` when generating wrappers.
 
 The native Go struct and its field offsets stay unchanged. A native value copy
 retains omitted fields in an inaccessible snapshot; copying or changing exposed
@@ -162,7 +194,7 @@ transitive types; separately selected subsets should be combined in that schema.
 Standard declarations are shared across schemas and initialized once. Several
 native packages may emit into one script package without losing Go type identity.
 
-Use `GenerateWithImports` with the same map when generating native wrappers.
+Pass the same map to `Generate` when generating native wrappers.
 The generated code imports the actual native Go packages. Imported data layouts
 remain owned by the dependency schema; constructing a consumer does not mutate
 them. Imported interfaces reuse the owning schema's registered implementations
@@ -202,6 +234,10 @@ Generate direct Go wrappers in a separate package:
     go run github.com/andreyvit/evm/evmbind/cmd/evmbind \
         -dir ../api -path demo -native example.org/project/api \
         -package apibindings -o bindings_gen.go
+
+The command covers a whole package. A program calling
+`Generate(path, nativeImport, outputPackage, source, options)` takes the same
+options as `New`, including `Only`, `Selective`, `Omit` and `Imports`.
 
 Pass &apibindings.Bindings in Options.Static. Automatic selects generated
 wrappers when the source fingerprint and complete set of wrapper names match.
@@ -288,19 +324,19 @@ conversion. Native `[]error` storage is not yet supported.
 Use `Options.Functions` to bind source declarations to Go function values:
 
 ```go
-schema, err := evmbind.NewTypes("db", edb.TransactionBindingSource,
-    []string{"RawRange"}, evmbind.Options{
-        Functions: map[string]any{"RawPrefix": edb.RawPrefix},
-    })
+schema, err := evmbind.New("db", edb.TransactionBindingSource, evmbind.Options{
+    Only:      []string{"RawRange"},
+    Functions: map[string]any{"RawPrefix": edb.RawPrefix},
+})
 ```
 
-Only the selected functions enter the guest package. Their referenced types
-are selected recursively; implementation bodies are omitted. Binding checks
+In a selective schema only the bound functions enter the guest package. Their
+referenced types are selected recursively; implementation bodies are omitted. Binding checks
 argument and result types against the supplied function. Calls use that value,
 including a supplied closure, without a synthetic `*evm.Call` parameter or
 host method. Returned native references keep their native sharing behavior.
 
-`GenerateTypesWithOptions` uses the same selection as `NewTypes`. Generated
+`Generate` uses the same options and selection as `New`. Generated
 calls invoke the registered function value, including named function values.
 The binding fingerprint distinguishes package functions from host methods,
 so generated wrappers for one form cannot silently serve the other.
@@ -500,8 +536,10 @@ loaded function. Variadic native function types remain unsupported.
 ## Reflection-based discovery
 
 `Discover` exposes native functions and their reachable types without embedded
-source. Exported fields are included recursively; private fields remain hidden
-and preserve their native storage. Recursive references retain pointer identity.
+source. Prefer `New` when the source is available: reflection has no parameter
+names, doc comments or constants. Exported fields are included recursively;
+private fields remain hidden and preserve their native storage. Recursive
+references retain pointer identity.
 
 ```go
 _, packages, err := evmbind.Discover("app", evmbind.Discovery{
@@ -518,7 +556,10 @@ _, packages, err := evmbind.Discover("app", evmbind.Discovery{
 ```
 
 Pass the returned packages to compilation and linking, together with existing
-bound packages. No `Bar` declaration or explicit type root is needed. Use
+bound packages. Types mapped to the function path share its package, so
+`app.Foo` and `app.Bar` can sit side by side; each returned path appears once.
+`Discovery.Constants` adds named constants to the function package. The
+returned schema's `NativePointer` accepts any discovered struct pointer. No `Bar` declaration or explicit type root is needed. Use
 `Options.Types` for additional roots, particularly concrete types supplied through
 `any`, whose dynamic types cannot be inferred from a function signature.
 
@@ -532,11 +573,11 @@ Name collisions under an umbrella package fail explicitly.
 
 Existing schemas in `Options.Imports` keep their identities and API selections;
 discovery does not broaden them. Their referenced types must already be bound.
-The source-based `New` and `NewTypes` APIs keep their existing behavior. Discovery
-uses reflected adapters and does not require generated wrappers.
+Discovery uses reflected adapters and does not require generated wrappers.
 
 Reflection cannot enumerate package globals, package functions or constants.
-Register functions explicitly; host-owned global values can use `ExternalValue`.
+Register functions and constants explicitly; host-owned global values can use
+`ExternalValue`.
 There is no automatic-globals option. Concrete generic instances still require
 explicit source bindings. Unsupported native shapes fail schema construction
 with a type/field error rather than being silently omitted. As with source

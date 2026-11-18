@@ -38,7 +38,7 @@ func TestSelectedNativeTypeSource(t *testing.T) {
  func Implementation() {vm.Run()}
  var Unavailable = vm.Init()
  `)}}
-	schema, err := NewTypes("host/data", files, []string{"SelectedPanel"}, Options{Types: []reflect.Type{reflect.TypeFor[SelectedPanel](), reflect.TypeFor[SelectedChild](), reflect.TypeFor[SelectedPermission]()}})
+	schema, err := New("host/data", files, Options{Only: []string{"SelectedPanel"}, Types: []reflect.Type{reflect.TypeFor[SelectedPanel](), reflect.TypeFor[SelectedChild](), reflect.TypeFor[SelectedPermission]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestSelectedNativeTypeSource(t *testing.T) {
 	if out[0].R != 6 || native.Child.Permission != 4 {
 		t.Fatalf("lost native enum identity or pointer: %v %+v", out, native.Child)
 	}
-	if _, err := NewTypes("host/data", files, []string{"Missing"}, Options{}); err == nil || !strings.Contains(err.Error(), "Missing") {
+	if _, err := New("host/data", files, Options{Only: []string{"Missing"}}); err == nil || !strings.Contains(err.Error(), "Missing") {
 		t.Fatal(err)
 	}
 }

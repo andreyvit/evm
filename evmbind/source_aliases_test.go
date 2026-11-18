@@ -24,7 +24,7 @@ type AliasFields struct {
 type LocalAliasTarget struct{ Value int }
 
 func TestNativeSourceAliases(t *testing.T) {
-	dep, err := evmbind.NewTypes("data", importfixture.Source, nil, evmbind.Options{Instances: []evmbind.Instance{{Type: "Box", Native: reflect.TypeFor[importfixture.Box[importfixture.Permission]](), Args: []reflect.Type{reflect.TypeFor[importfixture.Permission]()}}}, Types: []reflect.Type{reflect.TypeFor[importfixture.Permission](), reflect.TypeFor[importfixture.Child]()}})
+	dep, err := evmbind.New("data", importfixture.Source, evmbind.Options{Selective: true, Instances: []evmbind.Instance{{Type: "Box", Native: reflect.TypeFor[importfixture.Box[importfixture.Permission]](), Args: []reflect.Type{reflect.TypeFor[importfixture.Permission]()}}}, Types: []reflect.Type{reflect.TypeFor[importfixture.Permission](), reflect.TypeFor[importfixture.Child]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestNativeSourceAliases(t *testing.T) {
  type Forward = LocalAliasTarget
  type LocalAliasTarget struct { Value int }
  `)}}
-	s, err := evmbind.NewTypes("aliases", files, nil, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[AliasFields](), reflect.TypeFor[LocalAliasTarget]()}, Imports: map[string]*evmbind.Schema{"github.com/andreyvit/evm/evmbind/internal/importfixture": dep}})
+	s, err := evmbind.New("aliases", files, evmbind.Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[AliasFields](), reflect.TypeFor[LocalAliasTarget]()}, Imports: map[string]*evmbind.Schema{"github.com/andreyvit/evm/evmbind/internal/importfixture": dep}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestNativeSourceAliases(t *testing.T) {
 			t.Fatal("composite aliases changed runtime identity")
 		}
 	}
-	reexport, err := evmbind.NewTypes("aliases", fstest.MapFS{"api.go": {Data: []byte(`package reexport;import "example/aliases";type PromoID = aliases.PromoID`)}}, nil, evmbind.Options{Imports: map[string]*evmbind.Schema{"example/aliases": s}})
+	reexport, err := evmbind.New("aliases", fstest.MapFS{"api.go": {Data: []byte(`package reexport;import "example/aliases";type PromoID = aliases.PromoID`)}}, evmbind.Options{Selective: true, Imports: map[string]*evmbind.Schema{"example/aliases": s}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestNativeSourceAliases(t *testing.T) {
 
 func TestSelectNativeAlias(t *testing.T) {
 	files := fstest.MapFS{"api.go": {Data: []byte(`package aliases;type Key = string;type Unused chan int`)}}
-	s, err := evmbind.NewTypes("aliases", files, []string{"Key"}, evmbind.Options{})
+	s, err := evmbind.New("aliases", files, evmbind.Options{Only: []string{"Key"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestNativeAliasErrors(t *testing.T) {
 		{`package aliases;import "github.com/andreyvit/evm";type Callback = evm.FunctionOf[func()]`, "EVM function handle"},
 		{`package aliases;import "github.com/andreyvit/evm";type Callback = *evm.FunctionOf[func()]`, "EVM function handle"},
 	} {
-		_, err := evmbind.NewTypes("aliases", fstest.MapFS{"api.go": {Data: []byte(tc.src)}}, nil, evmbind.Options{})
+		_, err := evmbind.New("aliases", fstest.MapFS{"api.go": {Data: []byte(tc.src)}}, evmbind.Options{Selective: true})
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Fatalf("got %v, want %s", err, tc.want)
 		}

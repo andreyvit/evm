@@ -104,3 +104,57 @@ func TestDiscoverDynamicRoot(t *testing.T) {
 		t.Fatal(out, b)
 	}
 }
+
+type DiscoveredLevel int
+
+const DiscoveredHigh DiscoveredLevel = 3
+
+func (l DiscoveredLevel) Doubled() int { return int(l) * 2 }
+
+// Functions, constants and the types they use can share one script package.
+func TestDiscoverFunctionsTypesAndConstantsInOnePackage(t *testing.T) {
+	b := &DiscoveredBar{Name: "Ada"}
+	path := reflect.TypeFor[DiscoveredBar]().PkgPath()
+	schema, packages, err := evmbind.Discover("app", evmbind.Discovery{
+		Options: evmbind.Options{
+			Functions: map[string]any{"Bar": func() *DiscoveredBar { return b }},
+		},
+		Constants: map[string]any{"Limit": 10, "Title": "Store", "Ratio": 1.5, "On": true, "High": DiscoveredHigh},
+		Packages:  []evmbind.PackageExposure{{Pattern: path, Package: "app", Methods: true}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(packages) != 1 || packages[0].Path != "app" {
+		t.Fatalf("want one package app, got %d", len(packages))
+	}
+	module, err := evmcompiler.Compile("test.go", `import "app"
+func Run(extra *app.DiscoveredBar) string {
+	var bar *app.DiscoveredBar = app.Bar()
+	bar.Rename(app.Title)
+	var level app.DiscoveredLevel = app.High
+	if app.On && app.Limit*app.Ratio == 15 && level.Doubled() == 6 {
+		return bar.Name + extra.Name
+	}
+	return ""
+}`, packages...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := evm.Link(module, packages...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The argument's type appears in no function signature the schema binds.
+	arg, err := schema.NativePointer(&DiscoveredBar{Name: "!"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out [1]values.Value
+	if err := evm.New(program).Run(context.Background(), "Run", []values.Value{arg}, out[:]); err != nil {
+		t.Fatal(err)
+	}
+	if got := out[0].AsString(); got != "Store!" {
+		t.Fatalf("got %q", got)
+	}
+}

@@ -21,12 +21,13 @@ type NativeViewHolder struct {
 func TestNativeBuilderRetainedView(t *testing.T) {
 	var received *gox.Builder
 	calls := 0
-	host, err := evmbind.NewTypes("host", fstest.MapFS{"host.go": {Data: []byte(`package host
+	host, err := evmbind.New("host", fstest.MapFS{"host.go": {Data: []byte(`package host
  import("github.com/andreyvit/evm";"github.com/andreyvit/evm/gox";"html/template")
  type NativeViewHolder struct { View *evm.FunctionOf[func(*gox.Builder)] }
  func Native(b *gox.Builder, text template.HTML) {}
  func Content() template.HTML { return "" }
- `)}}, []string{"NativeViewHolder"}, evmbind.Options{
+ `)}}, evmbind.Options{
+		Only:    []string{"NativeViewHolder"},
 		Types:   []reflect.Type{reflect.TypeFor[NativeViewHolder]()},
 		Imports: map[string]*evmbind.Schema{"github.com/andreyvit/evm/gox": gox.Schema(), "html/template": gox.TrustedContentSchema()},
 		Functions: map[string]any{"Content": func() template.HTML { return template.HTML("<b>native form</b>") }, "Native": func(b *gox.Builder, text template.HTML) {
@@ -47,6 +48,9 @@ func TestNativeBuilderRetainedView(t *testing.T) {
 	tpl, err := gox.CompileSources(map[string]string{
 		"main.go": `package main; import("host";"github.com/andreyvit/evm/gox"); func Initialize(h *host.NativeViewHolder){suffix:=gox.HTML("<em>native</em>");h.View=func(b *gox.Builder){View(b);host.Native(b,suffix)}}`,
 		"view.gox": `package main
+
+import "github.com/andreyvit/evm/gox"
+
  import "host"
  func View(b *gox.Builder) {
  <p>{"<escaped>"}</p>
@@ -87,15 +91,18 @@ func TestNativeBuilderRetainedView(t *testing.T) {
 }
 
 func TestNativeHTMLAttrKeepsAttributeValueEscaping(t *testing.T) {
-	host, err := evmbind.NewTypes("host", fstest.MapFS{"host.go": {Data: []byte(`package host
+	host, err := evmbind.New("host", fstest.MapFS{"host.go": {Data: []byte(`package host
  import "html/template"
  func Attr() template.HTMLAttr {return ""}
- `)}}, nil, evmbind.Options{Imports: map[string]*evmbind.Schema{"html/template": gox.TrustedContentSchema()}, Functions: map[string]any{"Attr": func() template.HTMLAttr { return template.HTMLAttr(`x" onclick="bad`) }}})
+ `)}}, evmbind.Options{Selective: true, Imports: map[string]*evmbind.Schema{"html/template": gox.TrustedContentSchema()}, Functions: map[string]any{"Attr": func() template.HTMLAttr { return template.HTMLAttr(`x" onclick="bad`) }}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	pkg := host.Bind(nil)
 	tpl, err := gox.CompileSources(map[string]string{"view.gox": `package main
+
+import "github.com/andreyvit/evm/gox"
+
  import "host"
  func View(b *gox.Builder) {
  <p title={host.Attr()}>{host.Attr()}</p>
@@ -118,11 +125,12 @@ func TestNativeHTMLAttrKeepsAttributeValueEscaping(t *testing.T) {
 }
 
 func TestNativeComponentArgumentDirectives(t *testing.T) {
-	host, err := evmbind.NewTypes("host", fstest.MapFS{"host.go": {Data: []byte(`package host
+	host, err := evmbind.New("host", fstest.MapFS{"host.go": {Data: []byte(`package host
 import "github.com/andreyvit/evm/gox"
 //gox:arg suffix optional=true legacyName="old_suffix"
 func Class(b *gox.Builder, element, suffix string) {}
-`)}}, nil, evmbind.Options{
+`)}}, evmbind.Options{
+		Selective: true,
 		Imports:   map[string]*evmbind.Schema{"github.com/andreyvit/evm/gox": gox.Schema()},
 		Functions: map[string]any{"Class": func(b *gox.Builder, element, suffix string) { b.Class(element + suffix) }},
 	})
@@ -139,7 +147,13 @@ func Class(b *gox.Builder, element, suffix string) {}
 	}
 
 	source := `package plugin
-import "host"
+
+import (
+	"host"
+
+	"github.com/andreyvit/evm/gox"
+)
+
 func Page(b *gox.Builder) {
  suffix := "must-not-inherit"
  _ = suffix
@@ -167,8 +181,9 @@ func Echo(x gox.Content) gox.Content { return x }
 func Any(x any) any { return x }
 func Change(x *gox.Content) {}
 `)}}
-	host, err := evmbind.NewTypes("host", source, nil, evmbind.Options{
-		Imports: map[string]*evmbind.Schema{"github.com/andreyvit/evm/gox": gox.Schema()},
+	host, err := evmbind.New("host", source, evmbind.Options{
+		Selective: true,
+		Imports:   map[string]*evmbind.Schema{"github.com/andreyvit/evm/gox": gox.Schema()},
 		Functions: map[string]any{
 			"Echo":   func(x gox.Content) gox.Content { return x },
 			"Any":    func(x any) any { return x },
@@ -180,6 +195,9 @@ func Change(x *gox.Content) {}
 	}
 	pkg := host.Bind(nil)
 	tmpl, err := gox.Compile("native.gox", `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 import("host";"fmt")
 func Page(b *gox.Builder) {
  x:=gox.Text("<plain>")

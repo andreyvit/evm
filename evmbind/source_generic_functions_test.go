@@ -22,7 +22,8 @@ func TestNativeGenericPackageFunctions(t *testing.T) {
  type GenericBinding[T any]struct{Pointer *T}
  func Var[T any](p *T)*GenericBinding[T]{panic("native")}
  `)}}
-	s, err := evmbind.NewTypes("forms", source, nil, evmbind.Options{
+	s, err := evmbind.New("forms", source, evmbind.Options{
+		Selective: true,
 		Instances: []evmbind.Instance{
 			{Type: "GenericBinding", Native: reflect.TypeFor[GenericBinding[string]](), Args: []reflect.Type{reflect.TypeFor[string]()}},
 			{Type: "GenericBinding", Native: reflect.TypeFor[GenericBinding[int]](), Args: []reflect.Type{reflect.TypeFor[int]()}},
@@ -83,13 +84,13 @@ func TestNativeGenericFunctionValidation(t *testing.T) {
 		{"constraint", "First", []evmbind.FunctionInstance{{Args: []reflect.Type{reflect.TypeFor[[]int]()}, Function: func(a, b []int) []int { return a }}}, "comparable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := evmbind.NewTypes("host", source, []string{}, evmbind.Options{GenericFunctions: map[string][]evmbind.FunctionInstance{tc.key: tc.instances}})
+			_, err := evmbind.New("host", source, evmbind.Options{Only: []string{}, GenericFunctions: map[string][]evmbind.FunctionInstance{tc.key: tc.instances}})
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want %s", err, tc.want)
 			}
 		})
 	}
-	_, err := evmbind.NewTypes("host", source, []string{}, evmbind.Options{Mode: evmbind.StaticOnly, GenericFunctions: map[string][]evmbind.FunctionInstance{"First": {good}}})
+	_, err := evmbind.New("host", source, evmbind.Options{Only: []string{}, Mode: evmbind.StaticOnly, GenericFunctions: map[string][]evmbind.FunctionInstance{"First": {good}}})
 	if err == nil || !strings.Contains(err.Error(), "StaticOnly") {
 		t.Fatalf("generic StaticOnly: %v", err)
 	}
@@ -121,7 +122,8 @@ func TestNativeGenericConstrainedFunction(t *testing.T) {
  func(g *GenericGroup)AddChild(children ...GenericChild){}
  func Add[T GenericChild](group GenericChildAdder,child T)T{panic("native")}
  `)}}
-	s, err := evmbind.NewTypes("forms", source, []string{"GenericGroup"}, evmbind.Options{
+	s, err := evmbind.New("forms", source, evmbind.Options{
+		Only:             []string{"GenericGroup"},
 		Types:            []reflect.Type{reflect.TypeFor[GenericGroup](), reflect.TypeFor[GenericControl]()},
 		Methods:          map[string][]string{"GenericGroup": {"AddChild"}, "GenericControl": {"Touch"}},
 		GenericFunctions: map[string][]evmbind.FunctionInstance{"Add": {{Args: []reflect.Type{reflect.TypeFor[*GenericControl]()}, Function: genericAdd[*GenericControl]}}},
@@ -150,12 +152,13 @@ func TestNativeGenericConstrainedFunction(t *testing.T) {
 }
 
 func TestNativeGenericFunctionImportedArgument(t *testing.T) {
-	dep, err := evmbind.NewTypes("domain", interfacedep.Source, []string{"NamedValue"}, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[interfacedep.NamedValue]()}})
+	dep, err := evmbind.New("domain", interfacedep.Source, evmbind.Options{Only: []string{"NamedValue"}, Types: []reflect.Type{reflect.TypeFor[interfacedep.NamedValue]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	source := fstest.MapFS{"api.go": {Data: []byte(`package host;func First[T comparable](a,b T)T{panic("native")}`)}}
-	s, err := evmbind.NewTypes("host", source, []string{}, evmbind.Options{
+	s, err := evmbind.New("host", source, evmbind.Options{
+		Only:             []string{},
 		Imports:          map[string]*evmbind.Schema{"github.com/andreyvit/evm/evmbind/internal/interfacedep": dep},
 		GenericFunctions: map[string][]evmbind.FunctionInstance{"First": {{Args: []reflect.Type{reflect.TypeFor[*interfacedep.NamedValue]()}, Function: genericFirst[*interfacedep.NamedValue]}}},
 	})
@@ -177,7 +180,7 @@ func TestNativeGenericFunctionImportedArgument(t *testing.T) {
 }
 
 func TestNativeGenericNamedConstraints(t *testing.T) {
-	dependency, err := evmbind.NewTypes("constraints", fstest.MapFS{"api.go": {Data: []byte(`package cmp;type Ordered interface{~int|~float64}`)}}, nil, evmbind.Options{})
+	dependency, err := evmbind.New("constraints", fstest.MapFS{"api.go": {Data: []byte(`package cmp;type Ordered interface{~int|~float64}`)}}, evmbind.Options{Selective: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +191,7 @@ func TestNativeGenericNamedConstraints(t *testing.T) {
  type T struct{Unsupported chan int}
  func First[T ` + constraint + `](a,b T)T{panic("native")}
  `)}}
-		s, err := evmbind.NewTypes("host", source, []string{}, evmbind.Options{Imports: map[string]*evmbind.Schema{"cmp": dependency}, GenericFunctions: map[string][]evmbind.FunctionInstance{"First": {{Args: []reflect.Type{reflect.TypeFor[int]()}, Function: genericFirst[int]}}}})
+		s, err := evmbind.New("host", source, evmbind.Options{Only: []string{}, Imports: map[string]*evmbind.Schema{"cmp": dependency}, GenericFunctions: map[string][]evmbind.FunctionInstance{"First": {{Args: []reflect.Type{reflect.TypeFor[int]()}, Function: genericFirst[int]}}}})
 		if err != nil {
 			t.Fatalf("%s: %v", constraint, err)
 		}

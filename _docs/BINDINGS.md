@@ -143,12 +143,12 @@ scalar lanes, and linked metadata snapshots. The executable book validates all
 ## Native package functions
 
 Use `Options.Functions` to bind selected source function names to actual Go
-function values. `NewTypes` reads their signatures and referenced types from the
+function values. `New` reads their signatures and referenced types from the
 embedded source; it does not execute their bodies. The supplied values may be
 ordinary package functions or closures. They receive the declared arguments,
 without a synthetic host receiver or `*Call` parameter.
 
-`GenerateTypesWithOptions` generates wrappers from the same selection. Generated
+`Generate` generates wrappers from the same options and selection. Generated
 ordinary and direct wrappers invoke the registered function value, preserving
 native argument and result behavior. Function-backed declarations have distinct
 binding fingerprints from host-method-backed declarations, so stale generated

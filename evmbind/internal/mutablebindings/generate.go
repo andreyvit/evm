@@ -14,7 +14,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	b, err := evmbind.GenerateWithOptions("host", "github.com/andreyvit/evm/evmbind/internal/mutablehost", "mutablebindings", mutablehost.Source, evmbind.Options{Imports: map[string]*evmbind.Schema{"github.com/andreyvit/evm/evmbind/internal/modeldata": dep}, Mutable: mutablehost.Annotations()})
+	b, err := evmbind.Generate("host", "github.com/andreyvit/evm/evmbind/internal/mutablehost", "mutablebindings", mutablehost.Source, evmbind.Options{Imports: map[string]*evmbind.Schema{"github.com/andreyvit/evm/evmbind/internal/modeldata": dep}, Mutable: mutablehost.Annotations()})
 	if err != nil {
 		panic(err)
 	}

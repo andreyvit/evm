@@ -44,10 +44,10 @@ func TestNativeModelSignatures(t *testing.T) {
 	}
 	models.Records[0].NativeAllocation = reflect.TypeFor[BoundModel]()
 	nativePath := reflect.TypeFor[BoundModel]().PkgPath()
-	dep, err := evmbind.NewTypes("model", fstest.MapFS{"model.go": {Data: []byte(`package model
+	dep, err := evmbind.New("model", fstest.MapFS{"model.go": {Data: []byte(`package model
  import "unavailable/dependency"
  type BoundModel dependency.Unknown
- `)}}, nil, evmbind.Options{Models: &models, NativePackage: nativePath})
+ `)}}, evmbind.Options{Selective: true, Models: &models, NativePackage: nativePath})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestNativeModelSignatures(t *testing.T) {
 	if instance.row.Hidden != 42 {
 		t.Fatal("hidden field changed")
 	}
-	generated, err := evmbind.GenerateWithOptions("host", "example/host", "bindings", src, evmbind.Options{Imports: map[string]*evmbind.Schema{"native/model": dep}})
+	generated, err := evmbind.Generate("host", "example/host", "bindings", src, evmbind.Options{Imports: map[string]*evmbind.Schema{"native/model": dep}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,14 +105,14 @@ func TestModelPackageInference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dep, err := evmbind.NewTypes("consolidated", modeldata.Source, nil, evmbind.Options{Models: &models, Types: []reflect.Type{reflect.TypeFor[BoundModel]()}})
+	dep, err := evmbind.New("consolidated", modeldata.Source, evmbind.Options{Selective: true, Models: &models, Types: []reflect.Type{reflect.TypeFor[BoundModel]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if dep.Type("*BoundModel") != models.Records[0].Pointer || dep.Type("*Alternate") != models.Records[0].Pointer {
 		t.Fatal("native model declarations did not share their row type")
 	}
-	empty, err := evmbind.NewTypes("consolidated", modeldata.Source, []string{}, evmbind.Options{Models: &models, NativePackage: reflect.TypeFor[BoundModel]().PkgPath()})
+	empty, err := evmbind.New("consolidated", modeldata.Source, evmbind.Options{Only: []string{}, Models: &models, NativePackage: reflect.TypeFor[BoundModel]().PkgPath()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestModelPackageInference(t *testing.T) {
 	if len(dep.Package().Types) != 0 {
 		t.Fatal("native model structs were emitted as duplicate script declarations")
 	}
-	if _, err = evmbind.NewTypes("consolidated", modeldata.Source, nil, evmbind.Options{Models: &models}); err == nil {
+	if _, err = evmbind.New("consolidated", modeldata.Source, evmbind.Options{Selective: true, Models: &models}); err == nil {
 		t.Fatal("missing native package identity was guessed")
 	}
 }
@@ -139,11 +139,12 @@ func TestModelSelectionAmbiguity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opt := evmbind.Options{Models: &models, NativePackage: reflect.TypeFor[BoundModel]().PkgPath()}
-	if _, err = evmbind.NewTypes("model", modeldata.Source, []string{}, opt); err != nil {
+	opt := evmbind.Options{Only: []string{}, Models: &models, NativePackage: reflect.TypeFor[BoundModel]().PkgPath()}
+	if _, err = evmbind.New("model", modeldata.Source, opt); err != nil {
 		t.Fatal("unused ambiguous model rejected", err)
 	}
-	if _, err = evmbind.NewTypes("model", modeldata.Source, []string{"BoundModel"}, opt); err == nil {
+	opt.Only = []string{"BoundModel"}
+	if _, err = evmbind.New("model", modeldata.Source, opt); err == nil {
 		t.Fatal("ambiguous model selected")
 	}
 }
@@ -153,7 +154,7 @@ func TestImportedStaticTypeDoesNotIdentifyLocalModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = evmbind.NewTypes("other", fstest.MapFS{"other.go": {Data: []byte(`package other;type BoundModel struct{Count int}`)}}, nil, evmbind.Options{Models: &models, Static: &evmbind.Static{Types: map[string]reflect.Type{"modeldata.BoundModel": reflect.TypeFor[BoundModel]()}}})
+	_, err = evmbind.New("other", fstest.MapFS{"other.go": {Data: []byte(`package other;type BoundModel struct{Count int}`)}}, evmbind.Options{Selective: true, Models: &models, Static: &evmbind.Static{Types: map[string]reflect.Type{"modeldata.BoundModel": reflect.TypeFor[BoundModel]()}}})
 	if err == nil || !strings.Contains(err.Error(), "requires NativePackage") {
 		t.Fatal("imported native type was used as local package identity", err)
 	}
@@ -176,7 +177,7 @@ func TestGenericNativeModelSourceRegistry(t *testing.T) {
  type Constraint interface { ~string | ~int64 }
  type GenericRegistryModel[T Constraint] struct { Unavailable missing.Type }
  `)}}
-	_, err = evmbind.NewTypes("model", source, []string{reflect.TypeFor[GenericRegistryModel[string]]().Name()}, evmbind.Options{Models: &models, NativePackage: reflect.TypeFor[GenericRegistryModel[string]]().PkgPath()})
+	_, err = evmbind.New("model", source, evmbind.Options{Only: []string{reflect.TypeFor[GenericRegistryModel[string]]().Name()}, Models: &models, NativePackage: reflect.TypeFor[GenericRegistryModel[string]]().PkgPath()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,9 +198,9 @@ func TestGenericNativeModelSignatures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dep, err := evmbind.NewTypes("model", fstest.MapFS{"model.go": {Data: []byte(`package model
+	dep, err := evmbind.New("model", fstest.MapFS{"model.go": {Data: []byte(`package model
  type GenericRegistryModel[T any] struct { Name string; Marker T }
- `)}}, nil, evmbind.Options{Models: &models, NativePackage: reflect.TypeFor[GenericRegistryModel[string]]().PkgPath()})
+ `)}}, evmbind.Options{Selective: true, Models: &models, NativePackage: reflect.TypeFor[GenericRegistryModel[string]]().PkgPath()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,21 +234,21 @@ func TestGenericNativeModelSignatures(t *testing.T) {
 	if !out[0].AsBool() {
 		t.Fatal("generic model handoff failed")
 	}
-	generated, err := evmbind.GenerateWithOptions("host", "example/host", "bindings", src, opt)
+	generated, err := evmbind.Generate("host", "example/host", "bindings", src, opt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	middle, err := evmbind.NewTypes("middle", fstest.MapFS{"middle.go": {Data: []byte(`package middle
+	middle, err := evmbind.New("middle", fstest.MapFS{"middle.go": {Data: []byte(`package middle
  import "native/model"
  type Transform func(*model.GenericRegistryModel[string]) *model.GenericRegistryModel[string]
- `)}}, nil, evmbind.Options{Imports: map[string]*evmbind.Schema{"native/model": dep}, Types: []reflect.Type{reflect.TypeFor[Transform]()}})
+ `)}}, evmbind.Options{Selective: true, Imports: map[string]*evmbind.Schema{"native/model": dep}, Types: []reflect.Type{reflect.TypeFor[Transform]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	consumer, err := evmbind.NewTypes("consumer", fstest.MapFS{"consumer.go": {Data: []byte(`package consumer
+	consumer, err := evmbind.New("consumer", fstest.MapFS{"consumer.go": {Data: []byte(`package consumer
  import "native/middle"
  type GenericHolder struct { Transform middle.Transform }
- `)}}, nil, evmbind.Options{Imports: map[string]*evmbind.Schema{"native/middle": middle}, Types: []reflect.Type{reflect.TypeFor[GenericHolder]()}})
+ `)}}, evmbind.Options{Selective: true, Imports: map[string]*evmbind.Schema{"native/middle": middle}, Types: []reflect.Type{reflect.TypeFor[GenericHolder]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +281,7 @@ func TestGenericNativeModelSignatures(t *testing.T) {
 			if _, err := evmbind.New("host", src, opt); err != nil {
 				t.Fatal(err)
 			}
-			got, err := evmbind.GenerateWithOptions("host", "example/host", "bindings", src, opt)
+			got, err := evmbind.Generate("host", "example/host", "bindings", src, opt)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -338,14 +339,14 @@ func TestGenericModelArgumentShapes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			dep, err := evmbind.NewTypes("model", fstest.MapFS{"model.go": {Data: []byte("package model; type GenericRegistryModel[T any] struct{}")}}, nil, evmbind.Options{Models: &models, NativePackage: tc.native.PkgPath()})
+			dep, err := evmbind.New("model", fstest.MapFS{"model.go": {Data: []byte("package model; type GenericRegistryModel[T any] struct{}")}}, evmbind.Options{Selective: true, Models: &models, NativePackage: tc.native.PkgPath()})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if _, err = dep.NativePointer(reflect.New(tc.native).Interface()); err != nil {
 				t.Fatal(err)
 			}
-			_, err = evmbind.GenerateWithOptions("host", "example/host", "bindings", fstest.MapFS{"host.go": {Data: []byte("package host; import \"native/model\"; func Get()*model.GenericRegistryModel[" + tc.spelling + "]")}}, evmbind.Options{Imports: map[string]*evmbind.Schema{"native/model": dep}})
+			_, err = evmbind.Generate("host", "example/host", "bindings", fstest.MapFS{"host.go": {Data: []byte("package host; import \"native/model\"; func Get()*model.GenericRegistryModel[" + tc.spelling + "]")}}, evmbind.Options{Imports: map[string]*evmbind.Schema{"native/model": dep}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -369,7 +370,7 @@ func TestGenericConsumerLocalArgument(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dep, err := evmbind.NewTypes("model", fstest.MapFS{"model.go": {Data: []byte("package model; type GenericRegistryModel[T any] struct{}")}}, nil, evmbind.Options{Models: &models, NativePackage: native.PkgPath()})
+	dep, err := evmbind.New("model", fstest.MapFS{"model.go": {Data: []byte("package model; type GenericRegistryModel[T any] struct{}")}}, evmbind.Options{Selective: true, Models: &models, NativePackage: native.PkgPath()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,11 +384,11 @@ func TestGenericConsumerLocalArgument(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = evmbind.NewTypes("local", fstest.MapFS{"local.go": {Data: []byte(`package local; import "native/model"; type LocalArgument string; type LocalTransform func(*model.GenericRegistryModel[LocalArgument])`)}}, nil, evmbind.Options{Imports: map[string]*evmbind.Schema{"native/model": dep}, Types: []reflect.Type{reflect.TypeFor[LocalArgument](), reflect.TypeFor[LocalTransform]()}})
+	_, err = evmbind.New("local", fstest.MapFS{"local.go": {Data: []byte(`package local; import "native/model"; type LocalArgument string; type LocalTransform func(*model.GenericRegistryModel[LocalArgument])`)}}, evmbind.Options{Selective: true, Imports: map[string]*evmbind.Schema{"native/model": dep}, Types: []reflect.Type{reflect.TypeFor[LocalArgument](), reflect.TypeFor[LocalTransform]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	argument, err := evmbind.NewTypes("argument", fstest.MapFS{"arg.go": {Data: []byte("package argument; type LocalArgument string")}}, nil, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[LocalArgument]()}})
+	argument, err := evmbind.New("argument", fstest.MapFS{"arg.go": {Data: []byte("package argument; type LocalArgument string")}}, evmbind.Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[LocalArgument]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,13 +397,13 @@ func TestGenericConsumerLocalArgument(t *testing.T) {
 	if _, err := evmbind.New("host", imported, importedOpt); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := evmbind.GenerateWithOptions("host", native.PkgPath(), "bindings", imported, importedOpt); err != nil {
+	if _, err := evmbind.Generate("host", native.PkgPath(), "bindings", imported, importedOpt); err != nil {
 		t.Fatal(err)
 	}
 	if host.Type("*"+native.PkgPath()+"."+native.Name()) != models.Records[0].Pointer {
 		t.Fatal("wrong concrete row type")
 	}
-	if _, err := evmbind.GenerateWithOptions("host", native.PkgPath(), "bindings", src, opt); err != nil {
+	if _, err := evmbind.Generate("host", native.PkgPath(), "bindings", src, opt); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -530,13 +531,13 @@ func TestModelValueDeclarationRequiresNativeLayout(t *testing.T) {
 		if allocation {
 			models.Record(model, false).NativeAllocation = reflect.TypeFor[BoundModel]()
 		}
-		dep, err := evmbind.NewTypes("model", fstest.MapFS{"model.go": {Data: []byte(`package model;type BoundModel struct{};type Alternate struct{}`)}}, nil, evmbind.Options{Models: &models, NativePackage: reflect.TypeFor[BoundModel]().PkgPath()})
+		dep, err := evmbind.New("model", fstest.MapFS{"model.go": {Data: []byte(`package model;type BoundModel struct{};type Alternate struct{}`)}}, evmbind.Options{Selective: true, Models: &models, NativePackage: reflect.TypeFor[BoundModel]().PkgPath()})
 		if err != nil {
 			t.Fatal(err)
 		}
 		for _, typ := range []string{"BoundModel", "Alternate"} {
 			src := fstest.MapFS{"host.go": {Data: []byte(`package host;import "native/model";func Copy(r model.` + typ + `)model.` + typ)}}
-			_, err := evmbind.GenerateWithImports("host", "example/host", "bindings", src, map[string]*evmbind.Schema{"native/model": dep})
+			_, err := evmbind.Generate("host", "example/host", "bindings", src, evmbind.Options{Imports: map[string]*evmbind.Schema{"native/model": dep}})
 			if allocation && typ == "BoundModel" {
 				if err != nil {
 					t.Fatal(err)
@@ -545,7 +546,7 @@ func TestModelValueDeclarationRequiresNativeLayout(t *testing.T) {
 				t.Fatalf("allocation=%v type=%s: %v", allocation, typ, err)
 			}
 			src["host.go"].Data = []byte(`package host;import "native/model";func Get()*model.` + typ)
-			if _, err := evmbind.GenerateWithImports("host", "example/host", "bindings", src, map[string]*evmbind.Schema{"native/model": dep}); err != nil {
+			if _, err := evmbind.Generate("host", "example/host", "bindings", src, evmbind.Options{Imports: map[string]*evmbind.Schema{"native/model": dep}}); err != nil {
 				t.Fatal("pointer should remain supported:", err)
 			}
 		}

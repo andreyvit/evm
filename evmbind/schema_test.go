@@ -269,7 +269,7 @@ func TestBindingDrift(t *testing.T) {
 			_, _ = evmbind.New("h", files, opt)
 		}()
 	}
-	generated, err := evmbind.Generate("h", "github.com/andreyvit/evm/evmbind/internal/fixture", "fixturebindings", os.DirFS("internal/fixture"))
+	generated, err := evmbind.Generate("h", "github.com/andreyvit/evm/evmbind/internal/fixture", "fixturebindings", os.DirFS("internal/fixture"), evmbind.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

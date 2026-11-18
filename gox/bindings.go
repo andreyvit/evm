@@ -17,7 +17,7 @@ var bindingSource embed.FS
 
 var trustedSchema = sync.OnceValue(func() *evmbind.Schema {
 	names := []string{"HTML", "HTMLAttr", "CSS", "JS", "JSStr", "URL", "Srcset"}
-	trusted, err := evmbind.NewTypes("github.com/andreyvit/evm/gox", ht.BindingSource, names, evmbind.Options{NativePackage: "html/template", Types: []reflect.Type{
+	trusted, err := evmbind.New("github.com/andreyvit/evm/gox", ht.BindingSource, evmbind.Options{Only: names, NativePackage: "html/template", Types: []reflect.Type{
 		reflect.TypeFor[HTML](), reflect.TypeFor[HTMLAttr](), reflect.TypeFor[CSS](), reflect.TypeFor[JS](), reflect.TypeFor[JSStr](), reflect.TypeFor[URL](), reflect.TypeFor[Srcset](),
 	}})
 	if err != nil {
@@ -28,7 +28,8 @@ var trustedSchema = sync.OnceValue(func() *evmbind.Schema {
 
 var nativeSchema = sync.OnceValue(func() *evmbind.Schema {
 	names := []string{"HTML", "HTMLAttr", "CSS", "JS", "JSStr", "URL", "Srcset"}
-	schema, err := evmbind.NewTypes("github.com/andreyvit/evm/gox", bindingSource, append([]string{"Builder", "Content", "ClassList"}, names...), evmbind.Options{
+	schema, err := evmbind.New("github.com/andreyvit/evm/gox", bindingSource, evmbind.Options{
+		Only:          append([]string{"Builder", "Content", "ClassList"}, names...),
 		NativePackage: "github.com/andreyvit/evm/gox",
 		CellStructs:   map[string]*values.CellStruct{"Content": contentCell.CellStruct},
 		Types:         []reflect.Type{reflect.TypeFor[Builder](), reflect.TypeFor[Content](), reflect.TypeFor[ClassList]()},
@@ -52,7 +53,8 @@ func Schema() *evmbind.Schema { return nativeSchema() }
 func TrustedContentSchema() *evmbind.Schema { return trustedSchema() }
 
 var ambientSchema = sync.OnceValue(func() *evmbind.Schema {
-	schema, err := evmbind.NewTypes("github.com/andreyvit/evm/evmruntime", evmruntime.BindingSource, []string{"Ambient"}, evmbind.Options{
+	schema, err := evmbind.New("github.com/andreyvit/evm/evmruntime", evmruntime.BindingSource, evmbind.Options{
+		Only:          []string{"Ambient"},
 		NativePackage: "github.com/andreyvit/evm/evmruntime",
 		Methods:       map[string][]string{"Ambient": {"Get", "CloneWith", "Values"}},
 		Types:         []reflect.Type{reflect.TypeFor[evmruntime.Ambient]()},

@@ -12,7 +12,7 @@ import (
 )
 
 func TestGeneratedEmptyStructCollections(t *testing.T) {
-	generated, err := evmbind.GenerateTypesWithOptions("sets", "github.com/andreyvit/evm/evmbind/internal/emptydata", "emptybindings", emptydata.Source, []string{"SetHolder"}, evmbind.Options{Methods: map[string][]string{"SetHolder": {"Has"}}})
+	generated, err := evmbind.Generate("sets", "github.com/andreyvit/evm/evmbind/internal/emptydata", "emptybindings", emptydata.Source, evmbind.Options{Only: []string{"SetHolder"}, Methods: map[string][]string{"SetHolder": {"Has"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

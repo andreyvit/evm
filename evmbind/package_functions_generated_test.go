@@ -19,7 +19,7 @@ import (
 type Bounds func(int) int
 
 func TestGeneratedNativePackageFunctions(t *testing.T) {
-	generated, err := evmbind.GenerateTypesWithOptions("functions", "github.com/andreyvit/evm/evmbind/internal/packagefunctionfixture", "packagefunctionbindings", packagefunctionfixture.Source, []string{}, packagefunctionfixture.Options())
+	generated, err := evmbind.Generate("functions", "github.com/andreyvit/evm/evmbind/internal/packagefunctionfixture", "packagefunctionbindings", packagefunctionfixture.Source, packagefunctionfixture.Options())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestGeneratedNativePackageFunctions(t *testing.T) {
 				opt.Mode = evmbind.StaticOnly
 				opt.Static = &packagefunctionbindings.Bindings
 			}
-			schema, err := evmbind.NewTypes("functions", packagefunctionfixture.Source, []string{}, opt)
+			schema, err := evmbind.New("functions", packagefunctionfixture.Source, opt)
 			if err != nil {
 				t.Fatal(err)
 			}

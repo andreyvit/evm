@@ -24,25 +24,25 @@ type SourceBoth struct {
 type SourceFinal struct{ Both *SourceBoth }
 
 func TestSameNamedNativePackages(t *testing.T) {
-	left, err := evmbind.NewTypes("model", fstest.MapFS{"left.go": {Data: []byte(`package data;type SourceLeft struct{Name string}`)}}, nil, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[SourceLeft]()}})
+	left, err := evmbind.New("model", fstest.MapFS{"left.go": {Data: []byte(`package data;type SourceLeft struct{Name string}`)}}, evmbind.Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[SourceLeft]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	right, err := evmbind.NewTypes("model", fstest.MapFS{"right.go": {Data: []byte(`package data;type SourceRight struct{Count int}`)}}, nil, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[SourceRight]()}})
+	right, err := evmbind.New("model", fstest.MapFS{"right.go": {Data: []byte(`package data;type SourceRight struct{Count int}`)}}, evmbind.Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[SourceRight]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	host, err := evmbind.NewTypes("host", fstest.MapFS{"host.go": {Data: []byte(`package host
+	host, err := evmbind.New("host", fstest.MapFS{"host.go": {Data: []byte(`package host
  import(left "example/left";right "example/right")
  type SourceBoth struct{Left *left.SourceLeft;Right *right.SourceRight}
- `)}}, nil, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[SourceBoth]()}, Imports: map[string]*evmbind.Schema{"example/left": left, "example/right": right}})
+ `)}}, evmbind.Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[SourceBoth]()}, Imports: map[string]*evmbind.Schema{"example/left": left, "example/right": right}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	entry, err := evmbind.NewTypes("entry", fstest.MapFS{"entry.go": {Data: []byte(`package entry
+	entry, err := evmbind.New("entry", fstest.MapFS{"entry.go": {Data: []byte(`package entry
  import "example/host"
  type SourceFinal struct{Both *host.SourceBoth}
- `)}}, nil, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[SourceFinal]()}, Imports: map[string]*evmbind.Schema{"example/host": host}})
+ `)}}, evmbind.Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[SourceFinal]()}, Imports: map[string]*evmbind.Schema{"example/host": host}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,10 +76,10 @@ func (*sourceCallbackHost) Echo(_ *evm.Call, box *SourceCallbackBox) *evm.Functi
 }
 
 func TestNativeFunctionHandleSourceImport(t *testing.T) {
-	dep, err := evmbind.NewTypes("data", fstest.MapFS{"data.go": {Data: []byte(`package data
+	dep, err := evmbind.New("data", fstest.MapFS{"data.go": {Data: []byte(`package data
  import "github.com/andreyvit/evm"
  type SourceCallbackBox struct{F *evm.FunctionOf[func()]}
- `)}}, nil, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[SourceCallbackBox]()}})
+ `)}}, evmbind.Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[SourceCallbackBox]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,10 +107,10 @@ func TestNativeFunctionHandleSourceImport(t *testing.T) {
 }
 
 func TestConcurrentNativeSourceImports(t *testing.T) {
-	dep, err := evmbind.NewTypes("data", fstest.MapFS{"data.go": {Data: []byte(`package data
+	dep, err := evmbind.New("data", fstest.MapFS{"data.go": {Data: []byte(`package data
  import "github.com/andreyvit/evm"
  type SourceCallbackBox struct{F *evm.FunctionOf[func()]}
- `)}}, nil, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[SourceCallbackBox]()}})
+ `)}}, evmbind.Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[SourceCallbackBox]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestConcurrentNativeSourceImports(t *testing.T) {
 type SourceFlag int
 
 func TestTransitiveConstantSourceType(t *testing.T) {
-	a, err := evmbind.NewTypes("model", fstest.MapFS{"a.go": {Data: []byte(`package a;type SourceFlag int;const Active SourceFlag=3`)}}, nil, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[SourceFlag]()}})
+	a, err := evmbind.New("model", fstest.MapFS{"a.go": {Data: []byte(`package a;type SourceFlag int;const Active SourceFlag=3`)}}, evmbind.Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[SourceFlag]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestTransitiveConstantSourceType(t *testing.T) {
 }
 
 func TestAliasedNativeSourceGeneration(t *testing.T) {
-	dep, err := evmbind.NewTypes("model", fstest.MapFS{"dep.go": {Data: []byte(`package data;type SourceLeft struct{Name string}`)}}, nil, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[SourceLeft]()}})
+	dep, err := evmbind.New("model", fstest.MapFS{"dep.go": {Data: []byte(`package data;type SourceLeft struct{Name string}`)}}, evmbind.Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[SourceLeft]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestAliasedNativeSourceGeneration(t *testing.T) {
 	source := fstest.MapFS{"host.go": {Data: []byte(`package host;import "example/left";func Echo(x *data.SourceLeft)*data.SourceLeft{return x}`)}}
 	var first string
 	for range 20 {
-		generated, err := evmbind.GenerateWithImports("host", "example/host", "bindings", source, imports)
+		generated, err := evmbind.Generate("host", "example/host", "bindings", source, evmbind.Options{Imports: imports})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -182,7 +182,7 @@ type sourceFuncHost struct{}
 func (*sourceFuncHost) Make(*evm.Call) SourceFunc { return func(x int) int { return x + 5 } }
 
 func TestImportedNativeFunctionSource(t *testing.T) {
-	dep, err := evmbind.NewTypes("data", fstest.MapFS{"data.go": {Data: []byte(`package data;type SourceFunc func(int)int`)}}, nil, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[SourceFunc]()}})
+	dep, err := evmbind.New("data", fstest.MapFS{"data.go": {Data: []byte(`package data;type SourceFunc func(int)int`)}}, evmbind.Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[SourceFunc]()}})
 	if err != nil {
 		t.Fatal(err)
 	}

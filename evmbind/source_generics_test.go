@@ -23,7 +23,8 @@ func TestNativeGenericStructInstances(t *testing.T) {
  type GenericBox[T any] struct{Value T}
  func(b *GenericBox[T])Get()T{return b.Value}
  `)}}
-	schema, err := evmbind.NewTypes("host", source, []string{"GenericBox"}, evmbind.Options{
+	schema, err := evmbind.New("host", source, evmbind.Options{
+		Only:    []string{"GenericBox"},
 		Methods: map[string][]string{"GenericBox": {"Get"}},
 		Instances: []evmbind.Instance{
 			{Type: "GenericBox", Native: reflect.TypeFor[GenericBox[int]](), Args: []reflect.Type{reflect.TypeFor[int]()}},
@@ -37,10 +38,10 @@ func TestNativeGenericStructInstances(t *testing.T) {
  import "example/native"
  func Echo(p *native.GenericBox[int])*native.GenericBox[int]
  `)}}
-	if _, err := evmbind.GenerateWithImports("consumer", "example/consumer", "consumerbindings", consumerSource, map[string]*evmbind.Schema{"example/native": schema}); err != nil {
+	if _, err := evmbind.Generate("consumer", "example/consumer", "consumerbindings", consumerSource, evmbind.Options{Imports: map[string]*evmbind.Schema{"example/native": schema}}); err != nil {
 		t.Fatal("generate consumer of imported native generic", err)
 	}
-	consumer, err := evmbind.NewTypes("consumer", consumerSource, nil, evmbind.Options{Imports: map[string]*evmbind.Schema{"example/native": schema}, Functions: map[string]any{"Echo": func(p *GenericBox[int]) *GenericBox[int] { return p }}})
+	consumer, err := evmbind.New("consumer", consumerSource, evmbind.Options{Selective: true, Imports: map[string]*evmbind.Schema{"example/native": schema}, Functions: map[string]any{"Echo": func(p *GenericBox[int]) *GenericBox[int] { return p }}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,22 +92,22 @@ func TestNativeGenericStructInvalidInstances(t *testing.T) {
 		{"missing template", []evmbind.Instance{{Type: "Missing", Native: good.Native, Args: good.Args}}, "not declared"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := evmbind.NewTypes("host", source, []string{"GenericBox"}, evmbind.Options{Instances: tc.instances})
+			_, err := evmbind.New("host", source, evmbind.Options{Only: []string{"GenericBox"}, Instances: tc.instances})
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want %s", err, tc.want)
 			}
 		})
 	}
 	badSource := fstest.MapFS{"types.go": {Data: []byte(`package native;type GenericBox[T any] struct{Value string}`)}}
-	_, err := evmbind.NewTypes("host", badSource, []string{"GenericBox"}, evmbind.Options{Instances: []evmbind.Instance{good}})
+	_, err := evmbind.New("host", badSource, evmbind.Options{Only: []string{"GenericBox"}, Instances: []evmbind.Instance{good}})
 	if err == nil || !strings.Contains(err.Error(), "field mismatch") {
 		t.Fatal(err)
 	}
-	_, err = evmbind.NewTypes("host", source, []string{"GenericBox"}, evmbind.Options{Instances: []evmbind.Instance{good}, Mode: evmbind.StaticOnly})
+	_, err = evmbind.New("host", source, evmbind.Options{Only: []string{"GenericBox"}, Instances: []evmbind.Instance{good}, Mode: evmbind.StaticOnly})
 	if err == nil || !strings.Contains(err.Error(), "StaticOnly") {
 		t.Fatal(err)
 	}
-	_, err = evmbind.GenerateTypesWithOptions("host", good.Native.PkgPath(), "bindings", source, []string{"GenericBox"}, evmbind.Options{Instances: []evmbind.Instance{good}})
+	_, err = evmbind.Generate("host", good.Native.PkgPath(), "bindings", source, evmbind.Options{Only: []string{"GenericBox"}, Instances: []evmbind.Instance{good}})
 	if err == nil || !strings.Contains(err.Error(), "generated bindings") {
 		t.Fatal(err)
 	}
@@ -119,7 +120,8 @@ type GenericPrivate[T any] struct {
 
 func TestNativeGenericStructOmittedField(t *testing.T) {
 	source := fstest.MapFS{"types.go": {Data: []byte(`package native;type GenericPrivate[T any] struct{Value T;hidden string}`)}}
-	schema, err := evmbind.NewTypes("host", source, nil, evmbind.Options{
+	schema, err := evmbind.New("host", source, evmbind.Options{
+		Selective:  true,
 		OmitFields: map[string][]string{"GenericPrivate": {"hidden"}},
 		Instances:  []evmbind.Instance{{Type: "GenericPrivate", Native: reflect.TypeFor[GenericPrivate[int]](), Args: []reflect.Type{reflect.TypeFor[int]()}}},
 	})
@@ -163,7 +165,7 @@ func TestNativeGenericStructArguments(t *testing.T) {
 		{Type: "GenericBox", Native: reflect.TypeFor[GenericBox[uint8]](), Args: []reflect.Type{reflect.TypeFor[uint8]()}},
 		{Type: "GenericBox", Native: reflect.TypeFor[GenericBox[time.Time]](), Args: []reflect.Type{reflect.TypeFor[time.Time]()}},
 	}
-	schema, err := evmbind.NewTypes("host", source, []string{"GenericBox"}, evmbind.Options{Instances: instances, Functions: map[string]any{"Echo": func(v *GenericBox[uint8]) *GenericBox[uint8] { return v }}})
+	schema, err := evmbind.New("host", source, evmbind.Options{Only: []string{"GenericBox"}, Instances: instances, Functions: map[string]any{"Echo": func(v *GenericBox[uint8]) *GenericBox[uint8] { return v }}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,11 +195,12 @@ func TestNativeGenericStructArguments(t *testing.T) {
 }
 
 func TestNativeGenericStructImportedArgument(t *testing.T) {
-	dep, err := evmbind.NewTypes("args", fstest.MapFS{"args.go": {Data: []byte(`package original;type GenericArgument struct{N int}`)}}, nil, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[GenericArgument]()}})
+	dep, err := evmbind.New("args", fstest.MapFS{"args.go": {Data: []byte(`package original;type GenericArgument struct{N int}`)}}, evmbind.Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[GenericArgument]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	schema, err := evmbind.NewTypes("host", fstest.MapFS{"box.go": {Data: []byte(`package native;type GenericBox[T any] struct{Value T}`)}}, []string{"GenericBox"}, evmbind.Options{
+	schema, err := evmbind.New("host", fstest.MapFS{"box.go": {Data: []byte(`package native;type GenericBox[T any] struct{Value T}`)}}, evmbind.Options{
+		Only:      []string{"GenericBox"},
 		Imports:   map[string]*evmbind.Schema{"example/original": dep},
 		Instances: []evmbind.Instance{{Type: "GenericBox", Native: reflect.TypeFor[GenericBox[GenericArgument]](), Args: []reflect.Type{reflect.TypeFor[GenericArgument]()}}},
 	})
@@ -242,7 +245,8 @@ func TestNativeGenericEmbeddedSelfReference(t *testing.T) {
  func(e *GenericEmbedded[T])Hide(){e.Hidden=true}
  type GenericWidget struct{GenericEmbedded[GenericWidget];Value int}
  `)}}
-	s, err := evmbind.NewTypes("native", source, []string{"GenericWidget"}, evmbind.Options{
+	s, err := evmbind.New("native", source, evmbind.Options{
+		Only:      []string{"GenericWidget"},
 		Types:     []reflect.Type{reflect.TypeFor[GenericWidget]()},
 		Methods:   map[string][]string{"GenericEmbedded": {"Hide"}},
 		Instances: []evmbind.Instance{{Type: "GenericEmbedded", Native: reflect.TypeFor[GenericEmbedded[GenericWidget]](), Args: []reflect.Type{reflect.TypeFor[GenericWidget]()}}},
@@ -268,7 +272,7 @@ type GenericSetter[T any] struct{ Set func(T) error }
 
 func TestNativeGenericFunctionFieldErrorIdentity(t *testing.T) {
 	source := fstest.MapFS{"setter.go": {Data: []byte(`package native;type GenericSetter[T any]struct{Set func(T)error}`)}}
-	s, err := evmbind.NewTypes("native", source, nil, evmbind.Options{Instances: []evmbind.Instance{{Type: "GenericSetter", Native: reflect.TypeFor[GenericSetter[string]](), Args: []reflect.Type{reflect.TypeFor[string]()}}}})
+	s, err := evmbind.New("native", source, evmbind.Options{Selective: true, Instances: []evmbind.Instance{{Type: "GenericSetter", Native: reflect.TypeFor[GenericSetter[string]](), Args: []reflect.Type{reflect.TypeFor[string]()}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +308,7 @@ func TestNativeGenericEmbeddedInstance(t *testing.T) {
  type GenericEmbedded[T comparable]struct{Hidden bool}
  type GenericWidgetOf[T comparable]struct{GenericEmbedded[*GenericWidgetOf[T]];Value T}
  `)}}
-	s, err := evmbind.NewTypes("native", source, []string{"GenericWidgetOf"}, evmbind.Options{Instances: []evmbind.Instance{
+	s, err := evmbind.New("native", source, evmbind.Options{Only: []string{"GenericWidgetOf"}, Instances: []evmbind.Instance{
 		{Type: "GenericEmbedded", Native: reflect.TypeFor[GenericEmbedded[*GenericWidgetOf[string]]](), Args: []reflect.Type{reflect.TypeFor[*GenericWidgetOf[string]]()}},
 		{Type: "GenericWidgetOf", Native: reflect.TypeFor[GenericWidgetOf[string]](), Args: []reflect.Type{reflect.TypeFor[string]()}},
 	}})
@@ -329,21 +333,23 @@ type GenericLabelHolder struct{ Labels map[string]string }
 type GenericConsumerLabels struct{ Values map[string]string }
 
 func TestNativeGenericImportsDoNotOwnStructuralTypes(t *testing.T) {
-	host, err := evmbind.NewTypes("host", fstest.MapFS{"host.go": {Data: []byte(`package native
+	host, err := evmbind.New("host", fstest.MapFS{"host.go": {Data: []byte(`package native
  type GenericBox[T any] struct {Value T}
  type GenericLabelHolder struct {Labels map[string]string}
- `)}}, []string{"GenericBox", "GenericLabelHolder"}, evmbind.Options{
+ `)}}, evmbind.Options{
+		Only:      []string{"GenericBox", "GenericLabelHolder"},
 		Types:     []reflect.Type{reflect.TypeFor[GenericLabelHolder]()},
 		Instances: []evmbind.Instance{{Type: "GenericBox", Native: reflect.TypeFor[GenericBox[int]](), Args: []reflect.Type{reflect.TypeFor[int]()}}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	consumer, err := evmbind.NewTypes("consumer", fstest.MapFS{"consumer.go": {Data: []byte(`package consumer
+	consumer, err := evmbind.New("consumer", fstest.MapFS{"consumer.go": {Data: []byte(`package consumer
  import host "example/host"
  type GenericConsumerLabels struct {Values map[string]string}
  func Accept(p *host.GenericBox[int])int
- `)}}, []string{"GenericConsumerLabels"}, evmbind.Options{
+ `)}}, evmbind.Options{
+		Only:          []string{"GenericConsumerLabels"},
 		Types:         []reflect.Type{reflect.TypeFor[GenericConsumerLabels]()},
 		NativePackage: reflect.TypeFor[GenericConsumerLabels]().PkgPath(),
 		Imports:       map[string]*evmbind.Schema{"example/host": host},
@@ -383,11 +389,12 @@ type GenericAmountControl struct {
 }
 
 func TestNativeGenericScalarArgumentWithConsumerInSamePackage(t *testing.T) {
-	model, err := evmbind.NewTypes("model", fstest.MapFS{"model.go": {Data: []byte(`package native; type GenericImportAmount int64;func(GenericImportAmount)Mark()int64`)}}, []string{"GenericImportAmount"}, evmbind.Options{Methods: map[string][]string{"GenericImportAmount": {"Mark"}}, Types: []reflect.Type{reflect.TypeFor[GenericImportAmount]()}})
+	model, err := evmbind.New("model", fstest.MapFS{"model.go": {Data: []byte(`package native; type GenericImportAmount int64;func(GenericImportAmount)Mark()int64`)}}, evmbind.Options{Only: []string{"GenericImportAmount"}, Methods: map[string][]string{"GenericImportAmount": {"Mark"}}, Types: []reflect.Type{reflect.TypeFor[GenericImportAmount]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	host, err := evmbind.NewTypes("host", fstest.MapFS{"host.go": {Data: []byte(`package native; import model "example/model"; type GenericBox[T interface{Mark()int64}] struct{Value T}; type GenericAmountControl struct{Binding *GenericBox[model.GenericImportAmount]}`)}}, []string{"GenericBox", "GenericAmountControl"}, evmbind.Options{
+	host, err := evmbind.New("host", fstest.MapFS{"host.go": {Data: []byte(`package native; import model "example/model"; type GenericBox[T interface{Mark()int64}] struct{Value T}; type GenericAmountControl struct{Binding *GenericBox[model.GenericImportAmount]}`)}}, evmbind.Options{
+		Only:      []string{"GenericBox", "GenericAmountControl"},
 		Types:     []reflect.Type{reflect.TypeFor[GenericAmountControl]()},
 		Imports:   map[string]*evmbind.Schema{"example/model": model, reflect.TypeFor[GenericImportAmount]().PkgPath(): model},
 		Instances: []evmbind.Instance{{Type: "GenericBox", Native: reflect.TypeFor[GenericBox[GenericImportAmount]](), Args: []reflect.Type{reflect.TypeFor[GenericImportAmount]()}}},
@@ -395,11 +402,11 @@ func TestNativeGenericScalarArgumentWithConsumerInSamePackage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	helper, err := evmbind.NewTypes("helper", fstest.MapFS{"helper.go": {Data: []byte(`package helper
+	helper, err := evmbind.New("helper", fstest.MapFS{"helper.go": {Data: []byte(`package helper
  import host "example/host"
  import model "example/model"
  func Accept(p *host.GenericBox[model.GenericImportAmount])*host.GenericAmountControl
- `)}}, []string{}, evmbind.Options{NativePackage: "example/helper", Imports: map[string]*evmbind.Schema{"example/host": host, "example/model": model}, Functions: map[string]any{"Accept": func(p *GenericBox[GenericImportAmount]) *GenericAmountControl {
+ `)}}, evmbind.Options{Only: []string{}, NativePackage: "example/helper", Imports: map[string]*evmbind.Schema{"example/host": host, "example/model": model}, Functions: map[string]any{"Accept": func(p *GenericBox[GenericImportAmount]) *GenericAmountControl {
 		return &GenericAmountControl{Binding: p}
 	}}})
 	if err != nil {
@@ -432,15 +439,15 @@ func TestNativeGenericNestedScalarArgument(t *testing.T) {
 		{"pointer", "*model.GenericImportAmount", "&amount", reflect.TypeFor[GenericBox[*GenericImportAmount]](), reflect.TypeFor[*GenericImportAmount](), func(p *GenericBox[*GenericImportAmount]) int64 { return int64(*p.Value) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			model, err := evmbind.NewTypes("model", fstest.MapFS{"model.go": {Data: []byte(`package native; type GenericImportAmount int64`)}}, []string{"GenericImportAmount"}, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[GenericImportAmount]()}})
+			model, err := evmbind.New("model", fstest.MapFS{"model.go": {Data: []byte(`package native; type GenericImportAmount int64`)}}, evmbind.Options{Only: []string{"GenericImportAmount"}, Types: []reflect.Type{reflect.TypeFor[GenericImportAmount]()}})
 			if err != nil {
 				t.Fatal(err)
 			}
-			host, err := evmbind.NewTypes("host", fstest.MapFS{"host.go": {Data: []byte(`package native; type GenericBox[T any] struct{Value T}`)}}, []string{"GenericBox"}, evmbind.Options{Imports: map[string]*evmbind.Schema{reflect.TypeFor[GenericImportAmount]().PkgPath(): model}, Instances: []evmbind.Instance{{Type: "GenericBox", Native: tc.native, Args: []reflect.Type{tc.parameter}}}})
+			host, err := evmbind.New("host", fstest.MapFS{"host.go": {Data: []byte(`package native; type GenericBox[T any] struct{Value T}`)}}, evmbind.Options{Only: []string{"GenericBox"}, Imports: map[string]*evmbind.Schema{reflect.TypeFor[GenericImportAmount]().PkgPath(): model}, Instances: []evmbind.Instance{{Type: "GenericBox", Native: tc.native, Args: []reflect.Type{tc.parameter}}}})
 			if err != nil {
 				t.Fatal(err)
 			}
-			helper, err := evmbind.NewTypes("helper", fstest.MapFS{"helper.go": {Data: []byte(`package helper;import host "example/host";import model "example/model";func Accept(p *host.GenericBox[` + tc.arg + `])int64`)}}, []string{}, evmbind.Options{NativePackage: "example/helper", Imports: map[string]*evmbind.Schema{"example/host": host, "example/model": model}, Functions: map[string]any{"Accept": tc.accept}})
+			helper, err := evmbind.New("helper", fstest.MapFS{"helper.go": {Data: []byte(`package helper;import host "example/host";import model "example/model";func Accept(p *host.GenericBox[` + tc.arg + `])int64`)}}, evmbind.Options{Only: []string{}, NativePackage: "example/helper", Imports: map[string]*evmbind.Schema{"example/host": host, "example/model": model}, Functions: map[string]any{"Accept": tc.accept}})
 			if err != nil {
 				t.Fatal(err)
 			}

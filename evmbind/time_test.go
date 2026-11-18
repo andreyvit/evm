@@ -17,11 +17,11 @@ import (
 func TestNativeTimeSource(t *testing.T) { testNativeTimeSource(t, nil) }
 func testNativeTimeSource(t *testing.T, static *evmbind.Static) {
 	t.Helper()
-	opt := evmbind.Options{Methods: map[string][]string{"Context": {"Echo", "Pointer"}}, Types: []reflect.Type{reflect.TypeFor[timedata.Context]()}, Static: static}
+	opt := evmbind.Options{Selective: true, Methods: map[string][]string{"Context": {"Echo", "Pointer"}}, Types: []reflect.Type{reflect.TypeFor[timedata.Context]()}, Static: static}
 	if static != nil {
 		opt.Mode = evmbind.StaticOnly
 	}
-	schema, err := evmbind.NewTypes("host/timecontext", timedata.Source, nil, opt)
+	schema, err := evmbind.New("host/timecontext", timedata.Source, opt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,12 +73,12 @@ func testNativeTimeSource(t *testing.T, static *evmbind.Static) {
 }
 
 func TestImportedNativeTimeGeneration(t *testing.T) {
-	schema, err := evmbind.NewTypes("host/timecontext", timedata.Source, nil, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[timedata.Context]()}})
+	schema, err := evmbind.New("host/timecontext", timedata.Source, evmbind.Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[timedata.Context]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	source := fstest.MapFS{"api.go": {Data: []byte(`package host; import "github.com/andreyvit/evm/evmbind/internal/timedata"; func Context() *timedata.Context`)}}
-	if _, err := evmbind.GenerateWithImports("host", "host", "bindings", source, map[string]*evmbind.Schema{"github.com/andreyvit/evm/evmbind/internal/timedata": schema}); err != nil {
+	if _, err := evmbind.Generate("host", "host", "bindings", source, evmbind.Options{Imports: map[string]*evmbind.Schema{"github.com/andreyvit/evm/evmbind/internal/timedata": schema}}); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -14,7 +14,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	b, err := evmbind.GenerateTypesWithOptions("ctx", "github.com/andreyvit/evm/evmbind/internal/modelfielddata", "modelfieldbindings", modelfielddata.Source, nil, evmbind.Options{Methods: map[string][]string{"Context": {"Clone"}}, Imports: map[string]*evmbind.Schema{"github.com/andreyvit/evm/evmbind/internal/modeldata": dep}})
+	b, err := evmbind.Generate("ctx", "github.com/andreyvit/evm/evmbind/internal/modelfielddata", "modelfieldbindings", modelfielddata.Source, evmbind.Options{Selective: true, Methods: map[string][]string{"Context": {"Clone"}}, Imports: map[string]*evmbind.Schema{"github.com/andreyvit/evm/evmbind/internal/modeldata": dep}})
 	if err != nil {
 		panic(err)
 	}

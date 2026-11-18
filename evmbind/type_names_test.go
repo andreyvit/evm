@@ -22,6 +22,7 @@ func TestNativeTypeExportNames(t *testing.T) {
  func Data()*EntryData{panic("native")}
  `)}}
 	options := Options{
+		Selective:       true,
 		NativePackage:   "native/api",
 		Types:           []reflect.Type{reflect.TypeFor[SelectedService](), reflect.TypeFor[EntryData]()},
 		Methods:         map[string][]string{"SelectedService": {"Read", "Add"}},
@@ -30,18 +31,18 @@ func TestNativeTypeExportNames(t *testing.T) {
 		Functions:       map[string]any{"Service": func() SelectedService { return service }, "Data": func() *EntryData { return data }},
 	}
 	// A type and function cannot share the same exported name.
-	if _, err := NewTypes("api", source, nil, options); err == nil || !strings.Contains(err.Error(), "conflicts") {
+	if _, err := New("api", source, options); err == nil || !strings.Contains(err.Error(), "conflicts") {
 		t.Fatalf("export collision: %v", err)
 	}
 	options.TypeNames["EntryData"] = "ViewData"
-	schema, err := NewTypes("api", source, nil, options)
+	schema, err := New("api", source, options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	consumer, err := NewTypes("consumer", fstest.MapFS{"consumer.go": {Data: []byte(`package consumer
+	consumer, err := New("consumer", fstest.MapFS{"consumer.go": {Data: []byte(`package consumer
  import "native/api"
  func Roundtrip(v api.SelectedService)api.SelectedService{panic("native")}
- `)}}, nil, Options{Imports: map[string]*Schema{"native/api": schema}, Functions: map[string]any{"Roundtrip": func(v SelectedService) SelectedService {
+ `)}}, Options{Selective: true, Imports: map[string]*Schema{"native/api": schema}, Functions: map[string]any{"Roundtrip": func(v SelectedService) SelectedService {
 		if v != service {
 			panic("native pointer changed")
 		}
@@ -72,7 +73,7 @@ func TestNativeTypeExportNames(t *testing.T) {
 	}
 	renamedFingerprint := schema.src.fingerprint
 	options.TypeNames = nil
-	original, err := NewTypes("api", source, nil, options)
+	original, err := New("api", source, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +85,7 @@ func TestNativeTypeExportNames(t *testing.T) {
 func TestNativeTypeExportNameValidation(t *testing.T) {
 	source := fstest.MapFS{"types.go": {Data: []byte(`package api;type EntryData struct{Count int}`)}}
 	for _, names := range []map[string]string{{"Missing": "Other"}, {"EntryData": "private"}, {"EntryData": "X.Y"}, {"EntryData": ""}} {
-		if _, err := NewTypes("api", source, nil, Options{Types: []reflect.Type{reflect.TypeFor[EntryData]()}, TypeNames: names}); err == nil {
+		if _, err := New("api", source, Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[EntryData]()}, TypeNames: names}); err == nil {
 			t.Fatalf("invalid mapping accepted: %v", names)
 		}
 	}
@@ -92,11 +93,11 @@ func TestNativeTypeExportNameValidation(t *testing.T) {
 
 func TestSamePackageAliasOfRenamedType(t *testing.T) {
 	source := fstest.MapFS{"types.go": {Data: []byte(`package native;type EntryData struct{Count int}`)}}
-	owner, err := NewTypes("model", source, nil, Options{Types: []reflect.Type{reflect.TypeFor[EntryData]()}, TypeNames: map[string]string{"EntryData": "Data"}})
+	owner, err := New("model", source, Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[EntryData]()}, TypeNames: map[string]string{"EntryData": "Data"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	alias, err := NewTypes("model", fstest.MapFS{"alias.go": {Data: []byte(`package other;import "native";type EntryData=native.EntryData;type Data=native.EntryData`)}}, nil, Options{Imports: map[string]*Schema{"native": owner}})
+	alias, err := New("model", fstest.MapFS{"alias.go": {Data: []byte(`package other;import "native";type EntryData=native.EntryData;type Data=native.EntryData`)}}, Options{Selective: true, Imports: map[string]*Schema{"native": owner}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +113,7 @@ type selectedOtherService struct{ selectedService }
 func TestSamePackageOpaqueImplementations(t *testing.T) {
 	source := fstest.MapFS{"api.go": {Data: []byte(`package api;type SelectedService interface{Read()int}`)}}
 	makeSchema := func(name string, impl Implementation) *Schema {
-		s, err := NewTypes("model", source, nil, Options{Types: []reflect.Type{reflect.TypeFor[SelectedService]()}, TypeNames: map[string]string{"SelectedService": name}, Implementations: []Implementation{impl}})
+		s, err := New("model", source, Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[SelectedService]()}, TypeNames: map[string]string{"SelectedService": name}, Implementations: []Implementation{impl}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -134,10 +135,10 @@ type ExportBox[T any] struct {
 }
 
 func TestRenamedTypeInGenericSourceRejected(t *testing.T) {
-	_, err := NewTypes("api", fstest.MapFS{"api.go": {Data: []byte(`package api
+	_, err := New("api", fstest.MapFS{"api.go": {Data: []byte(`package api
  type SelectedService interface{Read()int}
  type ExportBox[T any]struct{Value T;Context SelectedService}
- `)}}, nil, Options{Types: []reflect.Type{reflect.TypeFor[SelectedService]()}, TypeNames: map[string]string{"SelectedService": "RequestContext"}, Instances: []Instance{{Type: "ExportBox", Native: reflect.TypeFor[ExportBox[int]](), Args: []reflect.Type{reflect.TypeFor[int]()}}}})
+ `)}}, Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[SelectedService]()}, TypeNames: map[string]string{"SelectedService": "RequestContext"}, Instances: []Instance{{Type: "ExportBox", Native: reflect.TypeFor[ExportBox[int]](), Args: []reflect.Type{reflect.TypeFor[int]()}}}})
 	if err == nil || !strings.Contains(err.Error(), "generic source references renamed native type") {
 		t.Fatalf("unsupported generic reference: %v", err)
 	}
@@ -146,10 +147,10 @@ func TestRenamedTypeInGenericSourceRejected(t *testing.T) {
 type ExportEnum int
 
 func TestRenamedTypeIgnoresUnexposedConstants(t *testing.T) {
-	schema, err := NewTypes("enums", fstest.MapFS{"enum.go": {Data: []byte(`package enums
+	schema, err := New("enums", fstest.MapFS{"enum.go": {Data: []byte(`package enums
  type ExportEnum int
  const (Good ExportEnum=1; Collision=99)
- `)}}, nil, Options{Types: []reflect.Type{reflect.TypeFor[ExportEnum]()}, TypeNames: map[string]string{"ExportEnum": "Collision"}})
+ `)}}, Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[ExportEnum]()}, TypeNames: map[string]string{"ExportEnum": "Collision"}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -29,6 +29,21 @@ func writePtrItem(f *evmbind.Frame, x *api.Item) values.Value {
 	}
 	return values.Value{R: values.NativeAddress, P: unsafe.Pointer(x)}
 }
+func readPtrPanel(f *evmbind.Frame, v values.Value) *api.Panel {
+	if v.P == nil {
+		return nil
+	}
+	if v.R != values.NativeAddress {
+		panic("native pointer *Panel requires native storage")
+	}
+	return (*api.Panel)(v.P)
+}
+func writePtrPanel(f *evmbind.Frame, x *api.Panel) values.Value {
+	if x == nil {
+		return values.Value{}
+	}
+	return values.Value{R: values.NativeAddress, P: unsafe.Pointer(x)}
+}
 func readTypeItem(f *evmbind.Frame, v values.Value) api.Item {
 	return api.Item{
 		Title: readScalarString(f, evmbind.Field(v, 0, false)),
@@ -44,14 +59,14 @@ func storeTypeItem(f *evmbind.Frame, v values.Value, x api.Item) {
 }
 func readTypePanel(f *evmbind.Frame, v values.Value) api.Panel {
 	return api.Panel{
-		Metadata: readCollection10(f, evmbind.Field(v, 0, false)),
-		Nested:   readCollection6(f, evmbind.Field(v, 1, false)),
+		Metadata: readCollection11(f, evmbind.Field(v, 0, false)),
+		Nested:   readCollection7(f, evmbind.Field(v, 1, false)),
 		Payload:  readScalarAny(f, evmbind.Field(v, 2, false)),
-		Values:   readCollection5(f, evmbind.Field(v, 3, false)),
-		Tags:     readCollection7(f, evmbind.Field(v, 4, false)),
-		Groups:   readCollection4(f, evmbind.Field(v, 5, false)),
-		Items:    readCollection3(f, evmbind.Field(v, 6, false)),
-		Named:    readCollection9(f, evmbind.Field(v, 7, false)),
+		Values:   readCollection6(f, evmbind.Field(v, 3, false)),
+		Tags:     readCollection8(f, evmbind.Field(v, 4, false)),
+		Groups:   readCollection5(f, evmbind.Field(v, 5, false)),
+		Items:    readCollection4(f, evmbind.Field(v, 6, false)),
+		Named:    readCollection10(f, evmbind.Field(v, 7, false)),
 	}
 }
 func writeTypePanel(f *evmbind.Frame, x api.Panel) values.Value {
@@ -60,55 +75,55 @@ func writeTypePanel(f *evmbind.Frame, x api.Panel) values.Value {
 	return v
 }
 func storeTypePanel(f *evmbind.Frame, v values.Value, x api.Panel) {
-	*(*values.Value)(values.CellAt(v.P, 0)) = writeCollection10(f, x.Metadata)
-	*(*values.Value)(values.CellAt(v.P, 1)) = writeCollection6(f, x.Nested)
+	*(*values.Value)(values.CellAt(v.P, 0)) = writeCollection11(f, x.Metadata)
+	*(*values.Value)(values.CellAt(v.P, 1)) = writeCollection7(f, x.Nested)
 	*(*values.Value)(values.CellAt(v.P, 2)) = writeScalarAny(f, x.Payload)
-	*(*values.Value)(values.CellAt(v.P, 3)) = writeCollection5(f, x.Values)
-	*(*values.Value)(values.CellAt(v.P, 4)) = writeCollection7(f, x.Tags)
-	*(*values.Value)(values.CellAt(v.P, 5)) = writeCollection4(f, x.Groups)
-	*(*values.Value)(values.CellAt(v.P, 6)) = writeCollection3(f, x.Items)
-	*(*values.Value)(values.CellAt(v.P, 7)) = writeCollection9(f, x.Named)
+	*(*values.Value)(values.CellAt(v.P, 3)) = writeCollection6(f, x.Values)
+	*(*values.Value)(values.CellAt(v.P, 4)) = writeCollection8(f, x.Tags)
+	*(*values.Value)(values.CellAt(v.P, 5)) = writeCollection5(f, x.Groups)
+	*(*values.Value)(values.CellAt(v.P, 6)) = writeCollection4(f, x.Items)
+	*(*values.Value)(values.CellAt(v.P, 7)) = writeCollection10(f, x.Named)
 }
-func readCollection3(f *evmbind.Frame, v values.Value) []*api.Item {
+func readCollection4(f *evmbind.Frame, v values.Value) []*api.Item {
 	return ([]*api.Item)(unsafe.Slice((**api.Item)(evmbind.NativeSliceData(v, reflect.TypeFor[*api.Item]())), int(v.SliceCap()))[:int(v.SliceLen())])
 }
-func writeCollection3(f *evmbind.Frame, x []*api.Item) values.Value {
+func writeCollection4(f *evmbind.Frame, x []*api.Item) values.Value {
 	if uint64(cap(x)) > 1<<32-1 {
 		panic("native slice exceeds VM capacity")
 	}
 	return values.SliceValue(unsafe.Pointer(unsafe.SliceData(x)), uint32(len(x)), uint32(cap(x)))
 }
-func readCollection4(f *evmbind.Frame, v values.Value) [][]string {
+func readCollection5(f *evmbind.Frame, v values.Value) [][]string {
 	return ([][]string)(unsafe.Slice((*[]string)(evmbind.NativeSliceData(v, reflect.TypeFor[[]string]())), int(v.SliceCap()))[:int(v.SliceLen())])
 }
-func writeCollection4(f *evmbind.Frame, x [][]string) values.Value {
+func writeCollection5(f *evmbind.Frame, x [][]string) values.Value {
 	if uint64(cap(x)) > 1<<32-1 {
 		panic("native slice exceeds VM capacity")
 	}
 	return values.SliceValue(unsafe.Pointer(unsafe.SliceData(x)), uint32(len(x)), uint32(cap(x)))
 }
-func readCollection5(f *evmbind.Frame, v values.Value) []any {
+func readCollection6(f *evmbind.Frame, v values.Value) []any {
 	return ([]any)(unsafe.Slice((*any)(evmbind.NativeSliceData(v, reflect.TypeFor[any]())), int(v.SliceCap()))[:int(v.SliceLen())])
 }
-func writeCollection5(f *evmbind.Frame, x []any) values.Value {
+func writeCollection6(f *evmbind.Frame, x []any) values.Value {
 	if uint64(cap(x)) > 1<<32-1 {
 		panic("native slice exceeds VM capacity")
 	}
 	return values.SliceValue(unsafe.Pointer(unsafe.SliceData(x)), uint32(len(x)), uint32(cap(x)))
 }
-func readCollection6(f *evmbind.Frame, v values.Value) []map[string]any {
+func readCollection7(f *evmbind.Frame, v values.Value) []map[string]any {
 	return ([]map[string]any)(unsafe.Slice((*map[string]any)(evmbind.NativeSliceData(v, reflect.TypeFor[map[string]any]())), int(v.SliceCap()))[:int(v.SliceLen())])
 }
-func writeCollection6(f *evmbind.Frame, x []map[string]any) values.Value {
+func writeCollection7(f *evmbind.Frame, x []map[string]any) values.Value {
 	if uint64(cap(x)) > 1<<32-1 {
 		panic("native slice exceeds VM capacity")
 	}
 	return values.SliceValue(unsafe.Pointer(unsafe.SliceData(x)), uint32(len(x)), uint32(cap(x)))
 }
-func readCollection7(f *evmbind.Frame, v values.Value) []string {
+func readCollection8(f *evmbind.Frame, v values.Value) []string {
 	return ([]string)(unsafe.Slice((*string)(evmbind.NativeSliceData(v, reflect.TypeFor[string]())), int(v.SliceCap()))[:int(v.SliceLen())])
 }
-func writeCollection7(f *evmbind.Frame, x []string) values.Value {
+func writeCollection8(f *evmbind.Frame, x []string) values.Value {
 	if uint64(cap(x)) > 1<<32-1 {
 		panic("native slice exceeds VM capacity")
 	}
@@ -120,16 +135,16 @@ func readScalarAny(f *evmbind.Frame, v values.Value) any {
 func writeScalarAny(f *evmbind.Frame, x any) values.Value {
 	return f.EncodeAny(x)
 }
-func readCollection9(f *evmbind.Frame, v values.Value) map[string]*api.Item {
+func readCollection10(f *evmbind.Frame, v values.Value) map[string]*api.Item {
 	return *(*map[string]*api.Item)(unsafe.Pointer(&v.P))
 }
-func writeCollection9(f *evmbind.Frame, x map[string]*api.Item) values.Value {
+func writeCollection10(f *evmbind.Frame, x map[string]*api.Item) values.Value {
 	return values.Value{P: *(*unsafe.Pointer)(unsafe.Pointer(&x))}
 }
-func readCollection10(f *evmbind.Frame, v values.Value) map[string]any {
+func readCollection11(f *evmbind.Frame, v values.Value) map[string]any {
 	return *(*map[string]any)(unsafe.Pointer(&v.P))
 }
-func writeCollection10(f *evmbind.Frame, x map[string]any) values.Value {
+func writeCollection11(f *evmbind.Frame, x map[string]any) values.Value {
 	return values.Value{P: *(*unsafe.Pointer)(unsafe.Pointer(&x))}
 }
 func readScalarString(f *evmbind.Frame, v values.Value) string {

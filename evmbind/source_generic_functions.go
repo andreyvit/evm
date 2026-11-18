@@ -36,6 +36,9 @@ func functionNames(opt Options) map[string]bool {
 	for name := range opt.GenericFunctions {
 		names[name] = true
 	}
+	for name := range opt.Values {
+		names[name] = true
+	}
 	return names
 }
 

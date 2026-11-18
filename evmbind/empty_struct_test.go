@@ -15,16 +15,16 @@ import (
 func TestNativeEmptyStructCollections(t *testing.T) { testNativeEmptyStructCollections(t, nil) }
 func testNativeEmptyStructCollections(t *testing.T, static *evmbind.Static) {
 	t.Helper()
-	opt := evmbind.Options{Types: []reflect.Type{reflect.TypeFor[emptydata.SetHolder]()}, Methods: map[string][]string{"SetHolder": {"Has"}}, Static: static}
+	opt := evmbind.Options{Only: []string{"SetHolder"}, Types: []reflect.Type{reflect.TypeFor[emptydata.SetHolder]()}, Methods: map[string][]string{"SetHolder": {"Has"}}, Static: static}
 	if static != nil {
 		opt.Mode = evmbind.StaticOnly
 	}
-	schema, err := evmbind.NewTypes("sets", emptydata.Source, []string{"SetHolder"}, opt)
+	schema, err := evmbind.New("sets", emptydata.Source, opt)
 	if err != nil {
 		t.Fatal(err)
 	}
 	pkg := schema.Bind(nil)
-	consumer, err := evmbind.NewTypes("other", emptydata.Source, []string{"Consumer"}, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[emptydata.Consumer]()}})
+	consumer, err := evmbind.New("other", emptydata.Source, evmbind.Options{Only: []string{"Consumer"}, Types: []reflect.Type{reflect.TypeFor[emptydata.Consumer]()}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -269,7 +269,7 @@ func TestNativeErrorGuestTargetRetention(t *testing.T) {
 type NativeErrorBox struct{ Value any }
 
 func TestNativeErrorFieldRetention(t *testing.T) {
-	schema, err := evmbind.NewTypes("box", fstest.MapFS{"box.go": {Data: []byte("package box; type NativeErrorBox struct { Value any }")}}, nil, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[NativeErrorBox]()}})
+	schema, err := evmbind.New("box", fstest.MapFS{"box.go": {Data: []byte("package box; type NativeErrorBox struct { Value any }")}}, evmbind.Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[NativeErrorBox]()}})
 	if err != nil {
 		t.Fatal(err)
 	}

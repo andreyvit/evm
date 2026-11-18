@@ -32,12 +32,12 @@ func (h *importHost) Echo(_ *evm.Call, o *importconsumer.Options) importfixture.
 }
 
 func TestSharedSchemaImports(t *testing.T) {
-	dep, err := evmbind.NewTypes("data", importfixture.Source, nil, evmbind.Options{Instances: []evmbind.Instance{{Type: "Box", Native: reflect.TypeFor[importfixture.Box[importfixture.Permission]](), Args: []reflect.Type{reflect.TypeFor[importfixture.Permission]()}}}, Types: []reflect.Type{reflect.TypeFor[importfixture.Permission](), reflect.TypeFor[importfixture.Child]()}})
+	dep, err := evmbind.New("data", importfixture.Source, evmbind.Options{Selective: true, Instances: []evmbind.Instance{{Type: "Box", Native: reflect.TypeFor[importfixture.Box[importfixture.Permission]](), Args: []reflect.Type{reflect.TypeFor[importfixture.Permission]()}}}, Types: []reflect.Type{reflect.TypeFor[importfixture.Permission](), reflect.TypeFor[importfixture.Child]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	imports := map[string]*evmbind.Schema{"github.com/andreyvit/evm/evmbind/internal/importfixture": dep}
-	generated, err := evmbind.GenerateWithImports("host", "github.com/andreyvit/evm/evmbind/internal/importconsumer", "importbindings", importconsumer.Source, imports)
+	generated, err := evmbind.Generate("host", "github.com/andreyvit/evm/evmbind/internal/importconsumer", "importbindings", importconsumer.Source, evmbind.Options{Imports: imports})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,10 +63,10 @@ func TestSharedSchemaImports(t *testing.T) {
 		if schema.NativeType(reflect.TypeFor[importfixture.Child]()) != dep.Type("Child") {
 			t.Fatal("imported struct identity changed")
 		}
-		wrapper, err := evmbind.NewTypes("wrapper", fstest.MapFS{"api.go": {Data: []byte(`package wrapper
+		wrapper, err := evmbind.New("wrapper", fstest.MapFS{"api.go": {Data: []byte(`package wrapper
          import "github.com/andreyvit/evm/evmbind/internal/importconsumer"
          type WrappedOptions struct { Options *importconsumer.Options }
-        `)}}, nil, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[WrappedOptions]()}, Imports: map[string]*evmbind.Schema{"github.com/andreyvit/evm/evmbind/internal/importconsumer": schema}})
+        `)}}, evmbind.Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[WrappedOptions]()}, Imports: map[string]*evmbind.Schema{"github.com/andreyvit/evm/evmbind/internal/importconsumer": schema}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -105,18 +105,18 @@ type ImportKey uint16
 type ImportEnvelope struct{ Collections *ImportCollections }
 
 func TestImportedNativeCollections(t *testing.T) {
-	dep, err := evmbind.NewTypes("data", fstest.MapFS{"api.go": {Data: []byte(`package data
+	dep, err := evmbind.New("data", fstest.MapFS{"api.go": {Data: []byte(`package data
  type ImportKey uint16
  type ImportItem struct { Name string }
  type ImportCollections struct { Items [][]*ImportItem; Named map[ImportKey]*ImportItem }
- `)}}, []string{"ImportCollections"}, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[ImportCollections]()}})
+ `)}}, evmbind.Options{Only: []string{"ImportCollections"}, Types: []reflect.Type{reflect.TypeFor[ImportCollections]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	consumer, err := evmbind.NewTypes("host", fstest.MapFS{"api.go": {Data: []byte(`package host
+	consumer, err := evmbind.New("host", fstest.MapFS{"api.go": {Data: []byte(`package host
  import "example/data"
  type ImportEnvelope struct { Collections *data.ImportCollections }
- `)}}, nil, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[ImportEnvelope]()}, Imports: map[string]*evmbind.Schema{"example/data": dep}})
+ `)}}, evmbind.Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[ImportEnvelope]()}, Imports: map[string]*evmbind.Schema{"example/data": dep}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,25 +148,25 @@ func TestImportedNativeCollections(t *testing.T) {
 type ConsolidatedEnvelope struct{ Envelope *ImportEnvelope }
 
 func TestConsolidatedSchemaImports(t *testing.T) {
-	dep, err := evmbind.NewTypes("model", fstest.MapFS{"api.go": {Data: []byte(`package data
+	dep, err := evmbind.New("model", fstest.MapFS{"api.go": {Data: []byte(`package data
  type ImportKey uint16
  type ImportItem struct { Name string }
  type ImportCollections struct { Items [][]*ImportItem; Named map[ImportKey]*ImportItem }
- `)}}, []string{"ImportCollections"}, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[ImportCollections]()}})
+ `)}}, evmbind.Options{Only: []string{"ImportCollections"}, Types: []reflect.Type{reflect.TypeFor[ImportCollections]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	consumer, err := evmbind.NewTypes("model", fstest.MapFS{"api.go": {Data: []byte(`package host
+	consumer, err := evmbind.New("model", fstest.MapFS{"api.go": {Data: []byte(`package host
  import "example/data"
  type ImportEnvelope struct { Collections *data.ImportCollections }
- `)}}, nil, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[ImportEnvelope]()}, Imports: map[string]*evmbind.Schema{"example/data": dep}})
+ `)}}, evmbind.Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[ImportEnvelope]()}, Imports: map[string]*evmbind.Schema{"example/data": dep}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = evmbind.NewTypes("entry", fstest.MapFS{"api.go": {Data: []byte(`package entry
+	_, err = evmbind.New("entry", fstest.MapFS{"api.go": {Data: []byte(`package entry
  import "example/host"
  type ConsolidatedEnvelope struct { Envelope *host.ImportEnvelope }
- `)}}, nil, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[ConsolidatedEnvelope]()}, Imports: map[string]*evmbind.Schema{"example/host": consumer}})
+ `)}}, evmbind.Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[ConsolidatedEnvelope]()}, Imports: map[string]*evmbind.Schema{"example/host": consumer}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func (*aliasHost) Many(_ *evm.Call, children []*importfixture.Child) map[string]
 }
 
 func TestConsolidatedNativeTypeAliases(t *testing.T) {
-	dep, err := evmbind.NewTypes("bh", importfixture.Source, nil, evmbind.Options{Instances: []evmbind.Instance{{Type: "Box", Native: reflect.TypeFor[importfixture.Box[importfixture.Permission]](), Args: []reflect.Type{reflect.TypeFor[importfixture.Permission]()}}}, Types: []reflect.Type{reflect.TypeFor[importfixture.Child](), reflect.TypeFor[importfixture.Permission]()}})
+	dep, err := evmbind.New("bh", importfixture.Source, evmbind.Options{Selective: true, Instances: []evmbind.Instance{{Type: "Box", Native: reflect.TypeFor[importfixture.Box[importfixture.Permission]](), Args: []reflect.Type{reflect.TypeFor[importfixture.Permission]()}}}, Types: []reflect.Type{reflect.TypeFor[importfixture.Child](), reflect.TypeFor[importfixture.Permission]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestConsolidatedNativeTypeAliases(t *testing.T) {
 		if schema.Type("Child") != dep.Type("Child") || schema.Type("*Child") != dep.Type("*Child") {
 			t.Fatal("alias lookup changed type identity")
 		}
-		generated, err := evmbind.GenerateWithOptions("bh", "github.com/andreyvit/evm/evmbind/internal/aliasconsumer", "aliasbindings", src, evmbind.Options{Imports: imports})
+		generated, err := evmbind.Generate("bh", "github.com/andreyvit/evm/evmbind/internal/aliasconsumer", "aliasbindings", src, evmbind.Options{Imports: imports})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -216,7 +216,7 @@ func TestConsolidatedNativeTypeAliases(t *testing.T) {
 		if bytes.Contains(generated, []byte("api.Child")) {
 			t.Fatal("alias generated a duplicate native type")
 		}
-		wrapper, err := evmbind.NewTypes("wrapper", fstest.MapFS{"wrapper.go": {Data: []byte(`package wrapper;import "native/aliasconsumer";type AliasEnvelope struct{Child *aliasconsumer.Child}`)}}, nil, evmbind.Options{Imports: map[string]*evmbind.Schema{"native/aliasconsumer": schema}, Types: []reflect.Type{reflect.TypeFor[AliasEnvelope]()}})
+		wrapper, err := evmbind.New("wrapper", fstest.MapFS{"wrapper.go": {Data: []byte(`package wrapper;import "native/aliasconsumer";type AliasEnvelope struct{Child *aliasconsumer.Child}`)}}, evmbind.Options{Selective: true, Imports: map[string]*evmbind.Schema{"native/aliasconsumer": schema}, Types: []reflect.Type{reflect.TypeFor[AliasEnvelope]()}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -259,7 +259,7 @@ func TestConsolidatedNativeTypeAliases(t *testing.T) {
 type AliasEnvelope struct{ Child *importfixture.Child }
 
 func TestConsolidatedConstantReexports(t *testing.T) {
-	dep, err := evmbind.NewTypes("bh", importfixture.Source, nil, evmbind.Options{Instances: []evmbind.Instance{{Type: "Box", Native: reflect.TypeFor[importfixture.Box[importfixture.Permission]](), Args: []reflect.Type{reflect.TypeFor[importfixture.Permission]()}}}, Types: []reflect.Type{reflect.TypeFor[importfixture.Child](), reflect.TypeFor[importfixture.Permission]()}})
+	dep, err := evmbind.New("bh", importfixture.Source, evmbind.Options{Selective: true, Instances: []evmbind.Instance{{Type: "Box", Native: reflect.TypeFor[importfixture.Box[importfixture.Permission]](), Args: []reflect.Type{reflect.TypeFor[importfixture.Permission]()}}}, Types: []reflect.Type{reflect.TypeFor[importfixture.Child](), reflect.TypeFor[importfixture.Permission]()}})
 	if err != nil {
 		t.Fatal(err)
 	}

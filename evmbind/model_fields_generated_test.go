@@ -17,7 +17,7 @@ func TestGeneratedNativeModelPointerFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	generated, err := evmbind.GenerateTypesWithOptions("ctx", "github.com/andreyvit/evm/evmbind/internal/modelfielddata", "modelfieldbindings", modelfielddata.Source, nil, evmbind.Options{Methods: map[string][]string{"Context": {"Clone"}}, Imports: map[string]*evmbind.Schema{"github.com/andreyvit/evm/evmbind/internal/modeldata": dep}})
+	generated, err := evmbind.Generate("ctx", "github.com/andreyvit/evm/evmbind/internal/modelfielddata", "modelfieldbindings", modelfielddata.Source, evmbind.Options{Selective: true, Methods: map[string][]string{"Context": {"Clone"}}, Imports: map[string]*evmbind.Schema{"github.com/andreyvit/evm/evmbind/internal/modeldata": dep}})
 	if err != nil {
 		t.Fatal(err)
 	}

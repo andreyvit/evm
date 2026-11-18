@@ -20,10 +20,10 @@ type RecursiveNode struct {
 }
 
 func TestRecursivePointerCollectionIdentity(t *testing.T) {
-	schema, err := NewTypes("native", fstest.MapFS{"types.go": {Data: []byte(`package native
+	schema, err := New("native", fstest.MapFS{"types.go": {Data: []byte(`package native
  type ARecursiveRoot struct{Node *RecursiveNode}
  type RecursiveNode struct{Value int;Children []*RecursiveNode;ByName map[string]*RecursiveNode}
- `)}}, []string{"ARecursiveRoot", "RecursiveNode"}, Options{Types: []reflect.Type{reflect.TypeFor[ARecursiveRoot](), reflect.TypeFor[RecursiveNode]()}})
+ `)}}, Options{Only: []string{"ARecursiveRoot", "RecursiveNode"}, Types: []reflect.Type{reflect.TypeFor[ARecursiveRoot](), reflect.TypeFor[RecursiveNode]()}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestRecursivePointerCollectionIdentity(t *testing.T) {
 
 func TestRecursivePointerToCollectionReportsSchemaError(t *testing.T) {
 	for _, definition := range []string{"type X []*X", "type X map[string]*X"} {
-		_, err := NewTypes("native", fstest.MapFS{"types.go": {Data: []byte("package native;type A struct{P *X};" + definition)}}, []string{"A", "X"}, Options{})
+		_, err := New("native", fstest.MapFS{"types.go": {Data: []byte("package native;type A struct{P *X};" + definition)}}, Options{Only: []string{"A", "X"}})
 		if err == nil || !strings.Contains(err.Error(), "expected pointer to data struct or scalar") {
 			t.Fatalf("%s: %v", definition, err)
 		}

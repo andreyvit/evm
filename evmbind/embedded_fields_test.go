@@ -19,7 +19,7 @@ import (
 
 func TestNativeEmbeddedFields(t *testing.T) {
 	source := embeddedfixture.Source
-	generated, err := evmbind.Generate("page", "github.com/andreyvit/evm/evmbind/internal/embeddedfixture", "embeddedbindings", source)
+	generated, err := evmbind.Generate("page", "github.com/andreyvit/evm/evmbind/internal/embeddedfixture", "embeddedbindings", source, evmbind.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,11 +31,11 @@ func TestNativeEmbeddedFields(t *testing.T) {
 		t.Fatal("regenerate embedded bindings")
 	}
 	for _, static := range []*evmbind.Static{nil, &embeddedbindings.Bindings} {
-		opt := evmbind.Options{Types: []reflect.Type{reflect.TypeFor[embeddedfixture.Pointer](), reflect.TypeFor[embeddedfixture.Value]()}, Static: static}
+		opt := evmbind.Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[embeddedfixture.Pointer](), reflect.TypeFor[embeddedfixture.Value]()}, Static: static}
 		if static != nil {
 			opt.Mode = evmbind.StaticOnly
 		}
-		schema, err := evmbind.NewTypes("page", source, nil, opt)
+		schema, err := evmbind.New("page", source, opt)
 		if err != nil {
 			t.Fatal(err)
 		}

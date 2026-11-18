@@ -18,7 +18,7 @@ import (
 
 func TestGeneratedNativeTypeExportName(t *testing.T) {
 	opt := evmbind.Options{Host: reflect.TypeFor[*omittedHost](), TypeNames: map[string]string{"Page": "ViewData"}, OmitFields: map[string][]string{"Page": {"Private"}}}
-	generated, err := evmbind.GenerateWithOptions("page", "github.com/andreyvit/evm/evmbind/internal/omittedfixture", "renamedbindings", omittedfixture.Source, opt)
+	generated, err := evmbind.Generate("page", "github.com/andreyvit/evm/evmbind/internal/omittedfixture", "renamedbindings", omittedfixture.Source, opt)
 	if err != nil {
 		t.Fatal(err)
 	}

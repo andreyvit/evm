@@ -24,7 +24,8 @@ func TestOmittedNativeFields(t *testing.T) {
  import "unavailable/host"
  type ProjectedPage struct { Title string; Private host.Context; Count int }
  `)}}
-	schema, err := NewTypes("page", files, []string{"ProjectedPage"}, Options{
+	schema, err := New("page", files, Options{
+		Only:       []string{"ProjectedPage"},
 		Types:      []reflect.Type{reflect.TypeFor[ProjectedPage]()},
 		OmitFields: map[string][]string{"ProjectedPage": {"Private"}},
 	})
@@ -156,7 +157,8 @@ func TestOmittedNativeFieldsDoNotDiscoverHiddenTypes(t *testing.T) {
  type Page struct { Title string; Private *host.Page; private *host.Page; Items []*VisibleItem }
  type VisibleItem struct { Value string }
  `)}}
-	schema, err := NewTypes("page", files, []string{"Page"}, Options{
+	schema, err := New("page", files, Options{
+		Only:       []string{"Page"},
 		Types:      []reflect.Type{reflect.TypeFor[Page]()},
 		OmitFields: map[string][]string{"Page": {"Private", "private"}},
 	})
@@ -239,7 +241,7 @@ type HiddenSlice struct {
 
 func TestOmittedNativeFieldsStaticComparability(t *testing.T) {
 	files := fstest.MapFS{"native.go": {Data: []byte(`package native; type HiddenSlice struct {Visible int; hidden []int}`)}}
-	schema, err := NewTypes("native", files, []string{"HiddenSlice"}, Options{Types: []reflect.Type{reflect.TypeFor[HiddenSlice]()}, OmitFields: map[string][]string{"HiddenSlice": {"hidden"}}})
+	schema, err := New("native", files, Options{Only: []string{"HiddenSlice"}, Types: []reflect.Type{reflect.TypeFor[HiddenSlice]()}, OmitFields: map[string][]string{"HiddenSlice": {"hidden"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

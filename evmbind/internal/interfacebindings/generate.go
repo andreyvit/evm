@@ -11,11 +11,11 @@ import (
 )
 
 func main() {
-	dep, err := evmbind.NewTypes("domain", interfacedep.Source, nil, evmbind.Options{Types: []reflect.Type{reflect.TypeFor[interfacedep.Named](), reflect.TypeFor[interfacedep.NamedValue]()}, Methods: map[string][]string{"NamedValue": {"Label"}}})
+	dep, err := evmbind.New("domain", interfacedep.Source, evmbind.Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[interfacedep.Named](), reflect.TypeFor[interfacedep.NamedValue]()}, Methods: map[string][]string{"NamedValue": {"Label"}}})
 	if err != nil {
 		panic(err)
 	}
-	b, err := evmbind.GenerateWithImports("host", "github.com/andreyvit/evm/evmbind/internal/interfaceconsumer", "interfacebindings", interfaceconsumer.Source, map[string]*evmbind.Schema{"github.com/andreyvit/evm/evmbind/internal/interfacedep": dep})
+	b, err := evmbind.Generate("host", "github.com/andreyvit/evm/evmbind/internal/interfaceconsumer", "interfacebindings", interfaceconsumer.Source, evmbind.Options{Imports: map[string]*evmbind.Schema{"github.com/andreyvit/evm/evmbind/internal/interfacedep": dep}})
 	if err != nil {
 		panic(err)
 	}

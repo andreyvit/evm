@@ -23,7 +23,8 @@ func TestNativeModelEnumProperty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	native, err := evmbind.NewTypes("native", modelenum.Source, []string{"Kind", "Row"}, evmbind.Options{
+	native, err := evmbind.New("native", modelenum.Source, evmbind.Options{
+		Only:      []string{"Kind", "Row"},
 		Models:    &records,
 		Types:     []reflect.Type{reflect.TypeFor[modelenum.Row](), reflect.TypeFor[modelenum.Kind]()},
 		Methods:   map[string][]string{"Kind": {"String"}},

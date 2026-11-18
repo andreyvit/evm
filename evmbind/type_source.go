@@ -18,6 +18,91 @@ func selectTypeSyntaxMethods(files []*ast.File, names []string, methods map[stri
 }
 
 func selectTypeSyntaxFunctions(files []*ast.File, names []string, methods map[string][]string, functions []string) ([]*ast.File, map[string]bool, error) {
+	return selectSyntax(files, names, methods, functions, false, nil)
+}
+
+// wholeSelection selects every exported type, method and function, less
+// Options.Omit. A non-nil Options.Methods still chooses the methods.
+func wholeSelection(files []*ast.File, opt Options) (names []string, methods map[string][]string, functions map[string]bool, omit map[string]bool, err error) {
+	omit = map[string]bool{}
+	for _, name := range opt.Omit {
+		if omit[name] {
+			return nil, nil, nil, nil, fmt.Errorf("duplicate omitted declaration %s", name)
+		}
+		omit[name] = true
+	}
+	matched := map[string]bool{}
+	seen := func(name string) bool {
+		if omit[name] {
+			matched[name] = true
+			return true
+		}
+		return false
+	}
+	names = []string{}
+	exportedTypes := map[string]bool{}
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			g, ok := decl.(*ast.GenDecl)
+			if !ok {
+				continue
+			}
+			for _, spec := range g.Specs {
+				switch spec := spec.(type) {
+				case *ast.TypeSpec:
+					if spec.Name.IsExported() && !seen(spec.Name.Name) {
+						names = append(names, spec.Name.Name)
+						exportedTypes[spec.Name.Name] = true
+					}
+				case *ast.ValueSpec:
+					if g.Tok == token.CONST {
+						for _, name := range spec.Names {
+							seen(name.Name)
+						}
+					}
+				}
+			}
+		}
+	}
+	functions = functionNames(opt)
+	methods = opt.Methods
+	if methods == nil {
+		methods = map[string][]string{}
+	}
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || !fn.Name.IsExported() {
+				continue
+			}
+			if fn.Recv == nil {
+				if !seen(fn.Name.Name) {
+					functions[fn.Name.Name] = true
+				}
+				continue
+			}
+			receiver := embeddedFieldName(fn.Recv.List[0].Type)
+			if !seen(receiver+"."+fn.Name.Name) && opt.Methods == nil && exportedTypes[receiver] {
+				methods[receiver] = append(methods[receiver], fn.Name.Name)
+			}
+		}
+	}
+	for _, name := range opt.Omit {
+		if !matched[name] {
+			return nil, nil, nil, nil, fmt.Errorf("omitted declaration %s is not an exported type, function, constant or method in source", name)
+		}
+		if functions[name] {
+			return nil, nil, nil, nil, fmt.Errorf("omitted function %s is also bound in Options", name)
+		}
+	}
+	return names, methods, functions, omit, nil
+}
+
+// selectSyntax reduces native source to the declarations a schema exposes and
+// the local declarations they need. Function bodies, variables and unused
+// imports are dropped. allConstants keeps every constant block with an
+// exported name outside omit, not only the constants of exposed types.
+func selectSyntax(files []*ast.File, names []string, methods map[string][]string, functions []string, allConstants bool, omit map[string]bool) ([]*ast.File, map[string]bool, error) {
 	selectedMethods, err := selectMethods(files, methods)
 	if err != nil {
 		return nil, nil, err
@@ -163,6 +248,17 @@ func selectTypeSyntaxFunctions(files []*ast.File, names []string, methods map[st
 	for fn := range selectedMethods {
 		if !visitedMethods[fn] {
 			return nil, nil, fmt.Errorf("method receiver %s is not selected", embeddedFieldName(fn.Recv.List[0].Type))
+		}
+	}
+	if allConstants {
+		for _, g := range blocks {
+			for _, sp := range g.Specs {
+				for _, n := range sp.(*ast.ValueSpec).Names {
+					if n.IsExported() && !omit[n.Name] {
+						addBlock(g)
+					}
+				}
+			}
 		}
 	}
 	// Include aliases of selected enum constants, even across const blocks.

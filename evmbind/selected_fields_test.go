@@ -21,7 +21,7 @@ func TestSelectedFieldsPruneDependencies(t *testing.T) {
  type SelectedFieldFixture struct { Visible string; Hidden chan int; secret native.Unsupported }
  `)}}
 	for _, fields := range [][]string{{"Visible"}, {}} {
-		s, err := NewTypes("native", files, []string{"SelectedFieldFixture"}, Options{Types: []reflect.Type{reflect.TypeFor[SelectedFieldFixture]()}, Fields: map[string][]string{"SelectedFieldFixture": fields}})
+		s, err := New("native", files, Options{Only: []string{"SelectedFieldFixture"}, Types: []reflect.Type{reflect.TypeFor[SelectedFieldFixture]()}, Fields: map[string][]string{"SelectedFieldFixture": fields}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -61,7 +61,7 @@ func TestSelectedFieldsErrors(t *testing.T) {
 		{"conflict", map[string][]string{"A": {}}, map[string][]string{"A": {}}, "both Fields and OmitFields"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := NewTypes("native", files, []string{"A"}, Options{Fields: tc.fields, OmitFields: tc.omit})
+			_, err := New("native", files, Options{Only: []string{"A"}, Fields: tc.fields, OmitFields: tc.omit})
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want %s", err, tc.want)
 			}

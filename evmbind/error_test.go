@@ -21,7 +21,7 @@ import (
 )
 
 func TestNativeErrorBindings(t *testing.T) {
-	generated, err := evmbind.Generate("native", "github.com/andreyvit/evm/evmbind/internal/errorfixture", "errorbindings", errorfixture.Source)
+	generated, err := evmbind.Generate("native", "github.com/andreyvit/evm/evmbind/internal/errorfixture", "errorbindings", errorfixture.Source, evmbind.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

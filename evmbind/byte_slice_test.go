@@ -22,7 +22,7 @@ func (*byteSliceHost) Keep(_ *evm.Call, fn *evm.FunctionOf[func([]byte) int]) {}
 func TestByteSliceNativeIdentity(t *testing.T) {
 	var packages []evm.Package
 	for _, spelling := range []string{"byte", "uint8"} {
-		schema, err := NewTypes("host/"+spelling, fstest.MapFS{"types.go": {Data: []byte("package " + spelling + "; type ByteSliceBox struct { Data []" + spelling + " }")}}, []string{"ByteSliceBox"}, Options{Types: []reflect.Type{reflect.TypeFor[ByteSliceBox]()}})
+		schema, err := New("host/"+spelling, fstest.MapFS{"types.go": {Data: []byte("package " + spelling + "; type ByteSliceBox struct { Data []" + spelling + " }")}}, Options{Only: []string{"ByteSliceBox"}, Types: []reflect.Type{reflect.TypeFor[ByteSliceBox]()}})
 		if err != nil {
 			t.Fatal(err)
 		}

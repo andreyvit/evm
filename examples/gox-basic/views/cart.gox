@@ -1,0 +1,44 @@
+package views
+
+import (
+	"app"
+	"strings"
+
+	"github.com/andreyvit/evm/gox"
+)
+
+func CartSummary(b *gox.Builder, cart *app.Cart) {
+	<table>
+		for _, line := range cart.Lines {
+			<tr>
+				<td>line.Product.Name</td>
+				<td>line.Qty</td>
+				<td>line.Total().String()</td>
+			</tr>
+		}
+		<tr>
+			<td colspan="2">"Subtotal"</td>
+			<td>cart.Subtotal().String()</td>
+		</tr>
+		if cart.Coupon != "" {
+			<tr>
+				<td colspan="2">
+					"With coupon "
+					cart.Coupon | strings.ToLower
+				</td>
+				<td>app.Discount(cart.Subtotal(), 10).String()</td>
+			</tr>
+		}
+		<tr>
+			<td colspan="3">
+				if (cart.Subtotal() < app.FreeShippingThreshold) {
+					"Add "
+					(app.FreeShippingThreshold - cart.Subtotal()).String()
+					" more for free shipping"
+				} else {
+					"Free shipping"
+				}
+			</td>
+		</tr>
+	</table>
+}

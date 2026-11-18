@@ -209,6 +209,10 @@ Output:
 The host passes `name`; GoX supplies the builder. Compile and link once, then
 reuse `program`. The [executable example](example_test.go) checks this rendering
 path, and the [loyalty example](https://github.com/andreyvit/edb/tree/main/examples/loyalty) adds typed host models.
+[examples/gox-basic](../examples/gox-basic) renders a page from an ordinary Go
+application: its types, methods, functions and constants, bound from its own
+source. Its templates span several files, use a layout with slots and an
+implicit argument, and are recompiled between renders.
 
 ## Syntax
 

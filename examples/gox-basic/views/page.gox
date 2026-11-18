@@ -1,0 +1,43 @@
+package views
+
+import (
+	"app"
+
+	"github.com/andreyvit/evm/gox"
+)
+
+func Page(b *gox.Builder, store *app.Store, user *app.User, cart *app.Cart, q string) {
+	<Layout title={store.Name}>
+		<slot-styles>
+			<style>.out { opacity: .5 }</style>
+		</slot-styles>
+		<slot-content>
+			<Header user={user} cart={cart} />
+			<form><input name="q" value={q} placeholder="Search"></form>
+			<ProductList q={q} />
+			<CartSummary cart={cart} />
+		</slot-content>
+	</Layout>
+}
+
+// Callers do not pass store. *app.Store is an implicit type, so Header and
+// ProductList receive the store of whichever component calls them.
+func Header(b *gox.Builder, store *app.Store, user *app.User, cart *app.Cart) {
+	<header>
+		<h1>
+			"Welcome to "
+			store.Name
+		</h1>
+		<span class="avatar" title={user.Email}>user.Initials()</span>
+		" "
+		user.Name
+		if user.Admin {
+			" (admin)"
+		}
+		", member since "
+		user.Joined.Format("Jan 2006")
+		" — "
+		app.Pluralize(cart.Count(), "item", "items")
+		" in cart"
+	</header>
+}

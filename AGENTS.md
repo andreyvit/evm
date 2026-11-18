@@ -13,6 +13,7 @@ Go-with-HTML templates to EVM programs. KVO gives typed access to records.
 - `kvo`: models, typed properties, records, collections, editors and Go bindings.
 - `values` / `nativebind`: shared runtime values and native field operations.
 - `kvo/codec/row2`: Fast2/Compact2. `fast1` and `msgpack`: supported legacy codecs.
+- `examples`: runnable examples, one directory each, part of this module with no dependencies of their own.
 - `bench`: benchmarks. `bench/compare`: other engines, each in its own module.
 - `internal`: generators and test fixtures.
 

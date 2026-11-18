@@ -1,0 +1,45 @@
+package views
+
+import (
+	"app"
+
+	"github.com/andreyvit/evm/gox"
+)
+
+func ProductList(b *gox.Builder, store *app.Store, q string) {
+	<ul>
+		for _, p := range store.Search(q) {
+			<ProductRow p={p} />
+		}
+	</ul>
+}
+
+func ProductRow(b *gox.Builder, p *app.Product) {
+	<li class="product {stockClass(p)}">
+		<a href={p.URL()}>p.Name</a>
+		" "
+		p.Price.String()
+		if !p.InStock() {
+			<em>" sold out"</em>
+		}
+		for _, tag := range p.Tags {
+			" "
+			<span class="tag">
+				"#"
+				tag
+			</span>
+		}
+		<small>
+			" seen "
+			p.Viewed()
+			"×"
+		</small>
+	</li>
+}
+
+func stockClass(p *app.Product) string {
+	if p.InStock() {
+		return "in"
+	}
+	return "out"
+}

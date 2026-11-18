@@ -1,0 +1,21 @@
+package views
+
+import "github.com/andreyvit/evm/gox"
+
+// Layout is the page shell. The title is an ordinary argument. The content
+// and any extra styles are slots: the caller writes their markup, and Layout
+// decides where it goes. A slot named body would shadow the <body> tag here.
+//
+//gox:arg styles optional
+func Layout(b *gox.Builder, title string, styles func(), content func()) {
+	<html>
+		<head>
+			<title>title</title>
+			<style>.tag { font-size: 12px }</style>
+			if styles != nil {
+				styles()
+			}
+		</head>
+		<body>content()</body>
+	</html>
+}

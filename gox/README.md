@@ -128,7 +128,7 @@ implicit GoX reload service.
 **Native Go generation is planned, not implemented.** The intended pairing is
 EVM iteration during development and optional native precompilation for
 production, using the same templates and semantics. The
-[native compilation proposal](_docs/NATIVE-COMPILATION.md) covers shared lowering,
+[native compilation proposal](_docs/native-compilation.md) covers shared lowering,
 host bindings, parity tests, generated-code freshness and release fingerprints.
 Today's `GeneratedSources` is inspectable compiler output, not a deployable
 native-Go artifact.
@@ -737,7 +737,7 @@ contexts still apply contextual escaping. Native helpers can accept the same
 struct. `b.Text(...)` remains the imperative builder operation.
 
 EVM stores Content and common Optional specializations in one cell. Public Go
-fields and pointer semantics are preserved. See [compact value representations](_docs/COMPACT_VALUES.md)
+fields and pointer semantics are preserved. See [compact value representations](_docs/compact-values.md)
 for supported optional payloads, fallback layouts, and host binding details.
 
 ## Ambient context
@@ -1171,7 +1171,7 @@ go test ./gox -run '^$' -fuzz FuzzCompileGoX -fuzztime=15s
 go test ./gox -run '^$' -bench BenchmarkApplication -benchmem -benchtime=200ms -count=8
 ```
 
-The [application benchmarks](_docs/BENCHMARKS.md) use anonymized production-derived
+The [application benchmarks](_docs/benchmarks.md) use anonymized production-derived
 card, history and comparison templates, each at two sizes. Both engines render
 identical output to immutable strings using reused buffers. Compilation, linking
 and view-model preparation are excluded.

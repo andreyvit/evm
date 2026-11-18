@@ -24,7 +24,7 @@ traversal tests remain in place.
 go test ./kvo -run '^$' -bench '^BenchmarkRecordRetention$' -benchmem
 ```
 
-See [ownership and collection APIs](ACCESS.md#lifetimes-and-compatibility) before
+See [ownership and collection APIs](access.md#lifetimes-and-compatibility) before
 choosing a copy operation. The access-strategy measurements below are separate
 from cloning and retention.
 
@@ -40,7 +40,7 @@ this fixture, even after decoding.
 `Fast()` keeps an existing Fast2 view and otherwise calls `Fastest()`.
 `Fastest()` produces a Go struct when bound, or indexed decoded memory when
 unbound. Both return the same `Record` API and leave the stored format alone.
-Neither predicts the workload. See [usage, bindings and ownership](ACCESS.md).
+Neither predicts the workload. See [usage, bindings and ownership](access.md).
 
 ## Measurement procedure
 

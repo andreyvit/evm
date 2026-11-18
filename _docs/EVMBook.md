@@ -6,7 +6,7 @@ This book follows a Go script from source text to a result in a register. It
 is for contributors, for hosts tuning a hot path, and for anyone curious how a
 small VM for a statically typed language is put together. It explains the
 machine. To embed EVM in an application, start with the
-[README](../README.md) and the [host contracts](EMBEDDING.md).
+[README](../README.md) and the [host contracts](embedding.md).
 
 Chapters 1–3 give the model: who supplies what, how a value is stored, how a
 call passes arguments. Chapter 4 is a reference to return to. Chapters 5 and 6
@@ -331,7 +331,7 @@ commits.
 
 KVO records carry no hidden database key. Keep the lookup key separately, or
 store an ordinary property marked `kvo.PrimaryKey`. Full decoding does not restore
-an omitted key. See [access and ownership](../kvo/_docs/ACCESS.md).
+an omitted key. See [access and ownership](../kvo/_docs/access.md).
 
 ### 2.7 Collections and JSON in a record
 
@@ -339,7 +339,7 @@ A list of scalars or strings can stay in the row. When the compiler proves
 that a script only reads a list locally, the script holds KVO's 16-byte list
 cell and the VM caches the traversal state, so `for _, tag := range c.tags`
 builds no slice. A list that escapes or is modified becomes an owned slice.
-See [list cells](LIST-CELLS.md).
+See [list cells](list-cells.md).
 
 A JSON dictionary has fixed key type and dynamic values:
 
@@ -3378,7 +3378,7 @@ This chapter holds two kinds of statement. The mechanisms describe the
 current compiler, linker and evaluator. The timings are measurements from
 November 2026 on an Apple M5 Max with Go 1.27.3. Each shows what a mechanism
 bought when it was added, so the tables of later sections supersede earlier
-ones; §10.11 has the latest. The [benchmark report](BENCHMARKS.md) keeps
+ones; §10.11 has the latest. The [benchmark report](benchmarks.md) keeps
 revisions, inputs and commands.
 
 Five scripts recur, all in `bench/internal/workload`. **Price** values a
@@ -3519,7 +3519,7 @@ retention, writes and index maintenance. Include transaction setup for database
 claims. Exclude compilation only when the application reuses compiled programs.
 Report allocations and bytes alongside elapsed time.
 
-The [benchmark report](BENCHMARKS.md) retains dated comparisons, source
+The [benchmark report](benchmarks.md) retains dated comparisons, source
 revisions, workload sizes and commands. Historical runs used older record
 adapters and sometimes disabled Bolt sync. Their times are not current durable
 write latency. Small local timing differences need repeated paired runs;
@@ -3580,7 +3580,7 @@ one dispatch case for several public register forms. Imports beyond the 16-bit
 register-call range use ordinary window calls. Specialization must preserve
 cancellation, result ownership and aliases, not merely reduce instruction count.
 
-[Binding measurements](BINDINGS.md#measurements) include void calls, predicates,
+[Binding measurements](bindings.md#measurements) include void calls, predicates,
 record methods and unchanged controls. A wrapper's own work can dominate a call;
 compare generated and reflected bindings separately.
 
@@ -3666,7 +3666,7 @@ Go still spills the locals at the switch. The savings come from running several 
 
 On the M5 Max, the final linker cut Price from 24.09 to 19.97 µs and Mandelbrot from 217.50 to 177.86 µs. In scenario 0 of Price, 19,798 metered instructions became 1,133 ordinary dispatches, 14,932 private arithmetic steps and 3,733 folded loop increments/tests. The count still adds to 19,798. The private evaluator loaded and saved its locals 212 times each across the call. Linking a twelve-kernel module grew from 7.01 to 10.75 µs. The warm math scripts still allocated zero.
 
-A broader test compiled twelve other kernels and fifteen unmodified Gonum routines. The linker selected six local kernels and five from Gonum. At 512 elements, Horner took 50% less time, the two-stage filter 43%, Gonum's sum 56%, dot product 46%, and elementwise division 23%. The strided dot product and branch-heavy norms followed their original instruction streams. At eight iterations the midpoint integration loop took 9% longer. Its plan writes several short-lived results back to the frame, and there are few iterations to pay for entry and exit. Sieve took 2.7% longer. The paired medians for the database reads and writes moved by at most 1.1%. [Full corpus, allocations and per-round measurements](BENCHMARKS.md#scalar-scratch-registers-2026-11-04)
+A broader test compiled twelve other kernels and fifteen unmodified Gonum routines. The linker selected six local kernels and five from Gonum. At 512 elements, Horner took 50% less time, the two-stage filter 43%, Gonum's sum 56%, dot product 46%, and elementwise division 23%. The strided dot product and branch-heavy norms followed their original instruction streams. At eight iterations the midpoint integration loop took 9% longer. Its plan writes several short-lived results back to the frame, and there are few iterations to pay for entry and exit. Sieve took 2.7% longer. The paired medians for the database reads and writes moved by at most 1.1%. [Full corpus, allocations and per-round measurements](benchmarks.md#scalar-scratch-registers-2026-11-04)
 
 In six rounds with the native Lua runners, Price took 19.94 µs in EVM, 27.74 in PUC Lua, 24.08 in LuaJIT with tracing off, and 4.66 with tracing on. For Mandelbrot the same four times were 176.25, 196.64, 405.84 and 21.59 µs. PUC Lua still led EVM on Fibonacci, Sieve and the ordinary external scan.
 

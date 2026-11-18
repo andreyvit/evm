@@ -734,8 +734,8 @@ One line per capability. The linked documents hold the contracts.
 
 ### EVM
 
-Details: [host contracts](_docs/EMBEDDING.md), [`evmbind`](evmbind/README.md),
-[hand-written bindings](_docs/BINDINGS.md), [`values`](values/README.md),
+Details: [host contracts](_docs/embedding.md), [`evmbind`](evmbind/README.md),
+[hand-written bindings](_docs/bindings.md), [`values`](values/README.md),
 [standard packages](evmstd/API.md).
 
 #### Compile
@@ -1031,11 +1031,11 @@ methods and fields directly.
   not remove the cost of a host function or of decoding a row.
 - Measure the whole operation. A field read that allocates nothing does not
   make the request around it free.
-- Reports: [EVM](_docs/BENCHMARKS.md), [bindings](_docs/BINDINGS.md),
-  [record methods](_docs/BENCH-RECORD-METHODS.md),
-  [list traversal](_docs/LIST-CELLS.md), [GoX](gox/_docs/BENCHMARKS.md),
-  [typed KVO access](kvo/_docs/BENCH-TYPED-ACCESS.md),
-  [KVO access strategies](kvo/_docs/BENCH-RECORD-ACCESS.md).
+- Reports: [EVM](_docs/benchmarks.md), [bindings](_docs/bindings.md),
+  [record methods](_docs/bench-record-methods.md),
+  [list traversal](_docs/list-cells.md), [GoX](gox/_docs/benchmarks.md),
+  [typed KVO access](kvo/_docs/bench-typed-access.md),
+  [KVO access strategies](kvo/_docs/bench-record-access.md).
 
 #### Trust
 
@@ -1189,8 +1189,8 @@ generate native Go; `GeneratedSources` is for inspection.
 
 ### KVO
 
-Details: [KVO](kvo/README.md), [access guide](kvo/_docs/ACCESS.md),
-[records in scripts](_docs/EMBEDDING.md#records-in-scripts).
+Details: [KVO](kvo/README.md), [access guide](kvo/_docs/access.md),
+[records in scripts](_docs/embedding.md#records-in-scripts).
 
 #### Declare
 

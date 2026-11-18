@@ -16,11 +16,11 @@ controls. A zero-allocation property read is not a zero-allocation transaction.
 
 ## Results
 
-- [Execution and interpreter comparisons](../_docs/BENCHMARKS.md)
-- [Host bindings](../_docs/BINDINGS.md#measurements)
-- [Record methods](../_docs/BENCH-RECORD-METHODS.md)
-- [Borrowed list cells](../_docs/LIST-CELLS.md)
-- [KVO access and decoding](../kvo/_docs/BENCH-RECORD-ACCESS.md)
+- [Execution and interpreter comparisons](../_docs/benchmarks.md)
+- [Host bindings](../_docs/bindings.md#measurements)
+- [Record methods](../_docs/bench-record-methods.md)
+- [Borrowed list cells](../_docs/list-cells.md)
+- [KVO access and decoding](../kvo/_docs/bench-record-access.md)
 - [Scratch-register experiment and reproduction](compare/scratch/README.md)
 
 Results belong to their recorded revision, hardware and workload. Historical

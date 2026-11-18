@@ -3,7 +3,7 @@
 Direct value conversion, measured 2026-11-10:
 `BenchmarkValueRendering` fell from 176.6 µs / 3,928 allocations to 84.4 µs /
 2,054 allocations by removing serialization and reparsing before rendering.
-See [conversion measurements and methodology](../../_docs/BENCHMARKS.md#direct-value-conversion-2026-11-10).
+See [conversion measurements and methodology](../../_docs/benchmarks.md#direct-value-conversion-2026-11-10).
 The application results below describe their original measurement date.
 
 The application suite adapts three production template shapes into an anonymous

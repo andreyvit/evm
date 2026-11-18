@@ -511,10 +511,10 @@ allocation-free. A helper's own allocations are its responsibility. Generated
 files are excluded by `evmreflect`; supply an empty `StaticMethods` and use
 `Automatic` under that tag if reflection-only development builds are desired.
 
-See [record-method benchmarks](../_docs/BENCH-RECORD-METHODS.md) and the executable
+See [record-method benchmarks](../_docs/bench-record-methods.md) and the executable
 generation example in `internal/methodfixture/gen`.
 
-See [binding consolidation benchmarks and API guide](../_docs/BINDINGS.md) for
+See [binding consolidation benchmarks and API guide](../_docs/bindings.md) for
 void calls, metadata reuse, and manual Shape/DirectBinding declarations.
 
 Native Go function types can also appear in data fields and ordinary method

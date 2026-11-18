@@ -344,7 +344,7 @@ The first eight workloads scan 512 customers or edit 410 of them. The last four 
 
 The three largest paired slowdowns were rerun for ten rounds with 900 ms samples. The indexed KVO read was +0.7%, the Fast Bolt write +1.8% and the Compact memory write +0.6%. All three changed direction across pairs. Their median differences are small compared with the variation across pairs. A one- or two-percent regression remains unresolved.
 
-[Individual samples](../bench/interpreter-kernels.tsv) include a separate earlier run under heavy compilation load (`*-contended`). The unchanged pricing baseline rose from about 30 µs to 92 µs in that run. For the comparison above we waited until fewer than three compiler, linker or maintenance processes were present and two baseline pricing probes were under 37 µs. No individual samples were dropped from either set. The [workload descriptions and upstream sources](BENCHMARKS.md#interpreter-kernels) document the three ports.
+[Individual samples](../bench/interpreter-kernels.tsv) include a separate earlier run under heavy compilation load (`*-contended`). The unchanged pricing baseline rose from about 30 µs to 92 µs in that run. For the comparison above we waited until fewer than three compiler, linker or maintenance processes were present and two baseline pricing probes were under 37 µs. No individual samples were dropped from either set. The [workload descriptions and upstream sources](benchmarks.md#interpreter-kernels) document the three ports.
 
 ## Draft KVO rows
 
@@ -491,7 +491,7 @@ go test ./internal/evmbench -run '^$' -bench '^Benchmark(KVO(Compact)?(Bolt)?|Cu
 
 The figures in this section predate direct MessagePack access (2026-11-07).
 MessagePack property views borrow encoded bytes and support explicit
-decode-once hints. See [current access strategy measurements](../kvo/_docs/BENCH-RECORD-ACCESS.md).
+decode-once hints. See [current access strategy measurements](../kvo/_docs/bench-record-access.md).
 
 `BenchmarkAccountState` uses 4,096 synthetic Bolt rows and one secondary index on the nested balance. Each row has counters, timestamps, an inline totals object, ID lists and sparse per-key histories and progress objects. The cardinalities are deterministic fixture choices. No customer data is needed. The reader visits every row and scores the active ones. The writer updates the revision and balance of 3,277 active rows in one transaction and moves their index entries. It alternates revision 1 and 2. Setup, compilation and final full-row verification are outside the timer.
 

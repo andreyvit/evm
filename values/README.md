@@ -76,4 +76,4 @@ Shape helpers operate on VM cells, **not arbitrary native Go pointers**.
 operations. Raw codec fields remain codec metadata; convert them to `Value`
 with the declared encoding.
 
-See [EVM](../README.md) and [KVO access](../kvo/_docs/ACCESS.md).
+See [EVM](../README.md) and [KVO access](../kvo/_docs/access.md).

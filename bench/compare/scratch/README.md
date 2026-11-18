@@ -75,4 +75,4 @@ go tool objdump -s '\(\*floatLoop\)\.run$' "$trial/ship/bench"
 
 The current counter prints workload, scenario, ordinary dispatches, private steps, original loop-control words folded, scratch loads, final stores, scratch moves and extra frame spills. Original metered instructions equal ordinary dispatches + private steps + folded words − extra spills. A scratch load or final store is setup/teardown and has no guest instruction cost. Assembly spills chosen by Go are separate from explicit frame spills in the plan.
 
-[Measurements, including the routines that stayed on ordinary dispatch](../../../_docs/BENCHMARKS.md#scalar-scratch-registers-2026-11-04)
+[Measurements, including the routines that stayed on ordinary dispatch](../../../_docs/benchmarks.md#scalar-scratch-registers-2026-11-04)

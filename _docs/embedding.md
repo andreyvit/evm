@@ -2,7 +2,7 @@
 
 The [README](../README.md) lists what EVM can do. This file states the
 contracts a host relies on when it embeds the VM. [`evmbind`](../evmbind/README.md)
-covers bindings built from Go source; [binding declarations](BINDINGS.md)
+covers bindings built from Go source; [binding declarations](bindings.md)
 covers hand-written ones.
 
 ## Sessions
@@ -47,7 +47,7 @@ appear as variables in generated package documentation.
 ### Hand-written packages
 
 Manual APIs use `Package.Types`, `Functions` and `Methods`; see
-[binding declarations](BINDINGS.md). Only supplied exports satisfy imports.
+[binding declarations](bindings.md). Only supplied exports satisfy imports.
 Compile and Link accept each package path once; `evm.MergePackages` combines
 bindings that contribute to the same path.
 A `Call` and its argument/result windows are borrowed for that callback. Read

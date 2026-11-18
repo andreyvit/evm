@@ -195,8 +195,8 @@ computes them at link time. Prepare a step with
 error, and the `WithWriter` forms reuse encoding scratch. `ValuePropRef` gives
 raw access to an encoded aggregate; prefer a typed map.
 
-Measurements: [typed access](BENCH-TYPED-ACCESS.md) and
-[batched writes](BENCH-RECORD-ACCESS.md#batched-writes-and-borrowed-dictionaries).
+Measurements: [typed access](bench-typed-access.md) and
+[batched writes](bench-record-access.md#batched-writes-and-borrowed-dictionaries).
 
 ## Access by code
 
@@ -301,7 +301,7 @@ borrowed element is live all get an ordinary materialized slice. The ownership
 copies at scope boundaries still happen. The VM checks the element type when
 it accepts a cell.
 
-[Paired EVM and Go measurements](../../_docs/LIST-CELLS.md).
+[Paired EVM and Go measurements](../../_docs/list-cells.md).
 
 ## Decoding once
 
@@ -368,7 +368,7 @@ Decoding does not cache collections: `Get` on a Go struct still builds the
 collection value each time. Keep the value if you traverse it repeatedly.
 
 `Fastest` is a request to decode fully. It does not predict a workload or pick
-the faster path. [Measurements and commands](BENCH-RECORD-ACCESS.md).
+the faster path. [Measurements and commands](bench-record-access.md).
 
 ## Go structs shared with scripts
 

@@ -112,11 +112,11 @@ Go code must do it by hand.
 
 ## More
 
-- [Access guide](_docs/ACCESS.md): typed properties, maps and child editors,
+- [Access guide](_docs/access.md): typed properties, maps and child editors,
   borrowed lists, decoding once, MessagePack edits, JSON, lifetimes, and how to
   choose an access strategy.
-- [Records in scripts](../_docs/EMBEDDING.md#records-in-scripts) and
+- [Records in scripts](../_docs/embedding.md#records-in-scripts) and
   [record methods](../evmbind/README.md#explicit-record-methods).
-- Measurements: [typed access](_docs/BENCH-TYPED-ACCESS.md),
-  [access strategies](_docs/BENCH-RECORD-ACCESS.md),
-  [list traversal](../_docs/LIST-CELLS.md).
+- Measurements: [typed access](_docs/bench-typed-access.md),
+  [access strategies](_docs/bench-record-access.md),
+  [list traversal](../_docs/list-cells.md).

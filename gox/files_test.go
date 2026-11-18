@@ -9,6 +9,9 @@ import (
 func TestGoXFiles(t *testing.T) {
 	tmpl, err := gox.CompileSources(map[string]string{
 		"blocks/card.gox": `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Card(b *gox.Builder) { <p>{"card"}</p> }; func Label() string { return "label" }`,
 		"empty.gox": `package plugin
 var number = 1`,

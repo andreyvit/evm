@@ -19,14 +19,7 @@ func (c *compiler) captureAmbientCall(call *ast.CallExpr, sig *types.Signature, 
 		return call
 	}
 	delete(c.ambientCaptures, pos)
-	typeName := func(t types.Type) string {
-		return types.TypeString(t, func(p *types.Package) string {
-			if p == c.pkg {
-				return ""
-			}
-			return p.Name()
-		})
-	}
+	typeName := func(t types.Type) string { return types.TypeString(t, c.qualify) }
 	typ, _ := parser.ParseExpr(typeName(capture.typ))
 	clearPositions(typ)
 	ft := &ast.FuncType{Params: &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ast.NewIdent(capture.name)}, Type: typ}}}}

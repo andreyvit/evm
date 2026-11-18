@@ -11,6 +11,9 @@ import (
 
 func TestDataAttributesPreserveActionsAndEscapeText(t *testing.T) {
 	source := `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, text string) {
  b.Open("input")
  b.Attr("type", "file")
@@ -27,12 +30,24 @@ func Page(b *gox.Builder, text string) {
 func TestDataAttributesRejectInvalidContextsAndNames(t *testing.T) {
 	for _, source := range []string{
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) { b.Data("action", "x") }`,
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) { <div>"child"; b.Data("action", "x")</div> }`,
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) { <div>b.Data("", "x")</div> }`,
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) { <div>b.Data("x\" onclick", "x")</div> }`,
 	} {
 		tmpl, err := gox.Compile("data.gox", source)
@@ -52,6 +67,9 @@ func Page(b *gox.Builder) { <div>b.Data("x\" onclick", "x")</div> }`,
 
 func TestDataAttributesRespectOutputLimit(t *testing.T) {
 	tmpl, err := gox.Compile("data.gox", `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, text string) { <div>b.Data("value", text)</div> }`)
 	if err != nil {
 		t.Fatal(err)
@@ -68,6 +86,9 @@ func Page(b *gox.Builder, text string) { <div>b.Data("value", text)</div> }`)
 
 func TestAttrOrOmit(t *testing.T) {
 	source := `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, anchor string) {
  <a title="existing">
   b.AttrOrOmit("id", anchor)
@@ -93,6 +114,9 @@ func Page(b *gox.Builder, anchor string) {
 
 func TestAttrOrOmitPreservesTrustedCSS(t *testing.T) {
 	got := render(t, `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {
   <div>
    b.AttrOrOmit("style", gox.CSS("color:red;display:block"))

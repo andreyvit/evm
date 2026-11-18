@@ -19,6 +19,13 @@ import (
 
 func TestGoXPreparationAndHelper(t *testing.T) {
 	source := `package plugin
+
+import (
+	"fmt"
+
+	"github.com/andreyvit/evm/gox"
+)
+
 func Page(b *gox.Builder,
  name string,
  count int,
@@ -74,6 +81,9 @@ func render(t *testing.T, source string, args ...values.Value) string {
 }
 func TestContextualEscaping(t *testing.T) {
 	source := `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, value string) {
  <a href={value} title={value}>{value}</a>
  <img srcset={value}>
@@ -105,6 +115,9 @@ func Page(b *gox.Builder, value string) {
 }
 func TestNilOutputAndStrict(t *testing.T) {
 	source := `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {
  var customer *Customer
  <p>
@@ -128,7 +141,7 @@ func Page(b *gox.Builder) {
 	if err != nil || got != "<p>beforeafter</p>" || len(diagnostics) != 1 {
 		t.Fatalf("%q %v %v", got, err, diagnostics)
 	}
-	if diagnostics[0].Position.File != "nil.gox" || diagnostics[0].Position.Line != 6 {
+	if diagnostics[0].Position.File != "nil.gox" || diagnostics[0].Position.Line != 9 {
 		t.Fatalf("position: %+v", diagnostics)
 	}
 	_, err = p.Render(context.Background(), nil, gox.RenderOptions{Strict: true})
@@ -138,6 +151,9 @@ func Page(b *gox.Builder) {
 }
 func TestAttributesFromHelper(t *testing.T) {
 	source := `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, disabled bool) {
  <button class="base">
   decorate(disabled)
@@ -158,10 +174,19 @@ func Page(b *gox.Builder, disabled bool) {
 func TestRejectsBrokenStructureAndTypes(t *testing.T) {
 	for _, source := range []string{
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {` + "\n" + `<div>` + "\n" + `if true {` + "\n" + `</div>` + "\n" + `} }`,
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {` + "\n" + `<p>{unknown}</p>` + "\n" + `}`,
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {` + "\n" + `<script type={"x"}>const x=1;</script>` + "\n" + `}`,
 	} {
 		_, err := gox.Compile("bad.gox", source)
@@ -174,6 +199,13 @@ func Page(b *gox.Builder) {` + "\n" + `<script type={"x"}>const x=1;</script>` +
 func TestComponentsSlotsAndImplicitInputs(t *testing.T) {
 	sources := map[string]string{
 		"page.gox": `package plugin
+
+import (
+	"fmt"
+
+	"github.com/andreyvit/evm/gox"
+)
+
 func Page(b *gox.Builder, page string) {
  <main>
   for i:=0;(i<2);i++ {
@@ -187,6 +219,9 @@ func Page(b *gox.Builder, page string) {
  </main>
  }`,
 		"wrapper.gox": `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 //gox:arg page implicit
 func Wrapper(b *gox.Builder, page string, label string, body func()) {
  <Button label={label}>
@@ -196,6 +231,9 @@ func Wrapper(b *gox.Builder, page string, label string, body func()) {
  </Button>
  }`,
 		"button.gox": `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 //gox:arg page implicit
 func Button(b *gox.Builder, page string,label string,body func()) {
  <button title={page}>
@@ -224,6 +262,9 @@ func Button(b *gox.Builder, page string,label string,body func()) {
 }
 func TestLocalAndPolymorphicComponents(t *testing.T) {
 	source := `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, prefix string) {
  item := func(value string) {
   <b>
@@ -244,6 +285,9 @@ func Page(b *gox.Builder, prefix string) {
 }
 func TestLexicalAndWhitespaceBoundaries(t *testing.T) {
 	source := `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {
  text := ` + "`" + `
  <div>not markup</div>
@@ -268,6 +312,9 @@ func TestRenderHelpersCanChangeImplementation(t *testing.T) {
 		`func greeting(b *gox.Builder,name string) { b.HTML(gox.HTML("<b>" + name + "</b>")) }`,
 	} {
 		source := `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, name string) {
  <p>
   greeting(name)
@@ -281,6 +328,9 @@ func Page(b *gox.Builder, name string) {
 }
 func TestControlFlowAndClasses(t *testing.T) {
 	source := `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {
  <ul class="list">
   for i:=0;(i<4);i++ {
@@ -318,6 +368,9 @@ func Page(b *gox.Builder) {
 		t.Fatal(tmpl.Classes)
 	}
 	if got := render(t, `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {
  <div />
  <p> {"ok"} </p>
@@ -327,6 +380,13 @@ func Page(b *gox.Builder) {
 }
 func TestPipelinesAndTypedSlots(t *testing.T) {
 	source := `package plugin
+
+import (
+	"strings"
+
+	"github.com/andreyvit/evm/gox"
+)
+
 func Page(b *gox.Builder, name string) {
  <section>
   name | upper
@@ -359,6 +419,13 @@ func TestKVOInputs(t *testing.T) {
 	model := kvo.NewModel(schema, entity, func(b *kvo.ModelBuilder) { b.Prop(schema.MustPropByCode(name)) })
 	pkg := evm.Package{Path: "db", Records: []*evm.RecordType{evm.NewRecordType("Customer", model, false)}}
 	tmpl, err := gox.Compile("record.gox", `package plugin
+
+import (
+	"db"
+
+	"github.com/andreyvit/evm/gox"
+)
+
 func Page(b *gox.Builder, customer *db.Customer) {
  <p>{customer.name}</p>
  }`, pkg)
@@ -384,6 +451,13 @@ func Page(b *gox.Builder, customer *db.Customer) {
 func TestLinkingLimitsAndConcurrency(t *testing.T) {
 	pkg := evm.Package{Path: "host", Functions: []evm.ExternalFunction{{Name: "Label", Signature: evm.Signature{Results: []*values.Type{values.StringType}}}}}
 	tmpl, err := gox.Compile("host.gox", `package plugin
+
+import (
+	"host"
+
+	"github.com/andreyvit/evm/gox"
+)
+
 func Page(b *gox.Builder) {
  <p>{host.Label()}</p>
  }`, pkg)
@@ -422,6 +496,9 @@ func Page(b *gox.Builder) {
 }
 func BenchmarkRender(b *testing.B) {
 	source := `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, rows []string) {
  <ul>
   for _, name := range rows {
@@ -489,6 +566,9 @@ func Page(b *gox.Builder, rows []string) {
 
 func TestInlineContextsNilAndSourceErrors(t *testing.T) {
 	source := `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {
  var customer *Customer
  <a title="prefix {customer.Name} suffix">{"ok"}</a>
@@ -500,6 +580,9 @@ func Page(b *gox.Builder) {
 		t.Fatal(got)
 	}
 	source = `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 // Header comment
  func Page(b *gox.Builder,
   n int,
@@ -515,7 +598,7 @@ func Page(b *gox.Builder) {
 		t.Fatal(err)
 	}
 	_, err = p.Render(context.Background(), []values.Value{values.Int(0)}, gox.RenderOptions{})
-	if !errors.Is(err, evm.ErrDivideByZero) || !strings.Contains(err.Error(), "division.gox:6") {
+	if !errors.Is(err, evm.ErrDivideByZero) || !strings.Contains(err.Error(), "division.gox:9") {
 		t.Log(tmpl.GeneratedSource)
 		var execution *evm.ExecutionError
 		if errors.As(err, &execution) {
@@ -524,8 +607,11 @@ func Page(b *gox.Builder) {
 		t.Fatal(err)
 	}
 }
-func TestAutoimportShadowingAndTypeSwitch(t *testing.T) {
+func TestLocalShadowsPackageNameAndTypeSwitch(t *testing.T) {
 	source := `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {
  fmt := struct{Title string}{"local"}
  var value any = "hello"
@@ -546,6 +632,9 @@ func Page(b *gox.Builder) {
 
 func TestTextAndCSSFormats(t *testing.T) {
 	text, err := (gox.Options{Format: gox.TextFormat}).Compile("message.gox", `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, name string) {
  "Hello, "
  name
@@ -563,6 +652,9 @@ func Page(b *gox.Builder, name string) {
 		t.Fatalf("%q %v", got, err)
 	}
 	css, err := (gox.Options{Format: gox.CSSFormat}).Compile("theme.gox", `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, color string) {
  ".button { color: "
  color
@@ -583,6 +675,13 @@ func Page(b *gox.Builder, color string) {
 
 func TestNilGuardsPreserveEvaluationOrder(t *testing.T) {
 	source := `package plugin
+
+import (
+	"fmt"
+
+	"github.com/andreyvit/evm/gox"
+)
+
 func Page(b *gox.Builder) {
  var customer *Customer
  calls:=0
@@ -601,6 +700,9 @@ func Page(b *gox.Builder) {
 		t.Fatal(got)
 	}
 	got = render(t, `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {
  var customer *Customer
  <div>
@@ -617,6 +719,9 @@ func Page(b *gox.Builder) {
 
 func TestBuilderHelperEscapingAndTagLifetime(t *testing.T) {
 	source := `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, name, url string) {
  <div>
   link(name,url)
@@ -632,6 +737,9 @@ func Page(b *gox.Builder, name, url string) {
 		t.Fatal(got)
 	}
 	got := render(t, `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {
  <button disabled>
   b.Attr("disabled",false)
@@ -646,6 +754,9 @@ func Page(b *gox.Builder) {
 		t.Fatal(got)
 	}
 	tmpl, err := gox.Compile("late.gox", `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {
  <p>
   "text"
@@ -667,13 +778,31 @@ func Page(b *gox.Builder) {
 func FuzzCompileGoX(f *testing.F) {
 	for _, source := range []string{
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {}`, `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {` + "\n" + `<p>{"hello"}</p>` + "\n" + `}`, `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, x *X) {` + "\n" + `<p>{x.Name}</p>` + "\n" + `} type X struct{Name string}`,
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {` + "\n" + `<Unknown />` + "\n" + `}`, `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, x int) {` + "\n" + `<div>{x + "bad"}</div>` + "\n" + `}`,
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {` + "\n" + `<script>const x={=unknown};</script>` + "\n" + `}`,
 	} {
 		f.Add(source)
@@ -689,16 +818,25 @@ func Page(b *gox.Builder) {` + "\n" + `<script>const x={=unknown};</script>` + "
 func TestRenderingEffectsCannotBypassContextualEscaping(t *testing.T) {
 	for _, source := range []string{
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, payload string) {
  <script>{=hidden(payload)}</script>
  }
  func hidden(b *gox.Builder,payload string)int {b.Text(payload);return 0}`,
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, payload string) {
  <a title={hidden(payload)}>{"ok"}</a>
  }
  func hidden(b *gox.Builder,payload string)string {b.Text(payload);return "value"}`,
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, payload string) {
  body := func() {
   <p>{payload}</p>
@@ -707,6 +845,9 @@ func Page(b *gox.Builder, payload string) {
  }
  func invoke(body func())int {body();return 0}`,
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, payload string) {
  <host>
   <slot-body>
@@ -719,6 +860,9 @@ func Page(b *gox.Builder, payload string) {
  }
  func invoke(body func())int {body();return 0}`,
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, payload string) {
  <host>
   <slot-body>
@@ -731,6 +875,9 @@ func Page(b *gox.Builder, payload string) {
  }
  func invoke(body func())int {body();return 0}`,
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, payload string) {
  <host>
   <slot-body>
@@ -760,6 +907,9 @@ func Page(b *gox.Builder, payload string) {
 
 func TestRenderingClosureCannotReturnValue(t *testing.T) {
 	_, err := gox.Compile("effect.gox", `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {
  body := func()int {
   <p>{"unsafe"}</p>
@@ -774,6 +924,9 @@ func Page(b *gox.Builder) {
 
 func TestUnicodeAndNativeScriptDelimiters(t *testing.T) {
 	source := `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {
  <p title={"Привет 🌍"}>{"Здравствуйте"}</p>
  <script>const k="K";const s={="</script>"};const z="</scriptish>";</SCRIPT>
@@ -790,6 +943,9 @@ func Page(b *gox.Builder) {
 
 func TestStaticClassInventory(t *testing.T) {
 	tmpl, err := gox.Compile("classes.gox", `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, tone string) {
  const spacing = "px-4 " + "py-2"
  <div class="base bg-{tone} {"rounded"} suffix">
@@ -813,6 +969,9 @@ func Page(b *gox.Builder, tone string) {
 		t.Fatalf("%v dynamic=%v", tmpl.Classes, tmpl.DynamicClasses)
 	}
 	tmpl, err = gox.Compile("static.gox", `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {
  <div>
   b.Class("static")
@@ -828,6 +987,9 @@ func Page(b *gox.Builder) {
 
 func TestRootComponentReturningHTML(t *testing.T) {
 	got := render(t, `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {
  <hello />
  }
@@ -839,6 +1001,9 @@ func Page(b *gox.Builder) {
 
 func TestNestedAndEmptySlots(t *testing.T) {
 	got := render(t, `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {
  <panel>
   <slot-body>
@@ -864,6 +1029,9 @@ func Page(b *gox.Builder) {
 func TestRendererFunctionsAsValues(t *testing.T) {
 	sources := map[string]string{
 		"page.gox": `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, title string) {
  chosen := Button
  <Wrapper component={chosen} title={title} />
@@ -872,10 +1040,16 @@ func Page(b *gox.Builder, title string) {
  </div>
  }`,
 		"button.gox": `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Button(b *gox.Builder, title string) {
  <button>{title}</button>
  }`,
 		"wrapper.gox": `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Wrapper(b *gox.Builder, component func(b *gox.Builder,title string),title string) {
  <section>
   <component title={title} />
@@ -902,6 +1076,9 @@ func Wrapper(b *gox.Builder, component func(b *gox.Builder,title string),title s
 func TestRetainedRenderer(t *testing.T) {
 	tmpl, err := gox.CompileFiles("page.gox", map[string]string{
 		"page.gox": `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, title string) {
  <p>{title}</p>
  }`,
@@ -989,7 +1166,7 @@ func Invalid()func()int{return func()int{return 1}}
 
 func TestMarkupIndependentOfLines(t *testing.T) {
 	for _, body := range []string{`<p>name<strong>"VIP"</strong></p>`, "<p>\nname\n<strong>\n\"VIP\"\n</strong>\n</p>"} {
-		if got := render(t, "package plugin\nfunc Page(b *gox.Builder, name string) {"+body+"}", values.String("<Alice>")); got != "<p>&lt;Alice&gt;<strong>VIP</strong></p>" {
+		if got := render(t, "package plugin\n\nimport \"github.com/andreyvit/evm/gox\"\n\nfunc Page(b *gox.Builder, name string) {"+body+"}", values.String("<Alice>")); got != "<p>&lt;Alice&gt;<strong>VIP</strong></p>" {
 			t.Fatal(got)
 		}
 	}
@@ -997,6 +1174,9 @@ func TestMarkupIndependentOfLines(t *testing.T) {
 
 func TestMarkupLexicalModes(t *testing.T) {
 	got := render(t, `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {
  call := func(f func()) { f() }
  <section>
@@ -1015,7 +1195,7 @@ func Page(b *gox.Builder) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 	for _, body := range []string{`<p>1 < 2</p>`, `<p>"x"`, `<p>(1 < 2]</p>`, `<p>unknown</p>`} {
-		if _, err := gox.Compile("bad.gox", "package plugin\nfunc Page(b *gox.Builder) {"+body+"}"); err == nil {
+		if _, err := gox.Compile("bad.gox", "package plugin\n\nimport \"github.com/andreyvit/evm/gox\"\n\nfunc Page(b *gox.Builder) {"+body+"}"); err == nil {
 			t.Errorf("accepted %s", body)
 		}
 	}

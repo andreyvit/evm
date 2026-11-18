@@ -4,7 +4,13 @@ import "testing"
 
 func TestOptionalCellSemantics(t *testing.T) {
 	got := render(t, `package plugin
-import "fmt"
+
+import (
+	"fmt"
+
+	"github.com/andreyvit/evm/gox"
+)
+
 func Check(x gox.Optional[int]) bool { return x.Present && x.Value==1 }
 func Page(b *gox.Builder) {
  var missing gox.Optional[int]

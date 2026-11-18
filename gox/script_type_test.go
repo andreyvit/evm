@@ -12,6 +12,9 @@ func TestScriptTypeContextMatchesHTMLTemplate(t *testing.T) {
 	for _, mime := range []string{"text/x-bubblehouse-comment", "text/plain", "application/json", "text/javascript", "module", ""} {
 		t.Run(mime, func(t *testing.T) {
 			source := `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, value string) {
 <script type="` + mime + `">value="{=value}"</script>
 }`

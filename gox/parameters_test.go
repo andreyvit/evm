@@ -7,6 +7,9 @@ import (
 
 func TestRendererParameterMetadata(t *testing.T) {
 	tmpl, err := gox.CompileSources(map[string]string{"page.gox": `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) { <Title title={gox.Text("Hello")} /> }
 func Title(b *gox.Builder, title gox.Content, text gox.Optional[string]) { <h1>title</h1> }`})
 	if err != nil {

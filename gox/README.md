@@ -15,16 +15,17 @@ It can be used independently of EDB's database and KVO models.
 keeps running.**
 
 This is a complete template package. `Updates` is the entry point. The host
-passes `viewer` and `accent`; GoX supplies the builder. Imports can be omitted
-in GoX, but the formatter makes known imports explicit.
+passes `viewer` and `accent`; GoX supplies the builder. Like every GoX file,
+it imports each package it names.
 
 ```gox
 package updates
 
 import (
 	"fmt"
-	"github.com/andreyvit/evm/gox"
 	"strings"
+
+	"github.com/andreyvit/evm/gox"
 )
 
 type Release struct {
@@ -172,6 +173,8 @@ import (
 
 func main() {
 	tmpl, err := gox.Compile("greeting.gox", `package greeting
+
+import "github.com/andreyvit/evm/gox"
 
 func Greeting(b *gox.Builder, name string) {
 		<p>
@@ -325,12 +328,35 @@ There are three distinct stages:
 
 `Compile` accepts the same `evm.Package` descriptions as EVM's compiler. `Link`
 accepts their implementations; the two sets must have compatible signatures.
-The standard library and supplied packages autoimport by package basename,
-including `fmt`. Every GoX file starts with a Go package clause after any
-frontmatter and leading comments. Imports can be inferred.
+Every GoX file starts with a Go package clause after any frontmatter and
+leading comments, then imports each package its source names: standard library
+packages such as `fmt`, `github.com/andreyvit/evm/gox` for the builder, and
+supplied host packages. Naming a known package without importing it is a
+compile error at the reference, and the message names the import:
 
-`Template.Parameters` gives the entry argument order. Arguments use the existing
-EVM value ABI, including host types, script structs and KVO models. Compiled
+```text
+greeting.gox:3:18: undefined: gox (add import "github.com/andreyvit/evm/gox")
+```
+
+This covers package-qualified tags such as `<ui.Button>`. A local value with a
+package's name is an ordinary value. `gox fmt` and `gox.FormatSource` add
+missing imports; see [formatting rules](#formatting-rules).
+
+To let templates use a Go package, give [`evmbind.New`](../evmbind/README.md)
+that package's own source; it exposes every exported type, method, function
+and constant. Pass `schema.Package()` to `Compile` and `schema.Bind(nil)` to
+`Link`.
+
+`RenderNative(ctx, []any{user, cart, query}, options)` passes ordinary Go
+values: strings and other scalars, time values, and pointers to bound native
+structs, which the template shares with the host. A Go slice or map passes
+when a linked schema binds its type. Each value must have the Go type of its
+parameter; there are no implicit numeric conversions. `RenderFuncNative`
+selects a renderer by name.
+
+`Template.Parameters` gives the entry argument order. `Render` and `RenderFunc`
+take arguments in the existing EVM value ABI, including host types, script
+structs and KVO models. Compiled
 `Module`, original source positions, `GeneratedSources` and class metadata are
 available for tooling. Keep the template's rendering plan with its module.
 
@@ -347,6 +373,7 @@ an empty context. `Get(key)` searches from the newest node to its parents;
 `CloneWith(map[string]any{...})` copies a delta map and shares its parent.
 An explicit nil value hides the parent value. Stored values are not deep-copied.
 `Values()` returns a separate flattened map for interop with older extras APIs.
+Files that name the type import `"evmruntime"`.
 
 Pass it as an ordinary optional parameter, usually `ambient *evmruntime.Ambient`.
 Calls inside tags and fragments inherit it by name like other parameters. A local
@@ -388,6 +415,8 @@ title: "Rewards"
 
 package rewards
 
+import "github.com/andreyvit/evm/gox"
+
 func Render(b *gox.Builder) {
     <h1>{"Rewards"}</h1>
 }
@@ -422,8 +451,8 @@ The editor grammar recognizes the block without imposing a metadata language.
 Call `program.RenderFunc(ctx, "Page", args, options)` to select a renderer; `args`
 omits the builder. `CompileFiles(entry, sources, ...)` also selects a default
 renderer for `Render`: `entry` can be a function name or a GoX filename (its first
-renderer). Ordinary Go files require their own imports. GoX files autoimport
-registered packages. Go and GoX files in one package must declare the same name.
+renderer). Go and GoX files each need their own imports; they are file-local.
+Go and GoX files in one package must declare the same name.
 Hosts can opt into `Options.AllowMissingPackage` for legacy sources. Files that
 omit the clause then inherit the package name, defaulting to `plugin`.
 
@@ -928,10 +957,12 @@ Formatting has no style options:
 - Preserve the package clause, comments and blank-line separation.
 - Organize imports with `goimports`, including adding missing imports and removing
   unused ones. Retain aliases and group standard-library and other imports.
-  GoX runtime and EVM standard packages are known automatically; supplied
-  `evm.Package` descriptions provide host paths. Module discovery uses the source
-  filename. Unresolved packages can remain unresolved without failing formatting.
-  Component selectors and attribute expressions participate in import discovery.
+  GoX runtime and EVM standard packages are known automatically. Host paths come
+  from the `evm.Package` descriptions passed to `FormatSource`; the `gox fmt`
+  CLI has none, so it adds only standard library and GoX runtime imports. Module
+  discovery uses the source filename. Unresolved packages can remain unresolved
+  without failing formatting. Component selectors and attribute expressions
+  participate in import discovery.
 
 ```gox
 func Card(b *gox.Builder, name string) {
@@ -953,6 +984,7 @@ func Card(b *gox.Builder, name string) {
 | A `<` comparison looks like markup | Parenthesize it: `if (a < b) { ... }` |
 | A missing argument is not inherited | Check its parameter name, lexical scope, type and whether the call is inside markup |
 | A component is unknown | Use its exact case-sensitive Go name and make its package available |
+| `undefined: x (add import "...")` | The file names package `x` without importing it. Add the import, or run `gox fmt` / `FormatSource` |
 | Spaces between words disappear | Source indentation emits nothing; add spaces inside strings |
 | Attributes fail after calling a helper | Attribute helpers must run before the element's first child output |
 | A branch leaves an element open | Keep complete elements within each branch and loop iteration |

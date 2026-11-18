@@ -26,6 +26,9 @@ func TestValueRenderingMatchesJSONSemantics(t *testing.T) {
 }
 
 const conversionTemplate = `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {
  data := map[string]any{"name": "<Alice>", "rows": []any{map[string]any{"n": uint64(18446744073709551615), "tags": []string{"vip", "member"}}, nil, int8(-7)}}
  for i := 0; (i < 16); i++ {

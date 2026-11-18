@@ -45,6 +45,7 @@ type compiler struct {
 	info            *types.Info
 	pkg             *types.Package
 	packages        []evm.Package
+	importable      map[string][]string
 	marks           []markup
 	template        *Template
 	builder         string
@@ -157,49 +158,90 @@ func clearPositions(node ast.Node) {
 	}
 	walk(reflect.ValueOf(node))
 }
-func (c *compiler) autoImports() {
-	names := map[string]string{"fmt": "fmt", "gox": "github.com/andreyvit/evm/gox"}
-	for _, name := range evm.StandardLibraryPaths() {
-		names[path.Base(name)] = name
+
+// checkImports rejects source that names a known package its file does not
+// import. It runs on the first analysis, while the file holds only what the
+// user wrote; undefined maps the checker's undefined names by position.
+func (c *compiler) checkImports(undefined map[evm.SourcePosition]string) error {
+	if c.info.Scopes[c.file] == nil {
+		return nil // The checker skipped this file and reports why later.
 	}
-	for _, p := range c.packages {
-		names[path.Base(p.Path)] = p.Path
-	}
-	// Explicit imports already bind their local names, including unnamed imports.
-	for _, imp := range c.file.Imports {
-		importPath, _ := strconv.Unquote(imp.Path.Value)
-		name := path.Base(importPath)
-		if imp.Name != nil {
-			name = imp.Name.Name
-		}
-		delete(names, name)
-	}
-	used := map[string]bool{"gox": true}
+	var err error
 	ast.Inspect(c.file, func(n ast.Node) bool {
-		if call, ok := n.(*ast.CallExpr); ok {
-			if m, ok := c.marker(call); ok && m.kind == markupOpen {
-				if pkg, _, ok := strings.Cut(m.name, "."); ok {
-					used[pkg] = true
+		if err != nil {
+			return false
+		}
+		switch n := n.(type) {
+		case *ast.CallExpr:
+			// A component tag keeps its name in the marker, where the checker
+			// cannot see it. Scopes tell a package from a local function value.
+			if m, ok := c.marker(n); ok && m.kind == markupOpen {
+				if name, _, ok := strings.Cut(m.name, "."); ok {
+					if _, obj := c.scope(n.Pos()).LookupParent(name, n.Pos()); obj == nil {
+						if hint := c.importHint(name); hint != "" {
+							err = Diagnostic{evm.SourcePosition{File: m.pos.file, Line: m.pos.line, Column: m.pos.column + 1}, "undefined: " + name + hint}
+						}
+					}
 				}
 			}
-		}
-		if s, ok := n.(*ast.SelectorExpr); ok {
-			if id, ok := s.X.(*ast.Ident); ok {
-				used[id.Name] = true
+		case *ast.SelectorExpr:
+			if id, ok := n.X.(*ast.Ident); ok && len(undefined) != 0 {
+				p := c.files.Position(id.Pos())
+				if undefined[evm.SourcePosition{File: p.Filename, Line: p.Line, Column: p.Column}] == id.Name {
+					if hint := c.importHint(id.Name); hint != "" {
+						err = c.error(id.Pos(), "undefined: "+id.Name+hint)
+					}
+				}
 			}
 		}
 		return true
 	})
-	keys := make([]string, 0, len(names))
-	for n := range names {
-		if used[n] {
-			keys = append(keys, n)
+	return err
+}
+
+// importHint names the imports that define a package name, or returns "".
+func (c *compiler) importHint(name string) string {
+	if c.importable == nil {
+		c.importable = map[string][]string{}
+		paths := evm.StandardLibraryPaths()
+		for _, p := range c.packages {
+			paths = append(paths, p.Path)
+		}
+		slices.Sort(paths)
+		for _, p := range slices.Compact(paths) {
+			c.importable[path.Base(p)] = append(c.importable[path.Base(p)], strconv.Quote(p))
 		}
 	}
-	slices.Sort(keys)
-	for _, name := range keys {
-		astutil.AddNamedImport(c.files, c.file, name, names[name])
+	paths := c.importable[name]
+	if len(paths) == 0 {
+		return ""
 	}
+	return " (add import " + strings.Join(paths, " or ") + ")"
+}
+
+// generatedImport imports a package named by lowered code. Only lowering calls
+// it: names in the user's own source must be imported there, see checkImports.
+func (c *compiler) generatedImport(name, importPath string) {
+	for _, imp := range c.file.Imports {
+		value, _ := strconv.Unquote(imp.Path.Value)
+		local := path.Base(value)
+		if imp.Name != nil {
+			local = imp.Name.Name
+		}
+		if local == name {
+			return
+		}
+	}
+	astutil.AddNamedImport(c.files, c.file, name, importPath)
+}
+
+// qualify names a package in a generated type expression.
+func (c *compiler) qualify(p *types.Package) string {
+	if p == c.pkg {
+		return ""
+	}
+	c.generatedImport(p.Name(), p.Path())
+	return p.Name()
 }
 func (c *compiler) scope(pos token.Pos) *types.Scope {
 	var best *types.Scope
@@ -309,6 +351,7 @@ func (c *compiler) op(op operation, args ...ast.Expr) ast.Stmt {
 	if op.kind == opMissing {
 		position = c.syntheticPosition()
 	}
+	c.generatedImport("gox", "github.com/andreyvit/evm/gox")
 	function := sel("gox", fn)
 	function.X.(*ast.Ident).NamePos = position
 	function.Sel.NamePos = position

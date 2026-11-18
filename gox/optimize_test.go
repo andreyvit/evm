@@ -13,6 +13,9 @@ import (
 
 func TestPlannedTagsRemainMutable(t *testing.T) {
 	source := `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, extra string) {
  <section class="outer">
   b.Class(extra)
@@ -60,6 +63,9 @@ func TestBatchedOperationsPreserveAttributeEvaluation(t *testing.T) {
 	// The helper cannot edit the opening tag from inside an attribute expression.
 	// Batching must retain the begin-attribute operation before evaluating it.
 	tmpl, err := gox.Compile("attributes.gox", `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {
  <div class="base" title={mutate()}></div>
 }
@@ -79,6 +85,9 @@ func mutate(b *gox.Builder)string {b.Class("extra");return "value"}`)
 
 func TestAttributeHelpersInTextOnlyElements(t *testing.T) {
 	tmpl, err := gox.Compile("classes.gox", `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, value string) {
  <textarea class="base">
   addClass("field")
@@ -112,6 +121,9 @@ func addClass(b *gox.Builder, value string) { b.Class(value) }`)
 
 func TestTextOnlyElementsRejectRenderingHelpers(t *testing.T) {
 	tmpl, err := gox.Compile("textarea.gox", `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {
  <textarea>markup()</textarea>
 }

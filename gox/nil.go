@@ -141,7 +141,7 @@ func (n *nilLowerer) expression(expr ast.Expr) ast.Expr {
 			name := n.temporary()
 			typ := ast.Expr(ast.NewIdent("bool"))
 			if t := n.c.info.TypeOf(e); t != nil {
-				if parsed, err := parser.ParseExpr(types.TypeString(t, func(p *types.Package) string { return p.Name() })); err == nil {
+				if parsed, err := parser.ParseExpr(types.TypeString(t, n.c.qualify)); err == nil {
 					clearPositions(parsed)
 					typ = parsed
 				}

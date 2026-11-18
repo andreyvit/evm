@@ -9,6 +9,9 @@ import (
 
 func TestSlot_local_record_parameter(t *testing.T) {
 	tmpl, err := gox.Compile("page.gox", `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 type Item struct { Name string }
 func Page(b *gox.Builder) {
  <Rows><slot-row><p>item.Name</p></slot-row></Rows>

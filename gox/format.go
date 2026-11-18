@@ -40,9 +40,10 @@ func editSource(source string, edits []sourceEdit) string {
 	return source
 }
 
-// FormatSource formats GoX and organizes imports. Packages supply virtual import
-// paths; no host implementations or type checking are needed. Unknown packages
-// remain unresolved. Layout is fixed, with an 80-column merge/split threshold.
+// FormatSource formats GoX and organizes imports, adding the missing ones.
+// Packages supply virtual import paths; no host implementations or type
+// checking are needed. Unknown packages remain unresolved. Layout is fixed,
+// with an 80-column merge/split threshold.
 func FormatSource(filename, source string, packages ...evm.Package) (string, error) {
 	return Options{}.FormatSource(filename, source, packages...)
 }

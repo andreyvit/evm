@@ -19,7 +19,7 @@ func main() { os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)) }
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
-		fmt.Fprintln(stdout, "Usage: gox check [-filename stdin.gox] [files or directories...]\n       gox fmt [-w] [-l] [-filename stdin.gox] [files or directories...]\n\nWith no paths, read stdin. Directories are searched recursively for .go and .gox files.\ncheck validates syntax only; host packages and types are checked during compilation.")
+		fmt.Fprintln(stdout, "Usage: gox check [-filename stdin.gox] [files or directories...]\n       gox fmt [-w] [-l] [-filename stdin.gox] [files or directories...]\n\nWith no paths, read stdin. Directories are searched recursively for .go and .gox files.\ncheck validates syntax only; host packages and types are checked during compilation.\nfmt adds missing standard library and GoX runtime imports; it does not know host packages.")
 		return 0
 	}
 	command := args[0]

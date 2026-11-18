@@ -2,8 +2,9 @@ package plugin
 
 import (
 	"fmt"
-	"github.com/andreyvit/evm/gox"
 	"strings"
+
+	"github.com/andreyvit/evm/gox"
 )
 
 type Release struct {
@@ -28,9 +29,7 @@ func Updates(b *gox.Builder, viewer string, accent string) {
 			</p>
 			<List items={items}>
 				<slot-row>
-					<strong>
-						item.Name | strings.ToUpper
-					</strong>
+					<strong>item.Name | strings.ToUpper</strong>
 					" "
 					<Badge label={status(item.Done)} />
 				</slot-row>

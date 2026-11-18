@@ -16,6 +16,9 @@ import (
 
 func TestReturnedRendererSharesCallingVM(t *testing.T) {
 	tmpl, err := gox.Compile("view.gox", `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 var count int
  func Choose() func(*gox.Builder) {
   count=40
@@ -104,7 +107,13 @@ func TestNestedRendererUsesItsOwnBuilder(t *testing.T) {
 	}
 	pkg := host.Bind(&nestedRenderHost{})
 	tmpl, err := gox.Compile("outer.gox", `package plugin
-import "host"
+
+import (
+	"host"
+
+	"github.com/andreyvit/evm/gox"
+)
+
  var count int
  func Outer(b *gox.Builder){
   count=40
@@ -150,6 +159,9 @@ import "host"
 func TestMarkupLiteralRejectsUnnamedBuilder(t *testing.T) {
 	for _, param := range []string{"*gox.Builder", "_ *gox.Builder"} {
 		_, err := gox.Compile("outer.gox", `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Outer(b *gox.Builder){
    f:=func(`+param+`){
     <b>{"inner"}</b>

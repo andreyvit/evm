@@ -13,6 +13,8 @@ import (
 func BenchmarkContentOptional(b *testing.B) {
 	tmpl, err := gox.Compile("content.gox", `package plugin
 
+import "github.com/andreyvit/evm/gox"
+
 func Item(b *gox.Builder, title gox.Content, subtitle gox.Optional[string]) {
  <article><h2>title</h2>
   if subtitle.Present { <p>subtitle.Value</p> }

@@ -14,6 +14,9 @@ import (
 
 func TestPreprocessAndCompile(t *testing.T) {
 	const source = `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, name string) { <p>label(name)</p> }
 func label(name string) string { return name }`
 	result, err := gox.Preprocess("page.gox", source)
@@ -39,6 +42,9 @@ func label(name string) string { return name }`
 		t.Fatal(got)
 	}
 	if _, err := gox.Preprocess("bad.gox", `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) { <p>missing()</p> }`); err == nil {
 		t.Fatal("accepted unresolved call")
 	}
@@ -129,7 +135,7 @@ func TestFormatFixtures(t *testing.T) {
 }
 
 func TestFormattingPreservesRendering(t *testing.T) {
-	const source = "package plugin\nfunc Page(b *gox.Builder, name string) {<div title={name /* important */ + \"!\"}><p>name // inline comment\n</p><pre>`first\n  second\nthird`</pre><script>const x = {=name};\n  console.log(x)</script>for i:=0;(i<2);i++ {<span>i</span>}</div>}"
+	const source = "package plugin\n\nimport \"github.com/andreyvit/evm/gox\"\n\nfunc Page(b *gox.Builder, name string) {<div title={name /* important */ + \"!\"}><p>name // inline comment\n</p><pre>`first\n  second\nthird`</pre><script>const x = {=name};\n  console.log(x)</script>for i:=0;(i<2);i++ {<span>i</span>}</div>}"
 	formatted, err := gox.FormatSource("page.gox", source)
 	if err != nil {
 		t.Fatal(err)
@@ -195,20 +201,41 @@ func Page(b *gox.Builder) { fmt:=struct{ Name string }{}; <p>fmt.Name</p> }`
 func TestFormattingVoidComponentAndClosures(t *testing.T) {
 	for _, source := range []string{
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 //go:build ignore
 
 func Page(b *gox.Builder) { <p>"x"</p> }`,
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) { <div><input><br></div> }`,
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) { <input>"child"</input> }`,
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) { <div><>"one"; "two"</></div> }`,
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) { <div>func(){ <p>"one"</p> }()</div> }`,
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) { <Button label={func() string { return "x" }()} /> }`,
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) { <Button label={func() string {
  return "x"
  }()} /> }`,
@@ -236,7 +263,7 @@ func TestFormattingWidthBoundaries(t *testing.T) {
 		if !c.single {
 			body = "<p>\n" + content + "\n</p>"
 		}
-		got, err := gox.FormatSource("page.gox", "package plugin\nfunc Page(b *gox.Builder){"+body+"}")
+		got, err := gox.FormatSource("page.gox", "package plugin\n\nimport \"github.com/andreyvit/evm/gox\"\n\nfunc Page(b *gox.Builder){"+body+"}")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -249,12 +276,24 @@ func TestFormattingWidthBoundaries(t *testing.T) {
 func FuzzFormatSource(f *testing.F) {
 	for _, source := range []string{
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder){<p>"Hello"</p>}`,
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder){<p title={name}>name; "!"</p>}`,
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder){<script>const x={=name};</script>}`,
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder){for i:=0;(i<2);i++{<p>i</p>}}`,
 	} {
 		f.Add(source)
@@ -288,6 +327,13 @@ func channels() { ch:=make(chan int); _=ch }`})
 	}
 	host := evm.Package{Path: "widgets", Functions: []evm.ExternalFunction{{Name: "Badge", ParamNames: []string{"name"}, Signature: evm.Signature{Params: []*values.Type{values.StringType}, Results: []*values.Type{values.StringType}}}}}
 	result, err = gox.Preprocess("page.gox", `package plugin
+
+import (
+	"widgets"
+
+	"github.com/andreyvit/evm/gox"
+)
+
 func Page(b *gox.Builder,name string){<p>widgets.Badge(name)</p>}`, host)
 	if err != nil {
 		t.Fatal(err)
@@ -298,7 +344,7 @@ func Page(b *gox.Builder,name string){<p>widgets.Badge(name)</p>}`, host)
 }
 
 func TestFormattingNestedComponentCalls(t *testing.T) {
-	source := "package plugin\nfunc Page(b *gox.Builder) {\n" + strings.Repeat("if true {\n", 8) + "<helpers.BlockClass\nelement=\"item-done\"\n/>\n" + strings.Repeat("}\n", 8) + "}"
+	source := "package plugin\n\nimport \"github.com/andreyvit/evm/gox\"\n\nfunc Page(b *gox.Builder) {\n" + strings.Repeat("if true {\n", 8) + "<helpers.BlockClass\nelement=\"item-done\"\n/>\n" + strings.Repeat("}\n", 8) + "}"
 	got, err := gox.FormatSource("page.gox", source)
 	if err != nil {
 		t.Fatal(err)
@@ -314,6 +360,9 @@ func TestFormattingNestedComponentCalls(t *testing.T) {
 
 func TestFormatLiteralStringAttributes(t *testing.T) {
 	source := `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {
  <Part key={"top"} />
  <input name={"receipt_file"} title={"A&B"} placeholder={"{name}"}>

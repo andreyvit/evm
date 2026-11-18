@@ -10,7 +10,7 @@ import (
 
 func TestFrontmatter(t *testing.T) {
 	const header = "---\ntitle: Example\n---\n"
-	const body = "package demo\nfunc Page(b *gox.Builder) { <p>{\"Hello\"}</p> }\nfunc Name() string { return \"demo\" }\n"
+	const body = "package demo\n\nimport \"github.com/andreyvit/evm/gox\"\n\nfunc Page(b *gox.Builder) { <p>{\"Hello\"}</p> }\nfunc Name() string { return \"demo\" }\n"
 	calls := 0
 	metadata := &struct{ Title string }{"Example"}
 	options := gox.Options{ParseFrontmatter: func(raw []byte) (any, error) {
@@ -56,7 +56,7 @@ func TestFrontmatter(t *testing.T) {
 	if _, err := failing.Compile("page.gox", header+"invalid go"); err == nil || !strings.Contains(err.Error(), "page.gox:2:1: invalid frontmatter: bad metadata") {
 		t.Fatalf("parser error: %v", err)
 	}
-	if _, err := options.Compile("page.gox", header+"package plugin\nfunc Page(b *gox.Builder) {\n<p>{missing}</p>\n}"); err == nil || !strings.Contains(err.Error(), "page.gox:6:") {
+	if _, err := options.Compile("page.gox", header+"package plugin\n\nimport \"github.com/andreyvit/evm/gox\"\n\nfunc Page(b *gox.Builder) {\n<p>{missing}</p>\n}"); err == nil || !strings.Contains(err.Error(), "page.gox:9:") {
 		t.Fatalf("source position: %v", err)
 	}
 	nilParser := gox.Options{ParseFrontmatter: func([]byte) (any, error) { return nil, nil }}

@@ -60,7 +60,7 @@ func (c *compiler) components() (bool, error) {
 				props := map[string]ast.Expr{}
 				var mapInputs []componentMapInput
 				for _, a := range m.attrs {
-					e, err := componentAttribute(a, args)
+					e, err := c.componentAttribute(a, args)
 					if err != nil {
 						return c.error(stmt.Pos(), err.Error())
 					}
@@ -172,7 +172,10 @@ func (c *compiler) components() (bool, error) {
 					param := sig.Params().At(p)
 					key := param.Name()
 					used[key] = true
-					if e, ok := props[key]; ok {
+					// A supplied slot wins over the zero value that an optional
+					// parameter received from the conventions above.
+					_, slot := slots[key]
+					if e, ok := props[key]; ok && !slot {
 						actual = append(actual, e)
 						continue
 					}
@@ -181,12 +184,7 @@ func (c *compiler) components() (bool, error) {
 						if !ok {
 							return c.error(stmt.Pos(), "slot "+key+" is not a function")
 						}
-						expr, err := parser.ParseExpr(types.TypeString(ft, func(p *types.Package) string {
-							if p == c.pkg {
-								return ""
-							}
-							return p.Name()
-						}))
+						expr, err := parser.ParseExpr(types.TypeString(ft, c.qualify))
 						if err != nil {
 							return err
 						}
@@ -337,7 +335,7 @@ func (c *compiler) builderAt(pos token.Pos) string {
 	}
 	return "_gox_b"
 }
-func componentAttribute(a attribute, args []ast.Expr) (ast.Expr, error) {
+func (c *compiler) componentAttribute(a attribute, args []ast.Expr) (ast.Expr, error) {
 	if a.boolean {
 		return ast.NewIdent("true"), nil
 	}
@@ -350,6 +348,7 @@ func componentAttribute(a attribute, args []ast.Expr) (ast.Expr, error) {
 		if p.arg == 0 {
 			next = &ast.BasicLit{Kind: token.STRING, Value: quote(p.text)}
 		} else {
+			c.generatedImport("fmt", "fmt")
 			next = &ast.CallExpr{Fun: sel("fmt", "Sprint"), Args: []ast.Expr{unwrap(args[p.arg-1])}}
 		}
 		if expr == nil {

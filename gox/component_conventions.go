@@ -23,14 +23,7 @@ func (c *compiler) componentConventions(componentName string, sig *types.Signatu
 	if err != nil {
 		return err
 	}
-	typeName := func(t types.Type) string {
-		return types.TypeString(t, func(p *types.Package) string {
-			if p == c.pkg {
-				return ""
-			}
-			return p.Name()
-		})
-	}
+	typeName := func(t types.Type) string { return types.TypeString(t, c.qualify) }
 	exprText := func(e ast.Expr) string {
 		var b bytes.Buffer
 		_ = format.Node(&b, token.NewFileSet(), e)

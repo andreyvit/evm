@@ -9,6 +9,9 @@ import (
 
 func TestImplicitAndOptionalArguments_share_call_rules(t *testing.T) {
 	source := `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 type Context struct { Name string }
 //gox:arg value optional
 func Pointer(b *gox.Builder, value *int) { <i>value == nil</i> }
@@ -55,6 +58,9 @@ func Page(b *gox.Builder) {
 func TestImplicitArguments_require_permission(t *testing.T) {
 	for _, call := range []string{`Card()`, `<Card />`} {
 		source := `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Card(b *gox.Builder,label string){<p>label</p>}
 func Page(b *gox.Builder){ label:="must not inherit";_ = label;<div>` + call + `</div>}`
 		_, err := gox.CompileSources(map[string]string{"page.gox": source})
@@ -63,6 +69,9 @@ func Page(b *gox.Builder){ label:="must not inherit";_ = label;<div>` + call + `
 		}
 	}
 	source := `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 //gox:arg label implicit=false
 func Card(b *gox.Builder,label string){<p>label</p>}
 func Page(b *gox.Builder){label:="no";_ = label;<Card />}`

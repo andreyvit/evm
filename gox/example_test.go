@@ -13,6 +13,9 @@ import (
 
 func ExampleCompile() {
 	tmpl, err := gox.Compile("greeting.gox", `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Greeting(b *gox.Builder, name string) {
     <p>
         "Hello, "

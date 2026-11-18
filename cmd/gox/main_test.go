@@ -28,6 +28,10 @@ func Page(){<p>}`); code != 1 || !strings.Contains(err, "unclosed") {
 	if code != 0 || err != "" || !strings.Contains(formatted, "\t<p>name</p>") {
 		t.Fatalf("%d %s %s", code, formatted, err)
 	}
+	// fmt is the supported fix for a missing import of a package it knows.
+	if !strings.Contains(formatted, "import \"github.com/andreyvit/evm/gox\"\n") {
+		t.Fatalf("missing runtime import:\n%s", formatted)
+	}
 	if code, _, _ := invoke([]string{"fmt", "-w"}, source); code != 2 {
 		t.Fatal(code)
 	}

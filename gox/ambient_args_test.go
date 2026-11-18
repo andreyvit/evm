@@ -10,6 +10,13 @@ import (
 
 func TestAmbientArguments(t *testing.T) {
 	source := `package plugin
+
+import (
+	"evmruntime"
+
+	"github.com/andreyvit/evm/gox"
+)
+
 //gox:arg color ambient="color"
 func Badge(b *gox.Builder, label string, color string, ambient *evmruntime.Ambient) {
  <p>label;color;ambient.Get("other")</p>
@@ -49,6 +56,13 @@ func Page(b *gox.Builder) {
 
 func TestAmbientArguments_missing_and_invalid(t *testing.T) {
 	source := `package plugin
+
+import (
+	"evmruntime"
+
+	"github.com/andreyvit/evm/gox"
+)
+
 //gox:arg count ambient="count"
 func Number(b *gox.Builder,count int,ambient *evmruntime.Ambient){<p>count</p>}
 func Page(b *gox.Builder){var ambient *evmruntime.Ambient;<Number />}`
@@ -65,8 +79,8 @@ func Page(b *gox.Builder){var ambient *evmruntime.Ambient;<Number />}`
 		t.Fatalf("%q: %v", got, err)
 	}
 	for _, source := range []string{
-		"package plugin\n//gox:arg count ambient=\"count\"\nfunc Page(b *gox.Builder,count int){<p>count</p>}",
-		"package plugin\n//gox:arg count ambient=\"count\" optional\nfunc Page(b *gox.Builder,count int,ambient *evmruntime.Ambient){<p>count</p>}",
+		"package plugin\n\nimport \"github.com/andreyvit/evm/gox\"\n\n//gox:arg count ambient=\"count\"\nfunc Page(b *gox.Builder,count int){<p>count</p>}",
+		"package plugin\n\nimport (\n\t\"evmruntime\"\n\n\t\"github.com/andreyvit/evm/gox\"\n)\n\n//gox:arg count ambient=\"count\" optional\nfunc Page(b *gox.Builder,count int,ambient *evmruntime.Ambient){<p>count</p>}",
 		strings.Replace(source, "<Number />", "<Number ambient:count=\"wrong type\" />", 1),
 	} {
 		tmpl, err := gox.Compile("bad.gox", source)

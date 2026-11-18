@@ -10,6 +10,7 @@ import (
 	"go/token"
 	"maps"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -19,6 +20,7 @@ import (
 
 // CompileSources compiles ordinary Go and GoX files into one package. Each GoX
 // renderer declares its name and builder parameter. Use RenderFunc to select one.
+// Every file imports the packages it names, including this one.
 func CompileSources(sources map[string]string, packages ...evm.Package) (*Template, error) {
 	return Options{}.CompileSources(sources, packages...)
 }
@@ -200,10 +202,6 @@ func (options Options) preprocessSources(entry string, sources map[string]string
 				}
 			}
 		}
-		if path.Ext(name) == ".gox" {
-			c.file = file
-			c.autoImports()
-		}
 	}
 	if entry != "" && c.template.Entry == "" {
 		return nil, fmt.Errorf("renderer %q is missing", entry)
@@ -223,6 +221,24 @@ func _goxMark(id int, args ...any) {}
 		c.pkg, c.info, err = evmcompiler.AnalyzeFiles(c.files, c.syntax, c.packages...)
 		if c.info == nil {
 			return nil, err
+		}
+		if round == 0 {
+			undefined := map[evm.SourcePosition]string{}
+			if diagnostics, ok := err.(evmcompiler.Diagnostics); ok {
+				for _, d := range diagnostics {
+					if name, ok := strings.CutPrefix(d.Message, "undefined: "); ok {
+						undefined[d.Position] = name
+					}
+				}
+			}
+			for _, file := range c.syntax {
+				if path.Ext(c.files.File(file.Pos()).Name()) == ".gox" {
+					c.file = file
+					if err := c.checkImports(undefined); err != nil {
+						return nil, err
+					}
+				}
+			}
 		}
 		changed := false
 		for _, file := range c.syntax {
@@ -245,10 +261,7 @@ func _goxMark(id int, args ...any) {}
 			if componentErr != nil {
 				return nil, componentErr
 			}
-			if componentChanged {
-				changed = true
-				c.autoImports()
-			}
+			changed = changed || componentChanged
 		}
 		if !changed {
 			break
@@ -359,7 +372,10 @@ func (c *compiler) generatedPosition(pos evm.SourcePosition) evm.SourcePosition 
 	m := c.outputMaps[pos.File]
 	if m == nil {
 		m = &generatedMap{files: token.NewFileSet(), lines: []int{0}}
-		m.file = m.files.AddFile(pos.File, -1, len(source))
+		// The scanner resolves a relative //line filename against the
+		// directory of the file that contains it. Register the generated
+		// file without a directory so original names stay as written.
+		m.file = m.files.AddFile(path.Base(pos.File), -1, len(source))
 		var scan scanner.Scanner
 		scan.Init(m.file, []byte(source), nil, scanner.ScanComments)
 		for {
@@ -382,6 +398,15 @@ func (c *compiler) generatedPosition(pos evm.SourcePosition) evm.SourcePosition 
 	p := m.files.PositionFor(m.file.Pos(offset), true)
 	if p.Filename == syntheticFilename {
 		return evm.SourcePosition{}
+	}
+	if c.originals[p.Filename] == nil {
+		// The scanner also cleans //line filenames; recover the name as given.
+		for name := range c.originals {
+			if filepath.Clean(name) == p.Filename {
+				p.Filename = name
+				break
+			}
+		}
 	}
 	if original := c.originals[p.Filename]; original != nil && p.Line > 0 && p.Line <= original.LineCount() {
 		offset := original.Offset(original.LineStart(p.Line)) + max(0, p.Column-1)

@@ -9,6 +9,8 @@ import (
 func TestContentRendering(t *testing.T) {
 	tmpl, err := gox.CompileSources(map[string]string{"page.gox": `package plugin
 
+import "github.com/andreyvit/evm/gox"
+
 func Title(b *gox.Builder, title gox.Content) { <h1>title</h1> }
 func Page(b *gox.Builder) {
  <Title title={gox.Text("<b>hello</b>")} />
@@ -34,6 +36,8 @@ func Page(b *gox.Builder) {
 
 func TestContentValueSemantics(t *testing.T) {
 	tmpl, err := gox.CompileSources(map[string]string{"page.gox": `package plugin
+
+import "github.com/andreyvit/evm/gox"
 
 type Other gox.Content
 func Copy(x gox.Content) gox.Content { return x }

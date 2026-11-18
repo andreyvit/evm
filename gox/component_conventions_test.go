@@ -10,6 +10,12 @@ import (
 func TestComponentParameterConventions(t *testing.T) {
 	source := `package plugin
 
+import (
+	"evmruntime"
+
+	"github.com/andreyvit/evm/gox"
+)
+
 type OptionalBool struct { Value bool; Present bool }
 func Leaf(b *gox.Builder, ambient *evmruntime.Ambient) { <em>{ambient.Get("color")}</em> }
 //gox:arg enabled optional=true
@@ -47,16 +53,38 @@ func Page(b *gox.Builder) {
 func TestComponentParameterConventionErrors(t *testing.T) {
 	for _, tc := range []struct{ src, want string }{
 		{`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func C(b *gox.Builder, extras map[string]any) {}\nfunc Page(b *gox.Builder) { <C extras={nil} extras:x={true} /> }`, "cannot combine"},
 		{`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 //gox:arg x optional=true\nfunc C(b *gox.Builder, x *int) {}\nfunc Page(b *gox.Builder) { <C x="wrong" /> }`, "cannot"},
 		{`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func C(b *gox.Builder, x bool) {}\nfunc Page(b *gox.Builder) { <C x={true} x={false} /> }`, "duplicate"},
 		{`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func C(b *gox.Builder) {}\nfunc Page(b *gox.Builder) { <C extras:x={true} /> }`, "no parameter"},
 		{`package plugin
+
+import (
+	"evmruntime"
+
+	"github.com/andreyvit/evm/gox"
+)
+
 func C(b *gox.Builder, ambient *evmruntime.Ambient) {}\nfunc Page(b *gox.Builder) { <C ambient:x={true} /> }`, "caller scope"},
 		{`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func C(b *gox.Builder, xOpt bool) {}\nfunc Page(b *gox.Builder) { <C /> }`, "xOpt"},
 	} {
 		_, err := gox.CompileSources(map[string]string{"page.gox": strings.ReplaceAll(tc.src, `\n`, "\n")})
@@ -71,6 +99,9 @@ func TestComponentOptionalShapes(t *testing.T) {
 		for _, field := range []string{"Valid", "Present", "IsValid", "IsPresent"} {
 			t.Run(name+field, func(t *testing.T) {
 				source := `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 type TYPE struct { Value bool; FIELD bool }
 func C(b *gox.Builder, flag TYPE, ptr *TYPE) {
  <p>{flag.Value}
@@ -102,6 +133,8 @@ func Page(b *gox.Builder) {
 func TestComponentExtrasSelectNamedMaps(t *testing.T) {
 	tmpl, err := gox.CompileSources(map[string]string{"page.gox": `package plugin
 
+import "github.com/andreyvit/evm/gox"
+
 func C(b *gox.Builder, first map[string]any, last map[string]any) { <p>{first["x"]}
  {last["x"]}</p> }
 func Page(b *gox.Builder) {
@@ -124,6 +157,8 @@ func Page(b *gox.Builder) {
 
 func TestComponentGenericOptional(t *testing.T) {
 	tmpl, err := gox.CompileSources(map[string]string{"page.gox": `package plugin
+
+import "github.com/andreyvit/evm/gox"
 
 func C(b *gox.Builder, flag gox.Optional[bool]) { <p>{flag.Value}
  {flag.Present}</p> }
@@ -171,6 +206,13 @@ func TestComponentMapInputs_dynamic_keys_and_formatting(t *testing.T) {
 
 func TestComponentMapInputs_dynamic_keys_evaluate_once(t *testing.T) {
 	source := `package plugin
+
+import (
+	"evmruntime"
+
+	"github.com/andreyvit/evm/gox"
+)
+
 type Labels map[int]string
 func Card(b *gox.Builder, labels Labels, flags map[string]bool, ambient *evmruntime.Ambient) { <p>labels[1]; labels[2]; flags["data-active"]; ambient.Get("color")</p> }
 func Page(b *gox.Builder) {
@@ -198,26 +240,63 @@ func Page(b *gox.Builder) {
 func TestComponentMapInputErrors(t *testing.T) {
 	for _, tc := range []struct{ src, want string }{
 		{`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func C(b *gox.Builder, extras map[string]string) {}\nfunc Page(b *gox.Builder) { <C extras:a:{"x"}="no" /> }`, "requires a map"},
 		{`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func C(b *gox.Builder, extras map[string]any) {}\nfunc Page(b *gox.Builder) { <C extras:attrs="no" extras:attrs:type="email" /> }`, "conflicting"},
 		{`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func C(b *gox.Builder, extras map[string]any) {}\nfunc Page(b *gox.Builder) { <C extras:attrs:type="email" extras:attrs="no" /> }`, "cannot combine"},
 		{`package plugin
+
+import (
+	"evmruntime"
+
+	"github.com/andreyvit/evm/gox"
+)
+
 func C(b *gox.Builder, ambient *evmruntime.Ambient) {}\nfunc Page(b *gox.Builder) { <C ambient-x="no" /> }`, "unknown component input"},
 		{`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func C(b *gox.Builder, extras string) {}\nfunc Page(b *gox.Builder) { <C extras:x="no" /> }`, "not a map"},
 		{`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func C(b *gox.Builder, extras map[string]string) {}\nfunc Page(b *gox.Builder) { <C extras:x={true} /> }`, "cannot"},
 		{`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func C(b *gox.Builder, extras map[string]string) {}\nfunc Page(b *gox.Builder) { <C extras:{1}="no" /> }`, "cannot"},
 		{`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func C(b *gox.Builder, extras map[string]any) {}\nfunc Page(b *gox.Builder) { <C extras:="no" /> }`, "empty map"},
 		{`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func C(b *gox.Builder, extras map[string]any) {}\nfunc Page(b *gox.Builder) { <C extras={nil} extras:{"x"}="no" /> }`, "cannot combine"},
 		{`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) { <div attrs:{"x"}="no" /> }`, "require a component"},
 		{`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func C(b *gox.Builder, extras map[string]any) {}\nfunc Page(b *gox.Builder) { <C extra-x="no" /> }`, "unknown component input"},
 	} {
 		_, err := gox.CompileSources(map[string]string{"page.gox": strings.ReplaceAll(tc.src, `\n`, "\n")})
@@ -229,6 +308,9 @@ func C(b *gox.Builder, extras map[string]any) {}\nfunc Page(b *gox.Builder) { <C
 
 func TestXMLCallAssignment(t *testing.T) {
 	source := `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {
  dimension := "points"
  tierContent := <Label key="tier" args:name="Gold" />
@@ -276,8 +358,14 @@ func Label(b *gox.Builder, key string, args map[string]any) string {
 func TestXMLAssignmentRejectsRenderingOnlyCalls(t *testing.T) {
 	for _, source := range []string{
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) { value := <Label />; value }; func Label(b *gox.Builder) { <p>"label"</p> }`,
 		`package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) { value := <Label></Label>; value }; func Label() string { return "label" }`,
 	} {
 		if _, err := gox.Compile("assignment.gox", source); err == nil {
@@ -288,6 +376,9 @@ func Page(b *gox.Builder) { value := <Label></Label>; value }; func Label() stri
 
 func TestNestedComponentMaps(t *testing.T) {
 	source := `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {
  hits := 0
  key := func() string { hits++; return "name" }
@@ -331,6 +422,9 @@ func C(b *gox.Builder, extras map[string]any, typed map[string]map[string]string
 
 func TestAssignedXMLCallsInValueHelpers(t *testing.T) {
 	source := `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) { <p>text()</p> }
 func text() string {
  value := <Value key="plain" />

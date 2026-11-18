@@ -11,6 +11,9 @@ import (
 
 func TestCoverageOriginalGoXBranchesAndPooledSession(t *testing.T) {
 	const source = `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, member bool) {
  <section>
  if member {
@@ -38,7 +41,7 @@ func Page(b *gox.Builder, member bool) {
 	conditionFound := false
 	for _, line := range lines {
 		if line.File == "coverage.gox" && line.Branches != 0 {
-			if line.Line != 4 || line.Branches != 1 {
+			if line.Line != 7 || line.Branches != 1 {
 				t.Fatalf("branch must map to the condition, not its parameter: %+v", line)
 			}
 			conditionFound = true
@@ -52,7 +55,7 @@ func Page(b *gox.Builder, member bool) {
 			t.Errorf("incomplete: %+v", line)
 		}
 	}
-	for _, line := range []int{5, 7} {
+	for _, line := range []int{8, 10} {
 		found := false
 		for _, l := range lines {
 			if l.File == "coverage.gox" && l.Line == line && l.Executed > 0 {
@@ -77,6 +80,9 @@ func Page(b *gox.Builder, member bool) {
 
 func TestCoverageMultilineXMLAndClosure(t *testing.T) {
 	const source = `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, show bool) {
  body := func() {
  if show {
@@ -117,6 +123,9 @@ func Card(b *gox.Builder, body func()) {
 
 func TestCoverageCountsSourceBranchesNotGeneratedNilFallbacks(t *testing.T) {
 	template, err := gox.Compile("fields.gox", `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 type Item struct { Name string }
 func Page(b *gox.Builder, show bool) {
  item := &Item{Name:"Hello"}
@@ -165,6 +174,9 @@ func Page(b *gox.Builder, show bool) {
 
 func TestCoverageFusedLoopHasOneSourceCondition(t *testing.T) {
 	template, err := gox.Compile("loop.gox", `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {
  for i := 1; i <= 9; i++ {
  <span>i</span>
@@ -210,6 +222,8 @@ func TestCoverageNilLoweringDoesNotUseAnotherFilesPosition(t *testing.T) {
 	tmpl, err := options.CompileSources(map[string]string{
 		"first.gox": "---\ntitle: Metadata\n---\n\npackage plugin\n",
 		"page.gox": `package plugin
+
+import "github.com/andreyvit/evm/gox"
 
 type State struct { Ready, Active bool }
 

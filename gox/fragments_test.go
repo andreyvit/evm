@@ -11,6 +11,9 @@ import (
 
 func TestFragments(t *testing.T) {
 	got := render(t, `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, name string) {
  label := func() {
   <>
@@ -57,6 +60,9 @@ func Card(b *gox.Builder, body func()) {
 
 func TestFragmentsControlFlow(t *testing.T) {
 	source := `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, stop bool) {
  <>
   for i := 0; (i < 4); i++ {
@@ -101,6 +107,9 @@ func Page(b *gox.Builder, stop bool) {
 
 func TestFragmentsEscapingAndNil(t *testing.T) {
 	tmpl, err := gox.Compile("fragments.gox", `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, value string) {
  var customer *Customer
  <>
@@ -130,7 +139,7 @@ type Customer struct { Name string }
 	if want := `before<a href="#ZgotmplZ">` + escaped + `</a><textarea>` + escaped + `</textarea>after`; got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
-	if len(diagnostics) != 1 || diagnostics[0].Position.File != "fragments.gox" || diagnostics[0].Position.Line != 6 {
+	if len(diagnostics) != 1 || diagnostics[0].Position.File != "fragments.gox" || diagnostics[0].Position.Line != 9 {
 		t.Fatalf("diagnostics: %+v", diagnostics)
 	}
 	if _, err := program.Render(context.Background(), args, gox.RenderOptions{Strict: true}); err == nil {
@@ -151,7 +160,7 @@ func TestFragmentsRequireBalancedScope(t *testing.T) {
 		{"<>\n caption()\n </>\n caption()", "not enough arguments"},
 		{"<>\n {\n name := 42\n caption()\n }\n </>", "not enough arguments"},
 	} {
-		_, err := gox.Compile("fragments.gox", "package plugin\nfunc Page(b *gox.Builder, name string) {\n "+tt.body+"\n}\nfunc caption(name string) string { return name }")
+		_, err := gox.Compile("fragments.gox", "package plugin\n\nimport \"github.com/andreyvit/evm/gox\"\n\nfunc Page(b *gox.Builder, name string) {\n "+tt.body+"\n}\nfunc caption(name string) string { return name }")
 		if err == nil || !strings.Contains(err.Error(), tt.error) || !strings.Contains(err.Error(), "fragments.gox:") {
 			t.Errorf("%s: got %v, want %s", tt.body, err, tt.error)
 		}
@@ -168,7 +177,7 @@ func TestFragmentsOutputFormats(t *testing.T) {
 		{gox.TextFormat, "value", "<b>", "<b>"},
 		{gox.CSSFormat, `".x { color: "` + "\n value\n" + `"; }"`, "red", ".x { color: red; }"},
 	} {
-		tmpl, err := (gox.Options{Format: tt.format}).Compile("fragments.gox", "package plugin\nfunc Page(b *gox.Builder, value string) {\n <>\n "+tt.body+"\n </>\n}")
+		tmpl, err := (gox.Options{Format: tt.format}).Compile("fragments.gox", "package plugin\n\nimport \"github.com/andreyvit/evm/gox\"\n\nfunc Page(b *gox.Builder, value string) {\n <>\n "+tt.body+"\n </>\n}")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -186,6 +195,9 @@ func TestFragmentsOutputFormats(t *testing.T) {
 func TestAttributeHelpersRequireExplicitBuilder(t *testing.T) {
 	for _, call := range []string{`class("card")`, `attr("disabled", true)`} {
 		_, err := gox.Compile("view.gox", `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) { <div>`+call+`</div> }`)
 		if err == nil || !strings.Contains(err.Error(), "undefined") {
 			t.Fatalf("%s: %v", call, err)
@@ -195,6 +207,9 @@ func Page(b *gox.Builder) { <div>`+call+`</div> }`)
 
 func TestBuilderClassAppendsWithoutClearingOnEmpty(t *testing.T) {
 	got := render(t, `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder) {
  <section class="bh-container">
   b.Class("shell")

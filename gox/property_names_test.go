@@ -24,7 +24,7 @@ func TestFieldInitialismSelectors(t *testing.T) {
 		{"FirstName", "first_name"},
 	} {
 		t.Run(tt.field, func(t *testing.T) {
-			declaration := fmt.Sprintf("package plugin\ntype Integration struct { %s string }\n", tt.field)
+			declaration := fmt.Sprintf("package plugin\n\nimport \"github.com/andreyvit/evm/gox\"\n\ntype Integration struct { %s string }\n", tt.field)
 			source := declaration + fmt.Sprintf("func Page(b *gox.Builder) {\n integration := Integration{%s: \"ok\"}\n <p>{integration.%s}</p>\n}\n", tt.field, tt.selector)
 			if got := render(t, source); got != "<p>ok</p>" {
 				t.Fatal(got)
@@ -34,7 +34,7 @@ func TestFieldInitialismSelectors(t *testing.T) {
 }
 
 func TestFieldSelectorsPreserveExplicitNames(t *testing.T) {
-	source := "package plugin\ntype Integration struct { AppIDs string `json:\"external_ids,omitempty\"` }\n" + `
+	source := "package plugin\n\nimport \"github.com/andreyvit/evm/gox\"\n\ntype Integration struct { AppIDs string `json:\"external_ids,omitempty\"` }\n" + `
 func Page(b *gox.Builder) {
  integration := Integration{AppIDs: "ok"}
  <p>integration.AppIDs; integration.app_ids; integration.external_ids; </p>
@@ -45,6 +45,9 @@ func Page(b *gox.Builder) {
 		t.Fatal(got)
 	}
 	_, err := gox.Compile("broken_alias.gox", `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 type Integration struct { AppIDs string }
 func Page(b *gox.Builder) {
  integration := Integration{AppIDs: "ok"}
@@ -64,7 +67,7 @@ func TestKVOSelectorsAreAuthoritative(t *testing.T) {
 	pkg := evm.Package{Path: "db", Records: []*evm.RecordType{evm.NewRecordType("Customer", model, false)}}
 	for _, name := range []string{"ids", "AppIDs", "customer_AppIDs", "app_ids", "customer_app_ids"} {
 		t.Run(name, func(t *testing.T) {
-			source := fmt.Sprintf("package plugin\nfunc Page(b *gox.Builder, customer *db.Customer) {\n <p>{customer.%s}</p>\n}", name)
+			source := fmt.Sprintf("package plugin\n\nimport (\n\t\"db\"\n\n\t\"github.com/andreyvit/evm/gox\"\n)\n\nfunc Page(b *gox.Builder, customer *db.Customer) {\n <p>{customer.%s}</p>\n}", name)
 			_, err := gox.Compile("record.gox", source, pkg)
 			if want := model.PropBySelector(name) != nil; (err == nil) != want {
 				t.Fatalf("GoX selector %q: error %v, model permits selector: %v", name, err, want)

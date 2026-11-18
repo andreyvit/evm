@@ -40,6 +40,9 @@ func TestCompilationEntryPoints(t *testing.T) {
 		}},
 	}
 	const source = `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
 // A builder-taking helper is not a render entry.
 func label(b *gox.Builder, name string) string { return name }
 func Page(b *gox.Builder, name string) {
@@ -78,9 +81,9 @@ func Page(b *gox.Builder, name string) {
 			for _, bad := range []struct{ source, message string }{
 				{"package plugin\n// anonymous renderers are not Go declarations\n() {\n <p />\n}", "page.gox:3:1: expected declaration"},
 				{"package plugin\nfunc Page() {\n <p />\n}", "page.gox:2:1: rendering functions require an explicit first *gox.Builder parameter"},
-				{"package plugin\nfunc Page(b *gox.Builder) int {\n <p />\n return 1\n}", "page.gox:2:1: rendering functions must not return values"},
-				{"package plugin\n// source positions survive preprocessing\nfunc Page(b *gox.Builder) {\n <p>{missing}</p>\n}", "page.gox:4:"},
-				{"package plugin\nfunc Page(b *gox.Builder) {\n <p title={}>\n}", "page.gox:3:"},
+				{"package plugin\n\nimport \"github.com/andreyvit/evm/gox\"\n\nfunc Page(b *gox.Builder) int {\n <p />\n return 1\n}", "page.gox:5:1: rendering functions must not return values"},
+				{"package plugin\n\nimport \"github.com/andreyvit/evm/gox\"\n\n// source positions survive preprocessing\nfunc Page(b *gox.Builder) {\n <p>{missing}</p>\n}", "page.gox:7:"},
+				{"package plugin\n\nimport \"github.com/andreyvit/evm/gox\"\n\nfunc Page(b *gox.Builder) {\n <p title={}>\n}", "page.gox:6:"},
 				{source + strings.Repeat(" ", evmcompiler.MaxSourceSize), "combined GoX sources exceed"},
 			} {
 				if _, err := compiler.compile(bad.source); err == nil || !strings.Contains(err.Error(), bad.message) {
@@ -99,6 +102,9 @@ import "strings"
 func Main(b *gox.Builder, name string) { Page(b, strings.ToUpper(name)) }
 `,
 		"page.gox": `package main
+
+import "github.com/andreyvit/evm/gox"
+
 func Page(b *gox.Builder, name string) {
  <section>
   Title(name)
@@ -108,6 +114,9 @@ func Page(b *gox.Builder, name string) {
 }
 `,
 		"title.gox": `package main
+
+import "github.com/andreyvit/evm/gox"
+
 func Title(b *gox.Builder, name string) {
  <h1>{name}</h1>
 }
@@ -130,6 +139,13 @@ func Title(b *gox.Builder, name string) {
 	}
 	// Go imports are file-local, and unmarked inputs remain required.
 	sources["title.gox"] = `package main
+
+import (
+	"strings"
+
+	"github.com/andreyvit/evm/gox"
+)
+
 func Title(b *gox.Builder, name string) {
  Page()
  <h1>{strings.ToUpper(name)}</h1>
@@ -140,7 +156,7 @@ func Title(b *gox.Builder, name string) {
 	}
 	sources["main.go"] = `package main
 func Main() string { return strings.ToUpper("x") }`
-	sources["title.gox"] = "package main\nfunc Title(b *gox.Builder, name string) {\n <h1>{name}</h1>\n}"
+	sources["title.gox"] = "package main\n\nimport \"github.com/andreyvit/evm/gox\"\n\nfunc Title(b *gox.Builder, name string) {\n <h1>{name}</h1>\n}"
 	_, err = gox.CompileSources(sources)
 	if err == nil || !strings.Contains(err.Error(), "main.go:2:") || !strings.Contains(err.Error(), "undefined: strings") {
 		t.Fatalf("file-local imports: %v", err)
@@ -149,6 +165,12 @@ func Main() string { return strings.ToUpper("x") }`
 
 func TestNamedAmbient(t *testing.T) {
 	tmpl, err := gox.CompileSources(map[string]string{"ambient.gox": `package plugin
+
+import (
+	"evmruntime"
+
+	"github.com/andreyvit/evm/gox"
+)
 
 func AmbientTest(b *gox.Builder) {
  var ambient *evmruntime.Ambient
@@ -175,15 +197,15 @@ func AmbientTest(b *gox.Builder) {
 
 func TestNamedSourcePositions(t *testing.T) {
 	for _, directive := range []string{"//line forged.go:400", "/*line forged.go:400*/"} {
-		_, err := gox.CompileSources(map[string]string{"view.gox": "package plugin\n" + directive + `
+		_, err := gox.CompileSources(map[string]string{"view.gox": "package plugin\n\nimport \"github.com/andreyvit/evm/gox\"\n\n" + directive + `
 func Page(b *gox.Builder) {
  <p>{unknown}</p>
 }
 `})
-		if err == nil || !strings.Contains(err.Error(), "view.gox:4:") || strings.Contains(err.Error(), "forged.go") {
+		if err == nil || !strings.Contains(err.Error(), "view.gox:7:") || strings.Contains(err.Error(), "forged.go") {
 			t.Fatalf("%s: %v", directive, err)
 		}
-		tmpl, err := gox.CompileSources(map[string]string{"view.gox": "package plugin\n" + directive + `
+		tmpl, err := gox.CompileSources(map[string]string{"view.gox": "package plugin\n\nimport \"github.com/andreyvit/evm/gox\"\n\n" + directive + `
 type Person struct { Name string }
 func Page(b *gox.Builder) {
  var p *Person
@@ -199,7 +221,7 @@ func Page(b *gox.Builder) {
 		}
 		var reports []gox.Diagnostic
 		_, err = p.RenderFunc(context.Background(), "Page", nil, gox.RenderOptions{Report: func(d gox.Diagnostic) { reports = append(reports, d) }})
-		if err != nil || len(reports) != 1 || reports[0].Position.File != "view.gox" || reports[0].Position.Line != 6 {
+		if err != nil || len(reports) != 1 || reports[0].Position.File != "view.gox" || reports[0].Position.Line != 9 {
 			t.Fatalf("runtime positions: %+v: %v", reports, err)
 		}
 	}
@@ -211,6 +233,12 @@ func TestNamedComponentTags(t *testing.T) {
 		return nil
 	}}}}
 	tmpl, err := gox.CompileSources(map[string]string{"page.gox": `package plugin
+
+import (
+	"widgets"
+
+	"github.com/andreyvit/evm/gox"
+)
 
 func Page(b *gox.Builder, title string) {
  Content := Card
@@ -244,7 +272,7 @@ func Card(b *gox.Builder, pageTitle string, body func()) {
 	if err != nil || out != `<section><article><h2>&lt;safe&gt;</h2><em>&lt;safe&gt;</em></article><article><h2>second</h2></article>&lt;safe&gt;</section>` {
 		t.Fatalf("%q: %v", out, err)
 	}
-	_, err = gox.CompileSources(map[string]string{"page.gox": "package plugin\nfunc Page(b *gox.Builder) {\n <Missing />\n}"})
+	_, err = gox.CompileSources(map[string]string{"page.gox": "package plugin\n\nimport \"github.com/andreyvit/evm/gox\"\n\nfunc Page(b *gox.Builder) {\n <Missing />\n}"})
 	if err == nil || !strings.Contains(err.Error(), "unknown or untyped component Missing") {
 		t.Fatalf("unknown component: %v", err)
 	}
@@ -252,7 +280,13 @@ func Card(b *gox.Builder, pageTitle string, body func()) {
 
 func TestExplicitImports(t *testing.T) {
 	tpl, err := gox.Compile("explicit.gox", `package plugin
-import "strings"
+
+import (
+	"strings"
+
+	"github.com/andreyvit/evm/gox"
+)
+
 func View(b *gox.Builder) {
  <p>{strings.ToUpper("ready")}</p>
 }`)
@@ -270,7 +304,7 @@ func View(b *gox.Builder) {
 }
 
 func TestPackageClause(t *testing.T) {
-	const legacy = "func Page(b *gox.Builder) { <p /> }"
+	const legacy = "import \"github.com/andreyvit/evm/gox\"\n\nfunc Page(b *gox.Builder) { <p /> }"
 	const header = "---\ntitle: Page\n---\n"
 	options := gox.Options{ParseFrontmatter: func([]byte) (any, error) { return nil, nil }}
 	for _, check := range []func(string) error{

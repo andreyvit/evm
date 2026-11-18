@@ -61,7 +61,11 @@ func Card(b *gox.Builder, body func()) {
 func TestFragmentsControlFlow(t *testing.T) {
 	source := `package plugin
 
-import "github.com/andreyvit/evm/gox"
+import (
+	"strconv"
+
+	"github.com/andreyvit/evm/gox"
+)
 
 func Page(b *gox.Builder, stop bool) {
  <>
@@ -69,7 +73,7 @@ func Page(b *gox.Builder, stop bool) {
    <>
     if i == 0 { continue }
     <li>
-     i
+     strconv.Itoa(i)
      if i == 2 { break }
     </li>
    </>

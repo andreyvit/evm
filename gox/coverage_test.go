@@ -175,11 +175,15 @@ func Page(b *gox.Builder, show bool) {
 func TestCoverageFusedLoopHasOneSourceCondition(t *testing.T) {
 	template, err := gox.Compile("loop.gox", `package plugin
 
-import "github.com/andreyvit/evm/gox"
+import (
+	"strconv"
+
+	"github.com/andreyvit/evm/gox"
+)
 
 func Page(b *gox.Builder) {
  for i := 1; i <= 9; i++ {
- <span>i</span>
+ <span>strconv.Itoa(i)</span>
  }
 }`)
 	if err != nil {
@@ -223,12 +227,16 @@ func TestCoverageNilLoweringDoesNotUseAnotherFilesPosition(t *testing.T) {
 		"first.gox": "---\ntitle: Metadata\n---\n\npackage plugin\n",
 		"page.gox": `package plugin
 
-import "github.com/andreyvit/evm/gox"
+import (
+	"strconv"
+
+	"github.com/andreyvit/evm/gox"
+)
 
 type State struct { Ready, Active bool }
 
 func Page(b *gox.Builder, s *State) {
- <p>{s.Ready && s.Active}</p>
+ <p>{strconv.FormatBool(s.Ready && s.Active)}</p>
 }
 `,
 	})

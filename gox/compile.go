@@ -676,6 +676,22 @@ func (c *compiler) markup(m markup, args []ast.Expr, s *renderState) ([]ast.Stmt
 					expr := unwrap(args[p.arg-1])
 					position := c.position(expr.Pos())
 					op := operation{kind: opValue, filter: f, position: position, input: before, content: s.context.Clone(), attribute: true, boolean: booleanAttrs[a.name] && len(a.parts) == 1}
+					if !before.IsJS() {
+						// An event handler serializes any value as data. A
+						// style attribute is CSS. Other attributes take
+						// strings and integers, and a whole value can also
+						// be a bool.
+						where := outputAttributePart
+						switch {
+						case before.IsCSS():
+							where = outputCSS
+						case len(a.parts) == 1:
+							where = outputAttribute
+						}
+						if err := c.checkOutput(expr, c.info.TypeOf(expr), where); err != nil {
+							return nil, err
+						}
+					}
 					out = append(out, c.guarded(expr, c.op(op, expr), position)...)
 				}
 			}
@@ -834,6 +850,9 @@ func (c *compiler) output(expr ast.Expr, s *renderState) ([]ast.Stmt, error) {
 			value, _ := strconv.Unquote(lit.Value)
 			return []ast.Stmt{c.op(operation{kind: opRaw, text: value, position: position})}, nil
 		}
+		if err := c.checkOutput(expr, t, outputText); err != nil {
+			return nil, err
+		}
 		return c.guarded(expr, c.op(operation{kind: opValue, position: position}, expr), position), nil
 	}
 	if c.template.format == CSSFormat {
@@ -860,6 +879,18 @@ func (c *compiler) output(expr ast.Expr, s *renderState) ([]ast.Stmt, error) {
 			return nil, err
 		}
 		return []ast.Stmt{c.op(operation{kind: opRaw, text: f.Apply(v), position: position, input: before, content: s.context.Clone()})}, nil
+	}
+	// HTML text shows a value to a person, so it takes strings and trusted
+	// content. A style body takes CSS values. A script body serializes any
+	// value as data.
+	switch {
+	case before.IsCSS():
+		err = c.checkOutput(expr, t, outputCSS)
+	case isText || before.IsRCDATA():
+		err = c.checkOutput(expr, t, outputText)
+	}
+	if err != nil {
+		return nil, err
 	}
 	return c.guarded(expr, c.op(operation{kind: opValue, filter: f, position: position, input: before, content: s.context.Clone()}, expr), position, !isText), nil
 }

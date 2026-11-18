@@ -468,16 +468,15 @@ helpers' packages. Pass its generated `MethodBindings` to registration **before
 compiling scripts or publishing the package**:
 
 ```go
-pkg, err := evm.ModelPackage("m", nm.Schema)
-if err != nil { panic(err) }
-err = evmbind.RegisterMethods(&pkg, RecordMethods(), evmbind.MethodOptions{
+pkg := must(evm.ModelPackage("m", nm.Schema))
+ensure(evmbind.RegisterMethods(&pkg, RecordMethods(), evmbind.MethodOptions{
     Mode: evmbind.StaticOnly,
     Static: bindings.MethodBindings,
-})
-if err != nil { panic(err) }
+}))
 ```
 
-Go callers use `nm.Customer_PointBalance(r)`; scripts use
+`must` and `ensure` panic on an error. Go callers use
+`nm.Customer_PointBalance(r)`; scripts use
 `stats.PointBalance()`. Both execute the same helper over the original 16-byte
 record, whether it references Fast2, Compact2, MessagePack, native struct or
 in-memory data. Calls do not decode or change representation. The method is

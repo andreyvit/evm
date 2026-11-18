@@ -13,13 +13,14 @@ func TestAmbientArguments(t *testing.T) {
 
 import (
 	"evmruntime"
+	"fmt"
 
 	"github.com/andreyvit/evm/gox"
 )
 
 //gox:arg color ambient="color"
 func Badge(b *gox.Builder, label string, color string, ambient *evmruntime.Ambient) {
- <p>label;color;ambient.Get("other")</p>
+ <p>label;color;fmt.Sprint(ambient.Get("other"))</p>
 }
 func Page(b *gox.Builder) {
  calls:=0
@@ -29,7 +30,7 @@ func Page(b *gox.Builder) {
  <Badge label="XML" />
  <Badge label="Child" ambient:color={next()} />
  <div>Badge("Go")</div>
- <p>ambient.Get("color");calls</p>
+ <p>fmt.Sprint(ambient.Get("color"));fmt.Sprint(calls)</p>
 }`
 	tmpl, err := gox.Compile("ambient.gox", source)
 	if err != nil {
@@ -59,12 +60,13 @@ func TestAmbientArguments_missing_and_invalid(t *testing.T) {
 
 import (
 	"evmruntime"
+	"strconv"
 
 	"github.com/andreyvit/evm/gox"
 )
 
 //gox:arg count ambient="count"
-func Number(b *gox.Builder,count int,ambient *evmruntime.Ambient){<p>count</p>}
+func Number(b *gox.Builder,count int,ambient *evmruntime.Ambient){<p>strconv.Itoa(count)</p>}
 func Page(b *gox.Builder){var ambient *evmruntime.Ambient;<Number />}`
 	tmpl, err := gox.Compile("ambient.gox", source)
 	if err != nil {
@@ -79,8 +81,8 @@ func Page(b *gox.Builder){var ambient *evmruntime.Ambient;<Number />}`
 		t.Fatalf("%q: %v", got, err)
 	}
 	for _, source := range []string{
-		"package plugin\n\nimport \"github.com/andreyvit/evm/gox\"\n\n//gox:arg count ambient=\"count\"\nfunc Page(b *gox.Builder,count int){<p>count</p>}",
-		"package plugin\n\nimport (\n\t\"evmruntime\"\n\n\t\"github.com/andreyvit/evm/gox\"\n)\n\n//gox:arg count ambient=\"count\" optional\nfunc Page(b *gox.Builder,count int,ambient *evmruntime.Ambient){<p>count</p>}",
+		"package plugin\n\nimport (\n\t\"strconv\"\n\n\t\"github.com/andreyvit/evm/gox\"\n)\n\n//gox:arg count ambient=\"count\"\nfunc Page(b *gox.Builder,count int){<p>strconv.Itoa(count)</p>}",
+		"package plugin\n\nimport (\n\t\"evmruntime\"\n\t\"strconv\"\n\n\t\"github.com/andreyvit/evm/gox\"\n)\n\n//gox:arg count ambient=\"count\" optional\nfunc Page(b *gox.Builder,count int,ambient *evmruntime.Ambient){<p>strconv.Itoa(count)</p>}",
 		strings.Replace(source, "<Number />", "<Number ambient:count=\"wrong type\" />", 1),
 	} {
 		tmpl, err := gox.Compile("bad.gox", source)

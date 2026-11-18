@@ -216,7 +216,7 @@ import "github.com/andreyvit/evm/gox"
 func Page(b *gox.Builder, n int) {
 	<p>label(n)</p>
 	<Each>
-		<slot-row><i>ambient.Get("color")</i></slot-row>
+		<slot-row><i>ambient.Get("color").(string)</i></slot-row>
 	</Each>
 }
 `,

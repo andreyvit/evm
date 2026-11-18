@@ -35,7 +35,7 @@ func Header(b *gox.Builder, store *app.Store, user *app.User, cart *app.Cart) {
 			" (admin)"
 		}
 		", member since "
-		user.Joined.Format("Jan 2006")
+		user.Joined | app.FormatDate
 		" — "
 		app.Pluralize(cart.Count(), "item", "items")
 		" in cart"

@@ -10,14 +10,18 @@ import (
 func TestImplicitAndOptionalArguments_share_call_rules(t *testing.T) {
 	source := `package plugin
 
-import "github.com/andreyvit/evm/gox"
+import (
+	"strconv"
+
+	"github.com/andreyvit/evm/gox"
+)
 
 type Context struct { Name string }
 //gox:arg value optional
-func Pointer(b *gox.Builder, value *int) { <i>value == nil</i> }
+func Pointer(b *gox.Builder, value *int) { <i>strconv.FormatBool(value == nil)</i> }
 //gox:arg suffix optional
 //gox:arg enabled optional
-func Card(b *gox.Builder, ctx *Context, label string, suffix string, enabled gox.Optional[bool]) { <p>ctx.Name;label;suffix;enabled.Present;enabled.Value</p> }
+func Card(b *gox.Builder, ctx *Context, label string, suffix string, enabled gox.Optional[bool]) { <p>ctx.Name;label;suffix;strconv.FormatBool(enabled.Present);strconv.FormatBool(enabled.Value)</p> }
 //gox:arg label implicit
 //gox:arg suffix optional
 func Text(label, suffix string) string { return label+suffix }

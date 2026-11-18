@@ -142,7 +142,7 @@ subset and registered packages, not unrestricted access to every Go package.
 
 - [Showcase](#one-example-to-show-a-friend) and [live recompilation](#recompile-templates-without-rebuilding-the-host)
 - [Run your first template](#run-your-first-template)
-- [Syntax](#syntax) and [what produces output](#what-produces-output)
+- [Syntax](#syntax), [what produces output](#what-produces-output) and [values by position](#values-by-position)
 - [Attributes and escaping](#attributes-and-escaping)
 - [Compile, link, render](#compile-link-render)
 - [Components, slots and helpers](#components-slots-and-helpers)
@@ -172,7 +172,7 @@ import (
 )
 
 func main() {
-	tmpl, err := gox.Compile("greeting.gox", `package greeting
+	tmpl := must(gox.Compile("greeting.gox", `package greeting
 
 import "github.com/andreyvit/evm/gox"
 
@@ -182,21 +182,19 @@ func Greeting(b *gox.Builder, name string) {
 			name
 			"!"
 		</p>
-	}`)
-	if err != nil {
-		panic(err)
-	}
-	program, err := tmpl.Link()
-	if err != nil {
-		panic(err)
-	}
-	html, err := program.Render(context.Background(), []values.Value{
+	}`))
+	program := must(tmpl.Link())
+	html := must(program.Render(context.Background(), []values.Value{
 		values.String("Alice & Bob"),
-	}, gox.RenderOptions{Strict: true})
+	}, gox.RenderOptions{Strict: true}))
+	fmt.Println(html)
+}
+
+func must[T any](value T, err error) T {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println(html)
+	return value
 }
 ```
 
@@ -211,15 +209,16 @@ reuse `program`. The [executable example](example_test.go) checks this rendering
 path, and the [loyalty example](https://github.com/andreyvit/edb/tree/main/examples/loyalty) adds typed host models.
 [examples/gox-basic](../examples/gox-basic) renders a page from an ordinary Go
 application: its types, methods, functions and constants, bound from its own
-source. Its templates span several files, use a layout with slots and an
-implicit argument, and are recompiled between renders.
+source. Its templates span several files and use a layout with slots, an
+implicit argument and pipelines. `go run ./examples/gox-basic` compiles them
+once and renders two requests; its test recompiles a template between renders.
 
 ## Syntax
 
 - Markup can appear anywhere, independent of line breaks. A single `<` starts
   a tag unless protected by parentheses or brackets. Strings and Go comments
   protect their contents; multiline opening tags continue through `>`.
-- Parenthesize comparisons: `<p>(age < minimumAge)</p>` and
+- Parenthesize comparisons: `if (age < minimumAge) { ... }` and
   `for i := 0; (i < count); i++ { ... }`. Operators `<=`, `<<`, `<<=` and `<-`
   keep their Go meanings. Ordinary `{` enables markup, even inside a callback
   passed within parentheses; `}` restores the enclosing delimiter mode.
@@ -231,10 +230,16 @@ implicit argument, and are recompiled between renders.
   bare `<` comparisons. A single `{a}` still works as a Go block.
 - Inside elements/fragments, standalone expressions render. Assignments,
   conditions and arguments do not. Outside them, write ordinary Go.
+- Text output takes strings and trusted content. Convert other values
+  (`strconv.Itoa(count)`) or pipe them through a function
+  (`price | app.FormatMoney`).
 - Quote text. Source indentation emits nothing; string whitespace is preserved.
   Use `<p>name</p>` for inline values and `<p>"{"</p>` for a literal brace.
 - Attributes accept quoted strings with interpolation or `{expression}`.
-  Boolean HTML attributes omit false; ARIA attributes retain it.
+  They take strings and integers, and a whole `{expression}` value can be a
+  bool. Boolean HTML attributes omit false; others print it.
+- Attributes are for the browser, text is for people. See
+  [values by position](#values-by-position).
 - JS/CSS bodies retain their syntax. Insert Go data with `{=expression}`.
 - Inputs are typed. Inside markup, omitted arguments bind by name; explicit
   inputs win and incompatible matching types fail compilation.
@@ -268,7 +273,9 @@ Within an element or fragment:
 | Source | Meaning |
 | --- | --- |
 | `"Hello"` | Render literal text |
-| `customer.Name` | Render a value, escaped for its context |
+| `customer.Name` | Render a string or trusted content, escaped for its context |
+| `strconv.Itoa(customer.Points)` | Convert a number, then render the string |
+| `order.Placed \| app.FormatDate` | Render the result of `app.FormatDate(order.Placed)` |
 | `label(customer)` | Render the helper's result |
 | `Card(customer)` | Call a renderer; it writes through the builder |
 | `label := customer.Name` | Assign a variable; emit nothing |
@@ -279,6 +286,23 @@ A function call returning no values can perform rendering or another side effect
 A call returning one value in output position renders that value. Multiple return
 values cannot be rendered as one expression. A function value itself must be
 called to render it.
+
+Text output accepts strings, including named string types, the trusted content
+types such as `gox.HTML`, and `gox.Content`. A value of any other type is a
+compile error:
+
+```text
+page.gox:25:5: cannot output a value of type int: text takes strings and trusted content; convert it
+```
+
+GoX never picks a display form for a value. Even one type reads differently
+from place to place: a point balance as `1,250` and a point change as
+`+1,250`, a year as `2026` and a count as `2,026`. So the template names the
+function at each use, as a call or a [pipeline](#attribute-helpers-and-pipelines).
+
+The rule covers element and fragment bodies, `<title>`, `<textarea>` and text
+templates. Convert in place with `strconv.Itoa(n)`, `strconv.FormatBool(ok)`,
+`fmt.Sprint(v)` or `fmt.Sprintf(...)`.
 
 Outside markup, ordinary Go rules apply. To emit text without a wrapper element,
 enter a fragment with `<>...</>`. Braces alone create a Go block, not an
@@ -297,6 +321,47 @@ func Names(b *gox.Builder, names []string) {
 }
 ```
 
+### Values by position
+
+Attributes are for the browser, text is for people. A person reads text, and
+only the template knows how a value should read there, so text takes strings.
+The browser reads attributes, CSS and JavaScript, so those also take the
+numbers a browser expects, written as they are.
+
+| Position | Example | Takes |
+| --- | --- | --- |
+| Text | `<p>name</p>`, `<title>`, `<textarea>` | strings, trusted content |
+| Whole attribute value | `colspan={n}`, `hidden={flag}` | strings, integers, `bool` |
+| Interpolated attribute | `href="/items/{id}"`, `title="{count} items"` | strings, integers |
+| CSS | `{=value}` in `<style>`, `style="width: {percent}%"` | strings, integers, floats |
+| JavaScript | `{=value}` in `<script>`, `onclick="go({id})"` | any value, as JSON |
+
+Anything else goes through a function that returns a string. A function's
+extra parameters are filled like [implicit arguments](#implicit-arguments) of
+any GoX call, so a host function such as
+`func FormatMoney(m Money, locale *Locale) string` needs no locale at the call:
+
+```gox
+<td title="{order.Placed | app.FormatTime}" data-total={int64(order.Total)}>
+	order.Total | app.FormatMoney
+</td>
+```
+
+- **Strings** include named string types, the trusted content types and
+  `gox.Content`.
+- **Integers in attributes** are Go's own `int`, `int8`, `int16`, `int32`,
+  `int64`, `uint`, `uint16`, `uint32` and `uint64`. `byte`, `uint8` and `rune`
+  usually hold a character, so GoX refuses to guess: convert to a string or to
+  `int`. `uintptr` is refused too.
+- **Named types** other than strings are not integers here, even over `int64`:
+  `Money` in cents is not what a reader or the browser expects. Convert it
+  (`int64(price)`) or call a function.
+- **Floats** are for CSS and JavaScript only. In CSS a float prints in decimal
+  notation, never with an exponent.
+- **A `bool`** is a whole attribute value only; see
+  [attributes](#attributes-and-escaping).
+- Component arguments, `b.Attr`, `b.Text` and pipelines keep their Go types.
+
 ## Attributes and escaping
 
 Use quoted text for fixed attributes, `{expression}` for a whole dynamic value,
@@ -313,6 +378,26 @@ func Link(b *gox.Builder, id string, label string, disabled bool) {
 HTML boolean attributes such as `disabled` are omitted when false. Attributes
 such as `aria-disabled` retain the textual `false` value. Component attributes
 are typed function arguments instead of HTML attributes.
+
+An attribute takes strings and integers, whole or interpolated. A whole value,
+`name={value}`, can also be a bool. It decides the presence of a boolean HTML
+attribute (`hidden`, `disabled`, `checked` and the rest of that fixed list) and
+prints `true` or `false` in any other, because `aria-expanded`,
+`contenteditable`, `draggable`, `spellcheck` and most `data-` conventions
+distinguish `false` from absent.
+
+Other types need a conversion or a call; see
+[values by position](#values-by-position):
+
+```text
+page.gox:25:17: cannot use a value of type shop.Money as an attribute value: an attribute takes a string, a bool or an integer; convert it
+page.gox:25:19: cannot interpolate a value of type float64 into an attribute: an attribute takes strings and integers; convert it
+page.gox:25:22: cannot interpolate a value of type rune into an attribute: an attribute takes strings and integers; rune may be a character or a number, so convert it to a string or to int
+```
+
+A `style` attribute is CSS and takes strings, integers and floats, like
+`{=value}` in a style body. An event-handler attribute takes any value as
+JSON, like `{=value}` in a script body.
 
 Escaping is contextual: text and attribute values are escaped differently, and
 URLs, JavaScript and CSS receive their own filtering. Put ordinary data into
@@ -349,6 +434,16 @@ standard packages such as `time`, `slices`, `maps`, `net/url` and `regexp`.
 This covers package-qualified tags such as `<ui.Button>`. A local value with a
 package's name is an ordinary value. `gox fmt` and `gox.FormatSource` add
 missing imports; see [formatting rules](#formatting-rules).
+
+`gox.Options` holds compile settings; its `Compile`, `CompileSources` and
+`CompileFiles` methods match the package functions, which use the zero value.
+
+| Option | Purpose |
+| --- | --- |
+| `Format` | [Output language](#whitespace-and-output-formats): HTML (default), text or CSS |
+| `ImplicitTypes` | Types whose parameters are [implicit](#implicit-arguments) |
+| `ParseFrontmatter` | Parser for [file metadata](#host-frontmatter) |
+| `AllowMissingPackage` | Accept legacy files without a package clause |
 
 To let templates use a Go package, give [`evmbind.New`](../evmbind/README.md)
 that package's own source; it exposes every exported type, method, function
@@ -738,9 +833,21 @@ decorate(false)
 </textarea>
 ```
 
-`value | format` means `format(value)`; `value | format(arg)` means
-`format(arg, value)`. Integer bitwise OR keeps its Go meaning. Pipelines require
-a callable right side and a single result.
+`value | format` means `format(value)`. In `value | format(arg)` the value is
+the last argument you write: `format(arg, value)`. Implicit arguments are
+filled after it, as in any call. Write `_` where the value goes when it
+is not last:
+
+```gox
+name | strings.ToUpper                  // strings.ToUpper(name)
+name | strings.TrimPrefix(_, "Dr. ")    // strings.TrimPrefix(name, "Dr. ")
+count | fmt.Sprintf("%d items", _)      // fmt.Sprintf("%d items", count)
+name | strings.TrimSpace | strings.ToUpper
+```
+
+A call takes one `_`, as a whole argument. Pipelines require a callable right
+side with a single result. Integer bitwise OR keeps its Go meaning, unless the
+right side has a `_`.
 
 ### Typed ambient inputs
 
@@ -793,8 +900,9 @@ Inline JS/CSS retain their native source whitespace and use `{=value}` for data:
 
 Rendered output has no automatic pretty-print mode: it could change inline text or `<pre>`
 semantics. `gox.Options{Format: gox.TextFormat}` renders top-level expressions as plain
-text. `gox.CSSFormat` treats literal strings as CSS source and dynamically rendered
-expressions as contextually escaped CSS data. Both use the same Go frontend,
+text; they follow the [text output rule](#what-produces-output): strings
+only. `gox.CSSFormat` treats literal strings as CSS source and
+dynamically rendered expressions as contextually escaped CSS data. Both use the same Go frontend,
 type analysis, nil guards and EVM compiler; HTML markup requires `HTMLFormat`.
 
 ## Safety and failures
@@ -899,24 +1007,16 @@ Directories skip hidden subdirectories and `vendor`. Invalid files are not writt
 The same operations are available as APIs:
 
 ```go
-if err := gox.CheckSyntax("page.gox", source); err != nil {
-	return err
-}
-formatted, err := gox.FormatSource("page.gox", source, hostPackages...)
-if err != nil {
-	return err
-}
-lowered, err := gox.Preprocess("page.gox", formatted, hostPackages...)
-if err != nil {
-	return err
-}
+ensure(gox.CheckSyntax("page.gox", source))
+formatted := must(gox.FormatSource("page.gox", source, hostPackages...))
+lowered := must(gox.Preprocess("page.gox", formatted, hostPackages...))
 fmt.Print(lowered.GeneratedSources["page.gox.go"])
-tmpl, err := lowered.Compile()
-if err != nil {
-	return err
-}
+tmpl := must(lowered.Compile())
 // Link tmpl with the matching host implementations, then render it.
 ```
+
+`must` and `ensure` stand for the caller's error handling. Each error names
+the source file and position.
 
 `PreprocessSources` handles a mixed Go/GoX package; `PreprocessFiles` also selects
 an entry by renderer name or filename. All three have `Options` methods for text
@@ -993,6 +1093,10 @@ func Card(b *gox.Builder, name string) {
 | A missing argument is not inherited | Check its parameter name, lexical scope, type and whether the call is inside markup |
 | A component is unknown | Use its exact case-sensitive Go name and make its package available |
 | `undefined: x (add import "...")` | The file names package `x` without importing it. Add the import, or run `gox fmt` / `FormatSource` |
+| `cannot output a value of type int` | Text takes strings and trusted content. Convert it (`strconv.Itoa(n)`, `fmt.Sprint(v)`) or pipe it through a function (`price \| app.FormatMoney`) |
+| `cannot use a value of type ... as an attribute value` | A whole attribute value is a string, a bool or an integer. Convert the value or call a function |
+| `cannot interpolate a value of type ... into an attribute` | Interpolated values are strings and integers. Convert the value or call a function, for example `{price \| app.FormatMoney}` |
+| `cannot use a value of type ... in CSS` | CSS takes strings, integers and floats. Convert the value |
 | Spaces between words disappear | Source indentation emits nothing; add spaces inside strings |
 | Attributes fail after calling a helper | Attribute helpers must run before the element's first child output |
 | A branch leaves an element open | Keep complete elements within each branch and loop iteration |

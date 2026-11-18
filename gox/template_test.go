@@ -22,6 +22,7 @@ func TestGoXPreparationAndHelper(t *testing.T) {
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/andreyvit/evm/gox"
 )
@@ -39,7 +40,7 @@ func Page(b *gox.Builder,
    "!"
   </p>
   for i := 0; (i < count); i++ {
-   <span>{i}</span>
+   <span>{strconv.Itoa(i)}</span>
   }
  </section>
 }
@@ -202,6 +203,7 @@ func TestComponentsSlotsAndImplicitInputs(t *testing.T) {
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/andreyvit/evm/gox"
 )
@@ -212,7 +214,7 @@ func Page(b *gox.Builder, page string) {
    <Wrapper label={fmt.Sprintf("item %d",i)}>
     <slot-body>
      page
-     i
+     strconv.Itoa(i)
     </slot-body>
    </Wrapper>
   }
@@ -329,7 +331,11 @@ func Page(b *gox.Builder, name string) {
 func TestControlFlowAndClasses(t *testing.T) {
 	source := `package plugin
 
-import "github.com/andreyvit/evm/gox"
+import (
+	"strconv"
+
+	"github.com/andreyvit/evm/gox"
+)
 
 func Page(b *gox.Builder) {
  <ul class="list">
@@ -338,7 +344,7 @@ func Page(b *gox.Builder) {
    <li>
     b.Class("row active")
     if i==2 {continue}
-    i
+    strconv.Itoa(i)
     if i==3 {break}
    </li>
   }
@@ -410,6 +416,46 @@ func Page(b *gox.Builder, name string) {
 	got := render(t, source, values.String("alice"))
 	if got != `<section>ALICE!alice<div><b>first</b><b>second</b></div></section>` {
 		t.Fatal(got)
+	}
+}
+func TestPipelinePlaceholder(t *testing.T) {
+	source := `package plugin
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/andreyvit/evm/gox"
+)
+
+func Page(b *gox.Builder, name string, n int) {
+ <p title="{n | fmt.Sprintf("%d items", _)}">
+  name | strings.TrimPrefix(_, "al")
+  name | strings.ReplaceAll(_, "a", "o") | strings.ToUpper
+  n | add(_, 1) | fmt.Sprint
+  n | fmt.Sprintf("%s has %d", name, _)
+  name | join("<", _, ">")
+ </p>
+ }
+ func add(a, b int) int { return a + b }
+ func join(left, s, right string) string { return left + s + right }
+ `
+	got := render(t, source, values.String("alice"), values.Int(7))
+	if want := `<p title="7 items">iceOLICE8alice has 7&lt;alice&gt;</p>`; got != want {
+		t.Fatalf("got  %s\nwant %s", got, want)
+	}
+
+	_, err := gox.Compile("twice.gox", `package plugin
+
+import "github.com/andreyvit/evm/gox"
+
+func Page(b *gox.Builder, name string) {
+ name | join(_, _)
+ }
+ func join(a, b string) string { return a + b }
+ `)
+	if err == nil || !strings.Contains(err.Error(), "twice.gox:6:") || !strings.Contains(err.Error(), "cannot use _ as value") {
+		t.Fatalf("want an error for two placeholders, got: %v", err)
 	}
 }
 func TestKVOInputs(t *testing.T) {
@@ -581,13 +627,17 @@ func Page(b *gox.Builder) {
 	}
 	source = `package plugin
 
-import "github.com/andreyvit/evm/gox"
+import (
+	"strconv"
+
+	"github.com/andreyvit/evm/gox"
+)
 
 // Header comment
  func Page(b *gox.Builder,
   n int,
  ) {
- <div>{100 / n}</div>
+ <div>{strconv.Itoa(100 / n)}</div>
  }`
 	tmpl, err := gox.Compile("division.gox", source)
 	if err != nil {
@@ -598,7 +648,7 @@ import "github.com/andreyvit/evm/gox"
 		t.Fatal(err)
 	}
 	_, err = p.Render(context.Background(), []values.Value{values.Int(0)}, gox.RenderOptions{})
-	if !errors.Is(err, evm.ErrDivideByZero) || !strings.Contains(err.Error(), "division.gox:9") {
+	if !errors.Is(err, evm.ErrDivideByZero) || !strings.Contains(err.Error(), "division.gox:13") {
 		t.Log(tmpl.GeneratedSource)
 		var execution *evm.ExecutionError
 		if errors.As(err, &execution) {
@@ -678,6 +728,7 @@ func TestNilGuardsPreserveEvaluationOrder(t *testing.T) {
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/andreyvit/evm/gox"
 )
@@ -688,10 +739,10 @@ func Page(b *gox.Builder) {
  next:=func() *Customer {calls++;return nil}
  <div>
   fmt.Sprintf("name: %s",next().Name)
-  false && next().Active
-  true || next().Active
-  customer == nil || customer.Active
-  calls
+  strconv.FormatBool(false && next().Active)
+  strconv.FormatBool(true || next().Active)
+  strconv.FormatBool(customer == nil || customer.Active)
+  strconv.Itoa(calls)
  </div>
  }
  type Customer struct{Name string;Active bool}`
@@ -1173,23 +1224,40 @@ func TestMarkupIndependentOfLines(t *testing.T) {
 }
 
 func TestMarkupLexicalModes(t *testing.T) {
-	got := render(t, `package plugin
+	// Pipelines keep the bare comparison and shift forms at the start of an
+	// output expression.
+	tmpl, err := gox.Compile("test.gox", `package plugin
 
-import "github.com/andreyvit/evm/gox"
+import (
+	"strconv"
+
+	"github.com/andreyvit/evm/gox"
+)
 
 func Page(b *gox.Builder) {
  call := func(f func()) { f() }
  <section>
- call(func() { <p>(1 < 2)</p> })
- for i := 0; (i < 2); i++ { <i>i</i> }
+ call(func() { <p>(1 < 2) | strconv.FormatBool</p> })
+ for i := 0; (i < 2); i++ { <i>i | strconv.Itoa</i> }
  <b title={1 < 2}>([]string{"no", "yes"}[1])</b>
- <em>1 << 2</em><em>1 <= 2</em>
+ <em>1 << 2 | strconv.Itoa</em><em>(1 <= 2) | strconv.FormatBool</em>
  <span>"<fake>" /* </fake> */</span>
  <>
  "tail" // <fake>
  </>
  </section>
 }`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := tmpl.Link()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := program.Render(context.Background(), nil, gox.RenderOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := `<section><p>true</p><i>0</i><i>1</i><b title="true">yes</b><em>4</em><em>true</em><span>&lt;fake&gt;</span>tail</section>`
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)

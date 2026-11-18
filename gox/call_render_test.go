@@ -17,7 +17,11 @@ import (
 func TestReturnedRendererSharesCallingVM(t *testing.T) {
 	tmpl, err := gox.Compile("view.gox", `package plugin
 
-import "github.com/andreyvit/evm/gox"
+import (
+	"strconv"
+
+	"github.com/andreyvit/evm/gox"
+)
 
 var count int
  func Choose() func(*gox.Builder) {
@@ -29,7 +33,7 @@ var count int
   }
  }
  func View(b *gox.Builder,name string){
-  <p>name; ":"; count; </p>
+  <p>name; ":"; strconv.Itoa(count); </p>
  }
  func Count()int{return count}
  `)
@@ -110,6 +114,7 @@ func TestNestedRendererUsesItsOwnBuilder(t *testing.T) {
 
 import (
 	"host"
+	"strconv"
 
 	"github.com/andreyvit/evm/gox"
 )
@@ -117,19 +122,19 @@ import (
  var count int
  func Outer(b *gox.Builder){
   count=40
-  <div>{host.Nested(Inner)}<span>{count}</span></div>
+  <div>{host.Nested(Inner)}<span>{strconv.Itoa(count)}</span></div>
  }
  func OuterLiteral(b *gox.Builder){
   count=40
   html:=host.Nested(func(inner *gox.Builder){
    count++
-   <b>{count}</b>
+   <b>{strconv.Itoa(count)}</b>
   })
-  <div>{html}<span>{count}</span></div>
+  <div>{html}<span>{strconv.Itoa(count)}</span></div>
  }
  func Inner(b *gox.Builder){
   count++
-  <b>{count}</b>
+  <b>{strconv.Itoa(count)}</b>
  }
  `, pkg)
 	if err != nil {

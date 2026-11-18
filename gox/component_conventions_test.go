@@ -12,21 +12,23 @@ func TestComponentParameterConventions(t *testing.T) {
 
 import (
 	"evmruntime"
+	"strconv"
 
 	"github.com/andreyvit/evm/gox"
 )
 
 type OptionalBool struct { Value bool; Present bool }
-func Leaf(b *gox.Builder, ambient *evmruntime.Ambient) { <em>{ambient.Get("color")}</em> }
+func text(v any) string { s, _ := v.(string); return s }
+func Leaf(b *gox.Builder, ambient *evmruntime.Ambient) { <em>{text(ambient.Get("color"))}</em> }
 //gox:arg enabled optional=true
 //gox:arg count optional=true
 func Item(b *gox.Builder, enabled bool, count *int, flag OptionalBool, extras map[string]any, ambient *evmruntime.Ambient) {
- <p>{enabled}
-{count == nil}
-{flag.Value}
-{flag.Present}
-{extras["label"]}
-{ambient.Get("color")}</p>
+ <p>{strconv.FormatBool(enabled)}
+{strconv.FormatBool(count == nil)}
+{strconv.FormatBool(flag.Value)}
+{strconv.FormatBool(flag.Present)}
+{text(extras["label"])}
+{text(ambient.Get("color"))}</p>
  <Leaf />
 }
 func Page(b *gox.Builder) {
@@ -34,7 +36,7 @@ func Page(b *gox.Builder) {
  ambient = ambient.CloneWith(map[string]any{"color":"parent"})
  <Item enabled={true} count={3} flag={false} extras:label="X" ambient:color="child" />
  <Item extras={nil} />
- <p>{ambient.Get("color")}</p>
+ <p>{text(ambient.Get("color"))}</p>
 }`
 	tmpl, err := gox.CompileSources(map[string]string{"page.gox": source})
 	if err != nil {
@@ -100,13 +102,17 @@ func TestComponentOptionalShapes(t *testing.T) {
 			t.Run(name+field, func(t *testing.T) {
 				source := `package plugin
 
-import "github.com/andreyvit/evm/gox"
+import (
+	"strconv"
+
+	"github.com/andreyvit/evm/gox"
+)
 
 type TYPE struct { Value bool; FIELD bool }
 func C(b *gox.Builder, flag TYPE, ptr *TYPE) {
- <p>{flag.Value}
- {flag.FIELD}
- {ptr == nil}</p>
+ <p>{strconv.FormatBool(flag.Value)}
+ {strconv.FormatBool(flag.FIELD)}
+ {strconv.FormatBool(ptr == nil)}</p>
 }
 func Page(b *gox.Builder) {
  <C flag={false} ptr={true} />
@@ -135,8 +141,8 @@ func TestComponentExtrasSelectNamedMaps(t *testing.T) {
 
 import "github.com/andreyvit/evm/gox"
 
-func C(b *gox.Builder, first map[string]any, last map[string]any) { <p>{first["x"]}
- {last["x"]}</p> }
+func C(b *gox.Builder, first map[string]any, last map[string]any) { <p>{first["x"].(string)}
+ {last["x"].(string)}</p> }
 func Page(b *gox.Builder) {
  first := map[string]any{"x":"provided"}
  <C first={first} last:x="last" />
@@ -158,10 +164,14 @@ func Page(b *gox.Builder) {
 func TestComponentGenericOptional(t *testing.T) {
 	tmpl, err := gox.CompileSources(map[string]string{"page.gox": `package plugin
 
-import "github.com/andreyvit/evm/gox"
+import (
+	"strconv"
 
-func C(b *gox.Builder, flag gox.Optional[bool]) { <p>{flag.Value}
- {flag.Present}</p> }
+	"github.com/andreyvit/evm/gox"
+)
+
+func C(b *gox.Builder, flag gox.Optional[bool]) { <p>{strconv.FormatBool(flag.Value)}
+ {strconv.FormatBool(flag.Present)}</p> }
 func Page(b *gox.Builder) { <C flag={false} />
  <C /> }
 `})
@@ -209,19 +219,20 @@ func TestComponentMapInputs_dynamic_keys_evaluate_once(t *testing.T) {
 
 import (
 	"evmruntime"
+	"strconv"
 
 	"github.com/andreyvit/evm/gox"
 )
 
 type Labels map[int]string
-func Card(b *gox.Builder, labels Labels, flags map[string]bool, ambient *evmruntime.Ambient) { <p>labels[1]; labels[2]; flags["data-active"]; ambient.Get("color")</p> }
+func Card(b *gox.Builder, labels Labels, flags map[string]bool, ambient *evmruntime.Ambient) { <p>labels[1]; labels[2]; strconv.FormatBool(flags["data-active"]); ambient.Get("color").(string)</p> }
 func Page(b *gox.Builder) {
  var ambient *evmruntime.Ambient
  calls := 0
  key := func() int { calls++; return calls }
  color := "color"
  <Card labels:{key()}="A" labels:{key()}="B" flags:data-active ambient:{color}="blue" />
- <p>calls</p>
+ <p>strconv.Itoa(calls)</p>
 }`
 	tmpl, err := gox.CompileSources(map[string]string{"page.gox": source})
 	if err != nil {
@@ -377,7 +388,11 @@ func Page(b *gox.Builder) { value := <Label></Label>; value }; func Label() stri
 func TestNestedComponentMaps(t *testing.T) {
 	source := `package plugin
 
-import "github.com/andreyvit/evm/gox"
+import (
+	"strconv"
+
+	"github.com/andreyvit/evm/gox"
+)
 
 func Page(b *gox.Builder) {
  hits := 0
@@ -388,12 +403,12 @@ func Page(b *gox.Builder) {
   extras:{"tier::class"}="tier"
   typed:options:label="Label"
  />
- <span>hits</span>
+ <span>strconv.Itoa(hits)</span>
 }
 func C(b *gox.Builder, extras map[string]any, typed map[string]map[string]string) {
  attrs := extras["attrs"].(map[string]any)
- <input type={attrs["type"]} name={attrs["name"]}>
- <p class={extras["tier::class"]}>typed["options"]["label"]</p>
+ <input type={attrs["type"].(string)} name={attrs["name"].(string)}>
+ <p class={extras["tier::class"].(string)}>typed["options"]["label"]</p>
 }`
 	formatted, err := gox.FormatSource("nested.gox", source)
 	if err != nil {

@@ -2,6 +2,7 @@ package views
 
 import (
 	"app"
+	"strconv"
 
 	"github.com/andreyvit/evm/gox"
 )
@@ -14,11 +15,11 @@ func ProductList(b *gox.Builder, store *app.Store, q string) {
 	</ul>
 }
 
-func ProductRow(b *gox.Builder, p *app.Product) {
+func ProductRow(b *gox.Builder, store *app.Store, p *app.Product) {
 	<li class="product {stockClass(p)}">
 		<a href={p.URL()}>p.Name</a>
 		" "
-		p.Price.String()
+		p.Price | app.FormatMoney
 		if !p.InStock() {
 			<em>" sold out"</em>
 		}
@@ -31,7 +32,7 @@ func ProductRow(b *gox.Builder, p *app.Product) {
 		}
 		<small>
 			" seen "
-			p.Viewed()
+			p.Viewed() | strconv.Itoa
 			"×"
 		</small>
 	</li>

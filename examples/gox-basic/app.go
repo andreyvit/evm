@@ -1,4 +1,4 @@
-package goxbasic
+package main
 
 import (
 	"fmt"
@@ -13,8 +13,6 @@ const FreeShippingThreshold Money = 25000
 
 // Money is an amount in cents.
 type Money int64
-
-func (m Money) String() string { return fmt.Sprintf("$%d.%02d", m/100, m%100) }
 
 type Product struct {
 	SKU   string
@@ -75,6 +73,7 @@ func (c *Cart) Count() (n int) {
 
 type Store struct {
 	Name     string
+	Currency string
 	Products []*Product
 }
 
@@ -90,7 +89,8 @@ func (s *Store) Search(q string) []*Product {
 
 // TheStore is the store the host renders pages for.
 var TheStore = &Store{
-	Name: "Prairie Goods",
+	Name:     "Prairie Goods",
+	Currency: "$",
 	Products: []*Product{
 		{SKU: "MUG-1", Name: "Enamel Mug", Price: 1800, Stock: 12, Tags: []string{"kitchen", "camp"}},
 		{SKU: "BLK-2", Name: "Wool Blanket <XL>", Price: 12900, Stock: 0, Tags: []string{"home"}},
@@ -106,3 +106,11 @@ func Pluralize(n int, one, many string) string {
 }
 
 func Discount(m Money, percent int) Money { return m - m*Money(percent)/100 }
+
+// FormatMoney writes an amount in the store's currency.
+func FormatMoney(m Money, store *Store) string {
+	return fmt.Sprintf("%s%d.%02d", store.Currency, m/100, m%100)
+}
+
+// FormatDate writes a date the way the store shows dates to people.
+func FormatDate(t time.Time) string { return t.Format("Jan 2, 2006") }

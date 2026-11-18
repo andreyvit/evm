@@ -12,7 +12,7 @@ import (
 
 func TestValueRenderingMatchesJSONSemantics(t *testing.T) {
 	data := map[string]any{"name": "<Alice>", "rows": []any{map[string]any{"n": json.Number("18446744073709551615"), "tags": []any{"vip", "member"}}, nil, json.Number("-7")}}
-	reference := template.Must(template.New("values").Parse(`{{range .Times}}<div title="{{$.Data}}">{{$.Data}}</div><script>const data = {{$.Data}};</script>{{end}}`))
+	reference := template.Must(template.New("values").Parse(`{{range .Times}}<div title="{{$.Data}}"></div><script>const data = {{$.Data}};</script>{{end}}`))
 	var want bytes.Buffer
 	if err := reference.Execute(&want, struct {
 		Data  any
@@ -32,7 +32,7 @@ import "github.com/andreyvit/evm/gox"
 func Page(b *gox.Builder) {
  data := map[string]any{"name": "<Alice>", "rows": []any{map[string]any{"n": uint64(18446744073709551615), "tags": []string{"vip", "member"}}, nil, int8(-7)}}
  for i := 0; (i < 16); i++ {
-  <div title={data}>{data}</div>
+  <div>b.Attr("title", data)</div>
   <script>const data = {=data};</script>
  }
 }`

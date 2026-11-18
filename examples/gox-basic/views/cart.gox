@@ -2,23 +2,24 @@ package views
 
 import (
 	"app"
+	"strconv"
 	"strings"
 
 	"github.com/andreyvit/evm/gox"
 )
 
-func CartSummary(b *gox.Builder, cart *app.Cart) {
+func CartSummary(b *gox.Builder, store *app.Store, cart *app.Cart) {
 	<table>
 		for _, line := range cart.Lines {
 			<tr>
 				<td>line.Product.Name</td>
-				<td>line.Qty</td>
-				<td>line.Total().String()</td>
+				<td>line.Qty | strconv.Itoa</td>
+				<td>line.Total() | app.FormatMoney</td>
 			</tr>
 		}
 		<tr>
 			<td colspan="2">"Subtotal"</td>
-			<td>cart.Subtotal().String()</td>
+			<td>cart.Subtotal() | app.FormatMoney</td>
 		</tr>
 		if cart.Coupon != "" {
 			<tr>
@@ -26,14 +27,14 @@ func CartSummary(b *gox.Builder, cart *app.Cart) {
 					"With coupon "
 					cart.Coupon | strings.ToLower
 				</td>
-				<td>app.Discount(cart.Subtotal(), 10).String()</td>
+				<td>cart.Subtotal() | app.Discount(_, 10) | app.FormatMoney</td>
 			</tr>
 		}
 		<tr>
 			<td colspan="3">
 				if (cart.Subtotal() < app.FreeShippingThreshold) {
 					"Add "
-					(app.FreeShippingThreshold - cart.Subtotal()).String()
+					app.FormatMoney(app.FreeShippingThreshold - cart.Subtotal())
 					" more for free shipping"
 				} else {
 					"Free shipping"

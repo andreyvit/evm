@@ -11,12 +11,16 @@ import (
 func TestArgumentMetadata(t *testing.T) {
 	source := `package plugin
 
-import "github.com/andreyvit/evm/gox"
+import (
+	"strconv"
+
+	"github.com/andreyvit/evm/gox"
+)
 
 //gox:arg label optional=true legacyName="String Arg Name"
 //gox:arg enabled optional=true
 func Card(b *gox.Builder, label string, enabled bool, flag gox.Optional[bool]) {
- <p>label; enabled; flag.Present; flag.Value</p>
+ <p>label; strconv.FormatBool(enabled); strconv.FormatBool(flag.Present); strconv.FormatBool(flag.Value)</p>
 }
 func Page(b *gox.Builder) {
  label := "not inherited"

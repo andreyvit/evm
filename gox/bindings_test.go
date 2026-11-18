@@ -206,7 +206,7 @@ func Page(b *gox.Builder) {
  host.Change(&x)
  y:=host.Echo(x)
  if !y.TrustedHTML {panic("trust")}
- <p>host.Any(y)</p>
+ <p>host.Any(y).(gox.Content)</p>
 }`, pkg)
 	if err != nil {
 		t.Fatal(err)

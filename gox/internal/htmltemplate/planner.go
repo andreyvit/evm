@@ -101,8 +101,16 @@ func AppendEscaped(dst []byte, s string, limit int) ([]byte, bool) {
 func (c Context) Clone() Context { return Context{c.c.clone()} }
 
 // IsRCDATA reports an HTML textarea or title body, whose values remain escaped.
-func (c Context) IsRCDATA() bool           { return c.c.state == stateRCDATA }
-func (c Context) IsText() bool             { return c.c.state == stateText }
+func (c Context) IsRCDATA() bool { return c.c.state == stateRCDATA }
+func (c Context) IsText() bool   { return c.c.state == stateText }
+
+// IsJS reports a JavaScript position: a script body or an event-handler
+// attribute. A value there is serialized as data.
+func (c Context) IsJS() bool { return c.c.state >= stateJS && c.c.state <= stateJSHTMLCloseCmt }
+
+// IsCSS reports a CSS position: a style body or a style attribute.
+func (c Context) IsCSS() bool { return c.c.state >= stateCSS && c.c.state <= stateCSSLineCmt }
+
 func (c Context) Equal(other Context) bool { return c.c.eq(other.c) }
 
 // Accepts checks a runtime context against the compiler's context. A branch

@@ -19,7 +19,7 @@ func (c *compiler) pipelines() bool {
 	changed := false
 	astutil.Apply(c.file, nil, func(cursor *astutil.Cursor) bool {
 		b, ok := cursor.Node().(*ast.BinaryExpr)
-		if !ok || b.Op != token.OR || c.info.TypeOf(b) != nil {
+		if !ok || b.Op != token.OR {
 			return true
 		}
 		rhs := unwrap(b.Y)
@@ -27,9 +27,28 @@ func (c *compiler) pipelines() bool {
 		var args []ast.Expr
 		if call, ok := rhs.(*ast.CallExpr); ok {
 			fn = call.Fun
-			args = call.Args
+			args = append(args, call.Args...)
 		} else {
 			fn = rhs
+		}
+		// The value becomes the last argument, or replaces the one _ among
+		// the arguments. Go rejects _ as a value, so it has no other meaning
+		// here; a call with two is left for the type checker to report.
+		slot, slots := -1, 0
+		for i, arg := range args {
+			if id, ok := unwrap(arg).(*ast.Ident); ok && id.Name == "_" {
+				slot = i
+				slots++
+			}
+		}
+		if slots > 1 {
+			return true
+		}
+		// Without _, an expression that type-checks is a bitwise OR. With
+		// _ it is a pipeline even between integers: Go types the call by its
+		// result despite the bad argument.
+		if slots == 0 && c.info.TypeOf(b) != nil {
+			return true
 		}
 		t := c.info.TypeOf(fn)
 		if t == nil {
@@ -39,15 +58,23 @@ func (c *compiler) pipelines() bool {
 		if !ok || sig.Results().Len() != 1 {
 			return true
 		}
-		if !sig.Variadic() && sig.Params().Len() != len(args)+1 {
+		if slots == 1 {
+			args[slot] = b.X
+		} else {
+			args = append(args, b.X)
+		}
+		// Fewer arguments than parameters is fine here: the rest are
+		// implicit arguments, filled or reported like in any other call.
+		if !sig.Variadic() && len(args) > sig.Params().Len() {
 			return true
 		}
-		cursor.Replace(&ast.CallExpr{Fun: fn, Args: append(append([]ast.Expr(nil), args...), b.X), Lparen: b.OpPos})
+		cursor.Replace(&ast.CallExpr{Fun: fn, Args: args, Lparen: b.OpPos})
 		changed = true
 		return true
 	})
 	return changed
 }
+
 func (c *compiler) collectClasses() {
 	ast.Inspect(c.file, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)

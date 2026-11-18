@@ -39,6 +39,9 @@ If cache permissions block coverage, prefix Go commands with
 
 Rebuild book examples with `go run ./EVMBook-rebuild.go`.
 
+`README.md` shows code from `examples/` after `<!-- excerpt: path -->` lines.
+`TestREADMEExcerpts` fails when an excerpt and its source differ; change both.
+
 ## Generated code
 
 Tests compare checked-in bindings with fresh generator output byte for byte and

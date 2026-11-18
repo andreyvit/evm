@@ -135,7 +135,7 @@ func TestFormatFixtures(t *testing.T) {
 }
 
 func TestFormattingPreservesRendering(t *testing.T) {
-	const source = "package plugin\n\nimport \"github.com/andreyvit/evm/gox\"\n\nfunc Page(b *gox.Builder, name string) {<div title={name /* important */ + \"!\"}><p>name // inline comment\n</p><pre>`first\n  second\nthird`</pre><script>const x = {=name};\n  console.log(x)</script>for i:=0;(i<2);i++ {<span>i</span>}</div>}"
+	const source = "package plugin\n\nimport (\n\t\"strconv\"\n\n\t\"github.com/andreyvit/evm/gox\"\n)\n\nfunc Page(b *gox.Builder, name string) {<div title={name /* important */ + \"!\"}><p>name // inline comment\n</p><pre>`first\n  second\nthird`</pre><script>const x = {=name};\n  console.log(x)</script>for i:=0;(i<2);i++ {<span>strconv.Itoa(i)</span>}</div>}"
 	formatted, err := gox.FormatSource("page.gox", source)
 	if err != nil {
 		t.Fatal(err)

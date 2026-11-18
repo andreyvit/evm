@@ -168,6 +168,7 @@ func TestNamedAmbient(t *testing.T) {
 
 import (
 	"evmruntime"
+	"fmt"
 
 	"github.com/andreyvit/evm/gox"
 )
@@ -178,7 +179,7 @@ func AmbientTest(b *gox.Builder) {
  ambient = ambient.CloneWith(delta)
  delta["label"] = "mutated"
  child := ambient.CloneWith(map[string]any{"label": "child", "n": nil})
- <p>ambient.Get("label"); "/"; child.Get("label"); "/"; ambient.Get("n"); "/"; child.Get("n") == nil; </p>
+ <p>fmt.Sprint(ambient.Get("label")); "/"; fmt.Sprint(child.Get("label")); "/"; fmt.Sprint(ambient.Get("n")); "/"; fmt.Sprint(child.Get("n") == nil); </p>
 }
 
 `})

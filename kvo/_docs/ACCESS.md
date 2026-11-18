@@ -408,6 +408,18 @@ edited MessagePack bytes. `Snapshot()` returns the exposed properties in row2
 format, not a lossless copy of the MessagePack payload. Persisted edits belong
 to `RecordEdit`; `r.Fastest().Edit()` alone does not save an EDB row.
 
+## JSON
+
+`r.ToJSON(model, kvo.JSONOptions{})` returns detached JSON-compatible data: a
+`map[string]any` keyed by local property names. Native and MessagePack records
+are traversed directly, without converting them to another encoding first.
+A nil entry in a list of child records becomes null. A present empty list or
+map stays empty; a nil list, map or child is null. `TryToJSON` returns
+conversion errors. `JSONOptions.Charge` lets a host meter the result.
+
+A value that converts to JSON does not always encode as row2: `Encode` rejects
+a nil entry in a list of records.
+
 ## Lifetimes and compatibility
 
 Choose the boundary operation explicitly:
@@ -514,11 +526,32 @@ at schema construction. EVM selectors accept both `row.full_name` and
 `row.customer_full_name` on a statically known record model; both compile to the
 same property code. An untyped EVM `any` does not support record selectors.
 
+Codes are persistent identifiers: do not renumber them, and do not reuse a
+retired code for another meaning. A property can belong to several models when
+its meaning and type are the same. Declare schemas, properties and models at
+package scope or during initialization, not per request or per scan.
+
 Register native structs with the entity type and use `kvo:"full_name"` or
 `kvo:"customer:full_name"` on fields to bind them. Use `kvo:"-"` for excluded
 fields. Existing `edb` mapping tags remain supported when no `kvo` tag is present.
 Names and tags are resolved during binding, not during record access; MessagePack
 wire names remain controlled by the separate `msgpack` tags.
+
+`model.RegisterNativeType(goType)` attaches a Go struct after the model is
+declared, using its `kvo` tags. Pass a field map when adding tags is
+impractical:
+
+```go
+model.RegisterNativeType(reflect.TypeFor[Row](), map[kvo.PropCode]string{
+    kvo.CodeOf(Row_Name): "Title",
+    kvo.CodeOf(Row_Tags): "Tags",
+})
+```
+
+The map names a direct exported field for every property of the model; other
+fields stay unexposed. Leave such a struct out of `NewEntityType`, which
+requires tags. Call `RegisterNativeType` during single-threaded setup, before
+building bindings. Registering a type twice panics.
 
 Timestamp properties use `kvo.NewTimeProp(schema, code, name)` and return
 `time.Time`, including `IsZero`, `Before`, and the other Go methods. Their logical

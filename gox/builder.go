@@ -2,6 +2,7 @@ package gox
 
 import (
 	"fmt"
+	"math"
 	"reflect"
 	"strconv"
 	"strings"
@@ -467,6 +468,10 @@ func (b *Builder) value(id int, v any) error {
 		return fmt.Errorf("invalid render value")
 	}
 	op := &b.operations[id]
+	if f, ok := v.(float64); ok && op.input.IsCSS() && !math.IsInf(f, 0) && !math.IsNaN(f) {
+		// CSS reads 1234567.25, not Go's default 1.23456725e+06.
+		v = strconv.FormatFloat(f, 'f', -1, 64)
+	}
 	if b.attr != "" {
 		if !op.attribute {
 			return fmt.Errorf("component output while evaluating an attribute")

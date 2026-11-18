@@ -57,6 +57,7 @@ const nativePageSource = `package page
 
 import (
 	"shop"
+	"strconv"
 
 	"github.com/andreyvit/evm/gox"
 )
@@ -65,7 +66,7 @@ func Page(b *gox.Builder, shopper *shop.NativeShopper, basket *shop.NativeBasket
 	<p title={query}>
 		shopper.Name
 		" "
-		shopper.Visit()
+		strconv.Itoa(shopper.Visit())
 		" "
 		shopper.Joined.Format("2006")
 	</p>

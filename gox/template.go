@@ -154,7 +154,25 @@ func ProgramOf(p *evm.Program) *Program {
 
 // RenderFunc executes a named renderer. args excludes its explicit builder parameter.
 func (p *Program) RenderFunc(ctx context.Context, name string, args []values.Value, options RenderOptions) (string, error) {
-	return p.render(ctx, nil, name, nil, args, options)
+	return p.render(ctx, nil, name, nil, args, nil, false, options)
+}
+
+// RenderNative executes the default renderer with ordinary Go values.
+// See RenderFuncNative.
+func (p *Program) RenderNative(ctx context.Context, args []any, options RenderOptions) (string, error) {
+	return p.RenderFuncNative(ctx, p.template.Entry, args, options)
+}
+
+// RenderFuncNative executes a named renderer with ordinary Go values as its
+// arguments, excluding the builder: strings and other scalars, time values,
+// pointers to bound native structs, and registered interface implementations.
+// A Go slice or map passes when a linked schema binds its type, as a field or
+// in a signature. Each value must have the Go type its parameter is bound to;
+// there are no implicit numeric conversions. Native pointers and collections
+// are shared with the template, not copied. Conversion counts against
+// options.Budget.
+func (p *Program) RenderFuncNative(ctx context.Context, name string, args []any, options RenderOptions) (string, error) {
+	return p.render(ctx, nil, name, nil, nil, args, true, options)
 }
 
 // RenderFunction executes a retained renderer, including a closure or bound
@@ -168,7 +186,7 @@ func (p *Program) RenderFunction(ctx context.Context, fn *evm.FunctionHandle, ar
 	if len(sig.Params) == 0 || sig.Params[0] != BuilderType() || len(sig.Results) != 0 {
 		return "", fmt.Errorf("invalid renderer signature")
 	}
-	return p.render(ctx, nil, "", fn, args, options)
+	return p.render(ctx, nil, "", fn, args, nil, false, options)
 }
 
 // RenderFunctionInCall renders within an active native call, sharing its VM
@@ -191,10 +209,12 @@ func (p *Program) RenderFunctionInCall(c *evm.Call, fn *evm.FunctionHandle, args
 	if options.Budget != (evm.Budget{}) {
 		return "", fmt.Errorf("render within a call uses the enclosing invocation budget")
 	}
-	return p.render(nil, c, "", fn, args, options)
+	return p.render(nil, c, "", fn, args, nil, false, options)
 }
 
-func (p *Program) render(ctx context.Context, call *evm.Call, name string, fn *evm.FunctionHandle, args []values.Value, options RenderOptions) (string, error) {
+// render runs one renderer. With native set, nativeArgs are converted inside
+// the invocation, where the VM can account for what conversion allocates.
+func (p *Program) render(ctx context.Context, call *evm.Call, name string, fn *evm.FunctionHandle, args []values.Value, nativeArgs []any, native bool, options RenderOptions) (string, error) {
 	session, _ := p.pool.Get().(*renderSession)
 	if session == nil {
 		session = &renderSession{}
@@ -269,6 +289,20 @@ func (p *Program) render(ctx context.Context, call *evm.Call, name string, fn *e
 		if err == nil {
 			err = call.RunCallbackArgs(value, in, nil)
 		}
+	} else if native {
+		signature, ok := p.program.EntrySignature(name)
+		if !ok || len(signature.Params) == 0 || signature.Params[0] != BuilderType() || len(signature.Results) != 0 {
+			return "", fmt.Errorf("renderer %q is missing", name)
+		}
+		err = session.vm.RunNative(ctx, func(c *evm.Call) error {
+			converted, err := c.NativeArguments(signature.Params[1:], nativeArgs)
+			if err != nil {
+				return err
+			}
+			in = append(in, converted...)
+			session.args = in
+			return c.RunEntry(name, in, nil)
+		}, options.Budget)
 	} else if fn == nil {
 		err = session.vm.RunWithBudget(ctx, name, in, nil, options.Budget)
 	} else {

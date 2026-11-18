@@ -166,6 +166,22 @@ func (e *typeEnvironment) shape(t types.Type) (result *values.Shape, err error) 
 	s.Type = vt
 	s.Native = e.nativeLayouts[vt]
 	s.NativeAllocation = e.nativeAllocations[vt]
+	if named, ok := types.Unalias(t).(*types.Named); ok && s.Native == nil {
+		// A script-declared slice or map type converts freely to and from its
+		// underlying type, so both must use one storage. When a host binds
+		// the underlying type natively, the named type is native too.
+		switch under := named.Underlying().(type) {
+		case *types.Slice, *types.Map:
+			if err := e.resolveDeclaredShape(under); err != nil {
+				return nil, err
+			}
+			underType, _ := e.fromGo.At(under).(*values.Type)
+			if layout := e.nativeLayouts[underType]; layout != nil {
+				s.Native = layout
+				e.nativeLayouts[vt] = layout
+			}
+		}
+	}
 	if array, ok := t.Underlying().(*types.Array); ok && s.Native == nil {
 		if err := e.resolveDeclaredShape(types.NewSlice(array.Elem())); err != nil {
 			return nil, err

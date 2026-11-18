@@ -113,42 +113,8 @@ func (c *Call) NativeAny(v values.Value) (any, error) {
 	if s.Kind == values.NativeValueKind {
 		return x.AsNativeValue(), nil
 	}
-	if typ := nativeScalarTypes[s.Type]; typ != nil {
-		if err := c.ChargeAllocation(uint64(typ.Size())); err != nil {
-			return nil, err
-		}
-		switch s.Type {
-		case values.TimeType:
-			return x.AsTime(), nil
-		case values.Boolean:
-			return x.R != 0, nil
-		case values.IntType:
-			return int(x.R), nil
-		case values.Int8:
-			return int8(x.R), nil
-		case values.Int16:
-			return int16(x.R), nil
-		case values.Int32:
-			return int32(x.R), nil
-		case values.Int64:
-			return int64(x.R), nil
-		case values.UintType:
-			return uint(x.R), nil
-		case values.Uint8:
-			return uint8(x.R), nil
-		case values.Uint16:
-			return uint16(x.R), nil
-		case values.Uint32:
-			return uint32(x.R), nil
-		case values.Uint64:
-			return x.R, nil
-		case values.Float32Type:
-			return x.AsFloat32(), nil
-		case values.Float64:
-			return x.AsFloat(), nil
-		case values.StringType:
-			return x.AsString(), nil
-		}
+	if x, ok, err := c.nativeScalarAny(s.Type, x); ok || err != nil {
+		return x, err
 	}
 	if nativeAnyLayout(s) {
 		typ := s.Native.GoType
@@ -226,25 +192,9 @@ func (c *Call) anyValue(x any) (values.Value, error) {
 		if s == nil {
 			return values.Value{}, fmt.Errorf("native type %s is not linked", rv.Type())
 		}
-		var value values.Value
-		switch rv.Kind() {
-		case reflect.Struct:
-			if err := c.ChargeAllocation(values.NativeTimeAllocBytes(x.(time.Time))); err != nil {
-				return values.Value{}, err
-			}
-			value = values.NativeTime(x.(time.Time))
-		case reflect.Bool:
-			value = values.Bool(rv.Bool())
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			value = values.Int(rv.Int())
-		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			value = values.Uint(rv.Uint())
-		case reflect.Float32:
-			value = values.Float32(float32(rv.Float()))
-		case reflect.Float64:
-			value = values.Float(rv.Float())
-		case reflect.String:
-			value = values.String(rv.String())
+		value, err := c.nativeScalar(rv)
+		if err != nil {
+			return values.Value{}, err
 		}
 		return c.packInterface(s, value)
 	}
@@ -320,4 +270,74 @@ func NativeInterfaceCodec(t reflect.Type) *NativeValueCodec {
 			return values.Value{P: cell.UnsafePointer()}, nil
 		},
 	}
+}
+
+// nativeScalar converts a Go value whose type is in nativeScalarVMTypes.
+func (c *Call) nativeScalar(rv reflect.Value) (values.Value, error) {
+	switch rv.Kind() {
+	case reflect.Struct:
+		t := rv.Interface().(time.Time)
+		if err := c.ChargeAllocation(values.NativeTimeAllocBytes(t)); err != nil {
+			return values.Value{}, err
+		}
+		return values.NativeTime(t), nil
+	case reflect.Bool:
+		return values.Bool(rv.Bool()), nil
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return values.Int(rv.Int()), nil
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return values.Uint(rv.Uint()), nil
+	case reflect.Float32:
+		return values.Float32(float32(rv.Float())), nil
+	case reflect.Float64:
+		return values.Float(rv.Float()), nil
+	case reflect.String:
+		return values.String(rv.String()), nil
+	}
+	return values.Value{}, fmt.Errorf("native type %s is not a scalar", rv.Type())
+}
+
+// nativeScalarAny converts a VM value of a scalar or time type to the Go
+// value of the matching Go type. It needs no linked interface type.
+func (c *Call) nativeScalarAny(t *values.Type, x values.Value) (any, bool, error) {
+	typ := nativeScalarTypes[t]
+	if typ == nil {
+		return nil, false, nil
+	}
+	if err := c.ChargeAllocation(uint64(typ.Size())); err != nil {
+		return nil, false, err
+	}
+	switch t {
+	case values.TimeType:
+		return x.AsTime(), true, nil
+	case values.Boolean:
+		return x.R != 0, true, nil
+	case values.IntType:
+		return int(x.R), true, nil
+	case values.Int8:
+		return int8(x.R), true, nil
+	case values.Int16:
+		return int16(x.R), true, nil
+	case values.Int32:
+		return int32(x.R), true, nil
+	case values.Int64:
+		return int64(x.R), true, nil
+	case values.UintType:
+		return uint(x.R), true, nil
+	case values.Uint8:
+		return uint8(x.R), true, nil
+	case values.Uint16:
+		return uint16(x.R), true, nil
+	case values.Uint32:
+		return uint32(x.R), true, nil
+	case values.Uint64:
+		return x.R, true, nil
+	case values.Float32Type:
+		return x.AsFloat32(), true, nil
+	case values.Float64:
+		return x.AsFloat(), true, nil
+	case values.StringType:
+		return x.AsString(), true, nil
+	}
+	return nil, false, nil
 }

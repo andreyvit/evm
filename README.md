@@ -69,18 +69,30 @@ until reset. Results are written only on success; host side effects are not
 rolled back by the VM.
 
 Arguments/results use [`values.Value`](values/README.md). Their types come
-from the entry signature. Keep program-local interfaces and function references
+from the entry signature. `vm.RunEntryNative(ctx, "Bonus", []any{int64(1500)},
+out, evm.Budget{})` takes and returns ordinary Go values instead, including
+pointers to bound native structs; each value must have the Go type of its
+parameter. Keep program-local interfaces and function references
 with their program; repack them through the destination program's APIs when
 crossing that boundary.
 
 ## Host APIs
 
-Use [`evmbind`](evmbind/README.md) for a Go API package:
+Use [`evmbind`](evmbind/README.md) to expose a Go package. Give it the
+package's own source; it exposes every exported type, method, function and
+constant:
 
 ```go
+//go:embed api.go
+var apiSource embed.FS
+
+schema, err := evmbind.New("api", apiSource, evmbind.Options{
+    Functions: map[string]any{"Lookup": Lookup}, // Go cannot find functions by name
+})
+if err != nil { return err }
 module, err := evmcompiler.Compile("plugin.go", source, schema.Package())
 if err != nil { return err }
-program, err := evm.Link(module, schema.Bind(host))
+program, err := evm.Link(module, schema.Bind(nil))
 ```
 
 `schema.Package()` supplies declarations; `schema.Bind(host)` supplies their
@@ -98,6 +110,8 @@ appear as variables in generated package documentation.
 
 Manual APIs use `Package.Types`, `Functions` and `Methods`; see
 [binding declarations](_docs/BINDINGS.md). Only supplied exports satisfy imports.
+Compile and Link accept each package path once; `evm.MergePackages` combines
+bindings that contribute to the same path.
 A `Call` and its argument/result windows are borrowed for that callback. Read
 arguments before overwriting overlapping result slots; never retain the windows.
 Host callbacks must honor cancellation themselves.

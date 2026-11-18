@@ -1,0 +1,21 @@
+package plugin
+
+//gox:arg screen implicit
+//gox:arg palette implicit
+func Action(
+    b *gox.Builder,
+    screen *Screen,
+    palette *Palette,
+    item *Tile,
+    body func(),
+    after func(),
+) {
+    <button type="submit" data-key={item.Key} disabled={item.Disabled || screen.ReadOnly} class="action inline-flex items-center gap-2">
+        b.Class(palette.Action)
+        if item.Complete {
+            b.Class("is-complete")
+        }
+        body()
+        after()
+    </button>
+}

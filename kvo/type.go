@@ -1,0 +1,463 @@
+package kvo
+
+import (
+	"fmt"
+	"reflect"
+	"strconv"
+	"time"
+)
+
+type typeCodeSet [8]uint16
+
+var lastTypeCode uint16 = 9 // 0..9 are reserved
+
+const (
+	typeCodeNone = 0
+	typeCodeMap  = 1
+	typeCodeList = 2
+)
+
+func allocateTypeCode() typeCodeSet {
+	lastTypeCode++
+	return typeCodeSet{lastTypeCode}
+}
+
+func (cs *typeCodeSet) len() int {
+	for i, c := range cs {
+		if c == 0 {
+			return i
+		}
+	}
+	return len(cs)
+}
+
+func (cs *typeCodeSet) append(peer typeCodeSet) {
+	i := cs.len()
+	for _, c := range peer {
+		if c == 0 {
+			break
+		}
+		cs[i] = c // a crash here means typeCodeSet length needs to be increased
+		i++
+	}
+}
+
+type (
+	IntegerValue interface {
+		~int | ~int8 | ~int16 | ~int32 | ~int64 | ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~uintptr
+	}
+	FloatValue interface {
+		~float32 | ~float64
+	}
+	IntegerStringer interface {
+		IntegerValue
+		fmt.Stringer
+	}
+)
+
+type AnyType interface {
+	Name() string
+	String() string
+	ValueKind() ValueKind
+	Model() *Model
+	ItemType() AnyType
+	MapKeyType() AnyType
+	MapProp(key uint64) PropImpl
+	MapValueType(key uint64) AnyType
+	Schema() *Schema // can return nil for generic types
+	FormatValue(fc *FmtContext, value uint64) string
+	Sub(lhs, rhs uint64) uint64
+	Add(lhs, rhs uint64) uint64
+	Sign(v uint64) int
+	typeCodeSet() typeCodeSet
+}
+
+type AnyScalarType interface {
+	AnyType
+}
+
+// SameType compares logical identity, including the key and value types of
+// separately constructed map/list declarations.
+func SameType(a, b AnyType) bool {
+	return a != nil && b != nil && a.typeCodeSet() == b.typeCodeSet()
+}
+
+type WordFormatter = func(fc *FmtContext, v uint64) string
+type WordSubtractor = func(lhs, rhs uint64) uint64
+type WordAdder = func(lhs, rhs uint64) uint64
+type WordSigner = func(v uint64) int
+
+type WordType struct {
+	nativeType  reflect.Type
+	name        string
+	codeSet     typeCodeSet
+	formatter   WordFormatter
+	adder       WordAdder
+	subtractor  WordSubtractor
+	signer      WordSigner
+	multiplyInt func(uint64, int64) uint64
+}
+
+func (typ *WordType) NativeType() reflect.Type { return typ.nativeType }
+
+func (typ *WordType) Name() string                                { return typ.name }
+func (typ *WordType) String() string                              { return typ.name }
+func (typ *WordType) Schema() *Schema                             { return nil }
+func (typ *WordType) ValueKind() ValueKind                        { return ValueKindWord }
+func (typ *WordType) ItemType() AnyType                           { return nil }
+func (typ *WordType) typeCodeSet() typeCodeSet                    { return typ.codeSet }
+func (typ *WordType) Model() *Model                               { return nil }
+func (typ *WordType) MapKeyType() AnyType                         { return nil }
+func (typ *WordType) MapProp(key uint64) PropImpl                 { return nil }
+func (typ *WordType) MapValueType(key uint64) AnyType             { return nil }
+func (typ *WordType) FormatValue(fc *FmtContext, v uint64) string { return typ.formatter(fc, v) }
+
+func (typ *WordType) Add(lhs, rhs uint64) uint64 {
+	return typ.adder(lhs, rhs)
+}
+func (typ *WordType) Sub(lhs, rhs uint64) uint64 {
+	return typ.subtractor(lhs, rhs)
+}
+func (typ *WordType) Sign(v uint64) int {
+	return typ.signer(v)
+}
+func (typ *WordType) MulInt(lhs uint64, rhs int64) uint64 {
+	if typ.multiplyInt != nil {
+		return typ.multiplyInt(lhs, rhs)
+	}
+	return uint64(int64(lhs) * rhs)
+}
+func (typ *WordType) Neg(v uint64) uint64 {
+	return typ.subtractor(0, v)
+}
+
+func NewScalarType[T any](name string, formatter WordFormatter, subtractor WordSubtractor, adder WordAdder, signer WordSigner) *WordType {
+	return &WordType{
+		nativeType: reflect.TypeFor[T](),
+		name:       name,
+		codeSet:    allocateTypeCode(),
+		formatter:  formatter,
+		adder:      adder,
+		subtractor: subtractor,
+		signer:     signer,
+	}
+}
+
+func sign(v int64) int {
+	if v < 0 {
+		return -1
+	} else if v > 0 {
+		return 1
+	}
+	return 0
+}
+
+func signf(v float64) int {
+	if v < 0 {
+		return -1
+	} else if v > 0 {
+		return 1
+	}
+	return 0
+}
+
+func NewIntType[T IntegerValue](name string, formatter func(fc *FmtContext, v T) string) *WordType {
+	conv := intScalarConverter[T]{}
+	return NewScalarType[T](name, func(fc *FmtContext, v uint64) string {
+		return formatter(fc, conv.ScalarToValue(v))
+	}, func(lhs, rhs uint64) uint64 {
+		return uint64(int64(conv.ScalarToValue(lhs)) - int64(conv.ScalarToValue(rhs)))
+	}, func(lhs, rhs uint64) uint64 {
+		return conv.ValueToScalar(
+			T(int64(conv.ScalarToValue(lhs))) +
+				T(int64(conv.ScalarToValue(rhs))))
+	}, func(delta uint64) int {
+		return sign(int64(delta))
+	})
+}
+
+func NewIntStringerType[T IntegerStringer](name string) *WordType {
+	return NewIntType[T](name, func(fc *FmtContext, v T) string {
+		return v.String()
+	})
+}
+
+func NewFloatType[T FloatValue](name string, formatter func(fc *FmtContext, v T) string) *WordType {
+	conv := floatScalarConverter[T]{}
+	typ := NewScalarType[T](name, func(fc *FmtContext, v uint64) string {
+		return formatter(fc, conv.ScalarToValue(v))
+	}, func(newValue, oldValue uint64) uint64 {
+		return conv.ValueToScalar(
+			conv.ScalarToValue(newValue) - conv.ScalarToValue(oldValue))
+	}, func(value, delta uint64) uint64 {
+		return conv.ValueToScalar(
+			conv.ScalarToValue(value) + conv.ScalarToValue(delta))
+	}, func(delta uint64) int {
+		return signf(float64(conv.ScalarToValue(delta)))
+	})
+	typ.multiplyInt = func(value uint64, factor int64) uint64 {
+		return conv.ValueToScalar(conv.ScalarToValue(value) * T(factor))
+	}
+	return typ
+}
+
+func NewScalarSubtype[T any](name string, base *WordType) *WordType {
+	typ := *base
+	typ.nativeType = reflect.TypeFor[T]()
+	typ.name = name
+	typ.codeSet = allocateTypeCode()
+	return &typ
+}
+
+func NewUnknownTypeWithErrorCode(errorCode string) *WordType {
+	return NewScalarType[uint64](errorCode, func(fc *FmtContext, v uint64) string {
+		return "0x" + strconv.FormatUint(v, 16) + "::" + errorCode
+	}, func(newValue, oldValue uint64) uint64 {
+		return uint64(int64((newValue)) - int64((oldValue)))
+	}, func(value, delta uint64) uint64 {
+		return uint64(int64((value)) + int64(delta))
+	}, func(delta uint64) int {
+		return sign(int64(delta))
+	})
+}
+
+type EntityType struct {
+	nativeTypes []reflect.Type
+	name        string
+	codeSet     typeCodeSet
+	schema      *Schema
+	model       *Model
+}
+
+func NewEntityType(schema *Schema, name string, nativeTypes ...reflect.Type) *EntityType {
+	nativeTypes = checkNativeTypes(nativeTypes)
+	return &EntityType{
+		nativeTypes: nativeTypes,
+		schema:      schema,
+		name:        name,
+		codeSet:     allocateTypeCode(),
+	}
+}
+
+func (typ *EntityType) Name() string                                    { return typ.name }
+func (typ *EntityType) String() string                                  { return typ.name }
+func (typ *EntityType) Schema() *Schema                                 { return typ.schema }
+func (typ *EntityType) ValueKind() ValueKind                            { return ValueKindMap }
+func (typ *EntityType) ItemType() AnyType                               { return nil }
+func (typ *EntityType) typeCodeSet() typeCodeSet                        { return typ.codeSet }
+func (typ *EntityType) MapKeyType() AnyType                             { return typ.schema.TPropCode }
+func (typ *EntityType) FormatValue(fc *FmtContext, value uint64) string { panic("unsupported") }
+func (typ *EntityType) Sub(lhs, rhs uint64) uint64                      { panic("unsupported") }
+func (typ *EntityType) Add(lhs, rhs uint64) uint64                      { panic("unsupported") }
+func (typ *EntityType) Sign(v uint64) int                               { panic("unsupported") }
+
+func (typ *EntityType) Model() *Model {
+	if typ.model == nil {
+		panic(fmt.Sprintf("no model defined for entity type %s", typ.name))
+	}
+	return typ.model
+}
+
+func (typ *EntityType) MapProp(key uint64) PropImpl {
+	return typ.model.PropByCode(key)
+}
+
+func (typ *EntityType) MapValueType(key uint64) AnyType {
+	return typ.model.MustPropByCode(key).AnyType()
+}
+
+type MapType struct {
+	name     string
+	keyType  AnyScalarType
+	itemType AnyType
+	schema   *Schema
+	codeSet  typeCodeSet
+}
+
+func (typ *MapType) Name() string                                    { return typ.name }
+func (typ *MapType) String() string                                  { return typ.name }
+func (typ *MapType) Schema() *Schema                                 { return typ.schema }
+func (typ *MapType) ValueKind() ValueKind                            { return ValueKindMap }
+func (typ *MapType) ItemType() AnyType                               { return typ.itemType }
+func (typ *MapType) typeCodeSet() typeCodeSet                        { return typ.codeSet }
+func (typ *MapType) Model() *Model                                   { return nil }
+func (typ *MapType) MapKeyType() AnyType                             { return typ.keyType }
+func (typ *MapType) MapProp(key uint64) PropImpl                     { return nil }
+func (typ *MapType) MapValueType(key uint64) AnyType                 { return typ.itemType }
+func (typ *MapType) FormatValue(fc *FmtContext, value uint64) string { panic("unsupported") }
+func (typ *MapType) Sub(lhs, rhs uint64) uint64                      { panic("unsupported") }
+func (typ *MapType) Add(lhs, rhs uint64) uint64                      { panic("unsupported") }
+func (typ *MapType) Sign(v uint64) int                               { panic("unsupported") }
+
+func MapOf(keyType AnyScalarType, itemType AnyType) *MapType {
+	codeSet := typeCodeSet{typeCodeMap}
+	codeSet.append(keyType.typeCodeSet())
+	codeSet.append(itemType.typeCodeSet())
+
+	schema := itemType.Schema()
+	if schema == nil {
+		schema = keyType.Schema()
+	}
+
+	return &MapType{
+		name:     fmt.Sprintf("map[%s]%s", keyType.String(), itemType.Name()),
+		keyType:  keyType,
+		itemType: itemType,
+		schema:   schema,
+		codeSet:  codeSet,
+	}
+}
+
+// ScalarDataType describes a string or byte slice; both are bounded byte spans.
+type ScalarDataType struct {
+	nativeType reflect.Type
+	name       string
+	codeSet    typeCodeSet
+}
+
+type MachineStringType = ScalarDataType
+
+func (typ *ScalarDataType) NativeType() reflect.Type { return typ.nativeType }
+
+func (typ *ScalarDataType) Name() string                    { return typ.name }
+func (typ *ScalarDataType) String() string                  { return typ.name }
+func (typ *ScalarDataType) Schema() *Schema                 { return nil }
+func (typ *ScalarDataType) ValueKind() ValueKind            { return ValueKindScalarData }
+func (typ *ScalarDataType) ItemType() AnyType               { return nil }
+func (typ *ScalarDataType) typeCodeSet() typeCodeSet        { return typ.codeSet }
+func (typ *ScalarDataType) Model() *Model                   { return nil }
+func (typ *ScalarDataType) MapKeyType() AnyType             { return nil }
+func (typ *ScalarDataType) MapProp(key uint64) PropImpl     { return nil }
+func (typ *ScalarDataType) MapValueType(key uint64) AnyType { return nil }
+func (typ *ScalarDataType) FormatValue(fc *FmtContext, value uint64) string {
+	panic("unsupported")
+}
+func (typ *ScalarDataType) Sub(lhs, rhs uint64) uint64 { panic("unsupported") }
+func (typ *ScalarDataType) Add(lhs, rhs uint64) uint64 { panic("unsupported") }
+func (typ *ScalarDataType) Sign(v uint64) int          { panic("unsupported") }
+
+func NewMachineStringType[T ~string](name string) *MachineStringType {
+	return &ScalarDataType{
+		nativeType: reflect.TypeFor[T](),
+		name:       name,
+		codeSet:    allocateTypeCode(),
+	}
+}
+
+var (
+	TInt = NewIntType[int]("int", func(fc *FmtContext, v int) string {
+		return strconv.FormatInt(int64(v), 10)
+	})
+	TInt8 = NewIntType[int8]("int8", func(fc *FmtContext, v int8) string {
+		return strconv.FormatInt(int64(v), 10)
+	})
+	TInt16 = NewIntType[int16]("int16", func(fc *FmtContext, v int16) string {
+		return strconv.FormatInt(int64(v), 10)
+	})
+	TInt32 = NewIntType[int32]("int32", func(fc *FmtContext, v int32) string {
+		return strconv.FormatInt(int64(v), 10)
+	})
+	TInt64 = NewIntType[int64]("int64", func(fc *FmtContext, v int64) string {
+		return strconv.FormatInt(v, 10)
+	})
+	TUint = NewIntType[uint]("uint", func(fc *FmtContext, v uint) string {
+		return strconv.FormatUint(uint64(v), 10)
+	})
+	TUint8 = NewIntType[uint8]("uint8", func(fc *FmtContext, v uint8) string {
+		return strconv.FormatUint(uint64(v), 10)
+	})
+	TUint16 = NewIntType[uint16]("uint16", func(fc *FmtContext, v uint16) string {
+		return strconv.FormatUint(uint64(v), 10)
+	})
+	TUint32 = NewIntType[uint32]("uint32", func(fc *FmtContext, v uint32) string {
+		return strconv.FormatUint(uint64(v), 10)
+	})
+	TUint64 = NewIntType[uint64]("uint64", func(fc *FmtContext, v uint64) string {
+		return strconv.FormatUint(v, 10)
+	})
+	TUintptr = NewIntType[uintptr]("uintptr", func(fc *FmtContext, v uintptr) string {
+		return strconv.FormatUint(uint64(v), 10)
+	})
+	TFloat32 = NewFloatType[float32]("float32", func(fc *FmtContext, v float32) string {
+		return strconv.FormatFloat(float64(v), 'g', -1, 32)
+	})
+	TFloat64 = NewFloatType[float64]("float64", func(fc *FmtContext, v float64) string {
+		return strconv.FormatFloat(v, 'g', -1, 64)
+	})
+	TUint64Hex = NewIntType[uint64]("uint64_hex", func(fc *FmtContext, v uint64) string {
+		return "0x" + strconv.FormatUint(v, 16)
+	})
+	TUnknownUint64 = NewIntType[uint64]("unknown_uint64", func(fc *FmtContext, v uint64) string {
+		return strconv.FormatUint(v, 10)
+	})
+	TUknownKey = NewIntType[uint64]("unknown_key", func(fc *FmtContext, v uint64) string {
+		return "0x" + strconv.FormatUint(v, 16)
+	})
+
+	TTime = NewScalarType[time.Time]("time", func(fc *FmtContext, v uint64) string {
+		return Uint64ToTime(v).Format(time.RFC3339)
+	}, func(newValue, oldValue uint64) uint64 {
+		return uint64(int64(newValue) - int64(oldValue))
+	}, func(value, delta uint64) uint64 {
+		return uint64(int64(value) + int64(delta))
+	}, func(delta uint64) int {
+		return sign(int64(delta))
+	})
+
+	TBool = NewScalarType[bool]("bool", func(fc *FmtContext, v uint64) string {
+		switch v {
+		case 0:
+			return "false"
+		case 1:
+			return "true"
+		default:
+			return fmt.Sprintf("?bool(0x%x)", v)
+		}
+	}, nil, nil, nil)
+
+	TMachineString = NewMachineStringType[string]("string")
+)
+
+// NewBytesType declares binary data separately from text, without a new wire tag.
+func NewBytesType[T ~[]byte](name string) *ScalarDataType {
+	return &ScalarDataType{name: name, codeSet: allocateTypeCode(), nativeType: reflect.TypeFor[T]()}
+}
+
+var TBytes = NewBytesType[[]byte]("bytes")
+
+// TTimestamp preserves nanosecond precision over the full time.Time range.
+// Current codecs store integers; TTime retains its legacy microsecond format.
+var TTimestamp = &ScalarDataType{nativeType: reflect.TypeFor[time.Time](), name: "timestamp", codeSet: allocateTypeCode()}
+
+// JSONType holds a JSON value in a byte span. Missing and explicit null
+// remain distinguishable through property presence or dictionary membership.
+type JSONType struct{ *ScalarDataType }
+
+var TJSON = &JSONType{&ScalarDataType{name: "json", codeSet: allocateTypeCode(), nativeType: reflect.TypeFor[any]()}}
+
+// ListType is schema metadata for positional values. The legacy Fast1 codec
+// does not acquire List encoding support by declaring this type.
+type ListType struct {
+	itemType AnyType
+	codeSet  typeCodeSet
+}
+
+func ListOf(itemType AnyType) *ListType {
+	cs := typeCodeSet{typeCodeList}
+	cs.append(itemType.typeCodeSet())
+	return &ListType{itemType: itemType, codeSet: cs}
+}
+func (typ *ListType) Name() string                           { return "[]" + typ.itemType.Name() }
+func (typ *ListType) String() string                         { return typ.Name() }
+func (typ *ListType) Schema() *Schema                        { return typ.itemType.Schema() }
+func (typ *ListType) ValueKind() ValueKind                   { return ValueKindList }
+func (typ *ListType) ItemType() AnyType                      { return typ.itemType }
+func (typ *ListType) typeCodeSet() typeCodeSet               { return typ.codeSet }
+func (typ *ListType) Model() *Model                          { return nil }
+func (typ *ListType) MapKeyType() AnyType                    { return nil }
+func (typ *ListType) MapProp(uint64) PropImpl                { return nil }
+func (typ *ListType) MapValueType(uint64) AnyType            { return nil }
+func (typ *ListType) FormatValue(*FmtContext, uint64) string { panic("unsupported") }
+func (typ *ListType) Sub(uint64, uint64) uint64              { panic("unsupported") }
+func (typ *ListType) Add(uint64, uint64) uint64              { panic("unsupported") }
+func (typ *ListType) Sign(uint64) int                        { panic("unsupported") }

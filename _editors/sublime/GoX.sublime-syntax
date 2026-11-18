@@ -1,0 +1,149 @@
+%YAML 1.2
+---
+name: GoX
+file_extensions: [gox]
+scope: source.gox
+version: 2
+extends: Packages/Go/Go.sublime-syntax
+
+variables:
+  tag_name: '[a-zA-Z0-9_:.-]+'
+
+contexts:
+  main:
+    - meta_prepend: true
+    - match: '\A(?:\x{FEFF})?---$'
+      scope: punctuation.definition.frontmatter.gox
+      embed: scope:source.yaml
+      embed_scope: meta.embedded.block.yaml.gox
+      escape: '^---$'
+      escape_captures:
+        0: punctuation.definition.frontmatter.gox
+    - include: markup
+
+  pop-braces-inner:
+    - meta_prepend: true
+    - include: markup
+
+  markup:
+    - match: '<!--'
+      scope: punctuation.definition.comment.begin.html.gox
+      push: html-comment
+    - match: '(?i:<!doctype)\b[^>]*>'
+      scope: meta.tag.sgml.doctype.gox
+    - match: '</?>'
+      scope: punctuation.definition.tag.gox
+    - match: '(<)(script)(?=[\s/>])'
+      captures:
+        1: punctuation.definition.tag.begin.gox
+        2: entity.name.tag.gox
+      push: script-tag
+    - match: '(<)(style)(?=[\s/>])'
+      captures:
+        1: punctuation.definition.tag.begin.gox
+        2: entity.name.tag.gox
+      push: style-tag
+    - match: '(</?)({{tag_name}})'
+      captures:
+        1: punctuation.definition.tag.begin.gox
+        2: entity.name.tag.gox
+      push: tag
+
+  html-comment:
+    - meta_scope: comment.block.html.gox
+    - match: '-->'
+      scope: punctuation.definition.comment.end.html.gox
+      pop: true
+
+  tag:
+    - meta_scope: meta.tag.gox
+    - match: '/?>'
+      scope: punctuation.definition.tag.end.gox
+      pop: true
+    - include: attributes
+
+  attributes:
+    - match: '{{tag_name}}'
+      scope: entity.other.attribute-name.gox
+    - match: '='
+      scope: keyword.operator.assignment.gox
+    - match: '"'
+      push: double-quoted
+    - match: "'"
+      push: single-quoted
+    - include: interpolation-start
+
+  double-quoted:
+    - meta_scope: string.quoted.double.gox
+    - match: '"'
+      pop: true
+    - include: interpolation-start
+
+  single-quoted:
+    - meta_scope: string.quoted.single.gox
+    - match: "'"
+      pop: true
+    - include: interpolation-start
+
+  interpolation-start:
+    - match: '\{'
+      scope: punctuation.section.embedded.begin.gox
+      push: interpolation
+
+  interpolation:
+    - meta_content_scope: meta.embedded.expression.go.gox
+    - match: '\}'
+      scope: punctuation.section.embedded.end.gox
+      pop: true
+    - include: scope:source.go#match-comments
+    - include: scope:source.go
+
+  script-tag:
+    - meta_scope: meta.tag.script.gox
+    - include: self-close
+    - match: '>'
+      scope: punctuation.definition.tag.end.gox
+      set: script-body
+    - include: attributes
+
+  style-tag:
+    - meta_scope: meta.tag.style.gox
+    - include: self-close
+    - match: '>'
+      scope: punctuation.definition.tag.end.gox
+      set: style-body
+    - include: attributes
+
+  self-close:
+    - match: '/>'
+      scope: punctuation.definition.tag.end.gox
+      pop: true
+
+  script-body:
+    - match: '(</)((?i:script))\s*(>)'
+      captures:
+        1: punctuation.definition.tag.begin.gox
+        2: entity.name.tag.gox
+        3: punctuation.definition.tag.end.gox
+      pop: true
+    - include: raw-interpolation-start
+    - match: '(?=.)'
+      embed: scope:source.js
+      escape: '(?=</(?i:script)\s*>|\{=)'
+
+  style-body:
+    - match: '(</)((?i:style))\s*(>)'
+      captures:
+        1: punctuation.definition.tag.begin.gox
+        2: entity.name.tag.gox
+        3: punctuation.definition.tag.end.gox
+      pop: true
+    - include: raw-interpolation-start
+    - match: '(?=.)'
+      embed: scope:source.css
+      escape: '(?=</(?i:style)\s*>|\{=)'
+
+  raw-interpolation-start:
+    - match: '\{='
+      scope: punctuation.section.embedded.begin.gox
+      push: interpolation

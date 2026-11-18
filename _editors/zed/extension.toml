@@ -1,0 +1,12 @@
+id = "gox"
+name = "GoX"
+description = "Syntax highlighting for GoX templates."
+version = "0.1.0"
+schema_version = 1
+authors = ["Andrey Tarantsov"]
+repository = "https://github.com/andreyvit/evm"
+
+[grammars.gox]
+repository = "https://github.com/andreyvit/evm"
+rev = "1abebbdec845659c33acf76aa4f29402ac3a6106"
+path = "_editors/tree-sitter-gox"

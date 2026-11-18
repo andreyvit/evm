@@ -1,0 +1,21 @@
+{
+  "grammars": [
+    {
+      "name": "gox",
+      "scope": "source.gox",
+      "path": ".",
+      "file-types": ["gox"]
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "0BSD",
+    "description": "GoX grammar extending Tree-sitter Go",
+    "links": {
+      "repository": "https://github.com/andreyvit/evm"
+    }
+  },
+  "bindings": {
+    "c": true
+  }
+}

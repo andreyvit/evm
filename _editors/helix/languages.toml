@@ -1,0 +1,11 @@
+[[language]]
+name = "gox"
+scope = "source.gox"
+file-types = ["gox"]
+injection-regex = "^gox$"
+comment-tokens = "//"
+indent = { tab-width = 4, unit = "\t" }
+
+[[grammar]]
+name = "gox"
+source = { git = "https://github.com/andreyvit/evm", rev = "1abebbdec845659c33acf76aa4f29402ac3a6106", subpath = "_editors/tree-sitter-gox" }

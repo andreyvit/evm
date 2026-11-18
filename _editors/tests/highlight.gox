@@ -1,0 +1,24 @@
+---
+name: "Test card"
+settings: {"enabled": true, "count": 2}
+---
+
+package plugin
+
+func Page(active bool) {
+  if (left<right) {
+    title := <Label args:{key()}="Hello {name}" active={active} />
+    <Card label={title}>
+      "keep <literal>"
+      // <comment>
+      <slot-body><span>title</span></slot-body>
+    </Card>
+  }
+  <script src="standalone.js" />
+  <script data-test={left > right}>
+    const greeting = {=name};
+    const marker = '/>';
+  </script>
+  <style>.badge { color: {=accent}; }</style>
+  f(left<right, func() { <Widget /> })
+}

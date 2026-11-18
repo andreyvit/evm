@@ -1,0 +1,66 @@
+package plugin
+
+import (
+	"fmt"
+	"github.com/andreyvit/evm/gox"
+	"strings"
+)
+
+type Release struct {
+	Name string
+	Done bool
+}
+
+func Updates(b *gox.Builder, viewer string, accent string) {
+	items := []Release{{"Live templates", true}, {"Native builds", false}}
+	status := func(done bool) string {
+		if done {
+			return "shipped"
+		}
+		return "on the roadmap"
+	}
+	<Panel title="What shipped">
+		<slot-body>
+			<p>
+				"Hello, "
+				viewer
+				"!"
+			</p>
+			<List items={items}>
+				<slot-row>
+					<strong>
+						item.Name | strings.ToUpper
+					</strong>
+					" "
+					<Badge label={status(item.Done)} />
+				</slot-row>
+			</List>
+		</slot-body>
+		<slot-after>
+			fmt.Sprintf("%d updates. No host rebuild.", len(items))
+		</slot-after>
+	</Panel>
+	<style>.badge { color: {=accent}; }</style>
+	<script>window.viewer = {=viewer};</script>
+}
+
+func Panel(b *gox.Builder, title string, body func(), after func()) {
+	<section>
+		<h1>title</h1>
+		body()
+		<footer>after()</footer>
+	</section>
+}
+
+func List(b *gox.Builder, items []Release, row func(item Release)) {
+	<ul>
+		for _, item := range items {
+			<li>row(item)</li>
+		}
+	</ul>
+}
+
+//gox:arg accent implicit
+func Badge(b *gox.Builder, label string, accent string) {
+	<span class="badge" title="Accent: {accent}">label</span>
+}

@@ -1,0 +1,30 @@
+{
+  "name": "gox",
+  "displayName": "GoX",
+  "description": "Syntax highlighting for GoX templates",
+  "version": "0.1.0",
+  "publisher": "andreyvit",
+  "license": "0BSD",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/andreyvit/evm.git",
+    "directory": "_editors/textmate"
+  },
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Programming Languages"],
+  "files": ["syntaxes", "LICENSE"],
+  "contributes": {
+    "languages": [{ "id": "gox", "aliases": ["GoX"], "extensions": [".gox"] }],
+    "grammars": [{
+      "language": "gox",
+      "scopeName": "source.gox",
+      "path": "./syntaxes/GoX.tmLanguage",
+      "embeddedLanguages": {
+        "meta.embedded.block.yaml.gox": "yaml",
+        "meta.embedded.block.javascript.gox": "javascript",
+        "meta.embedded.block.css.gox": "css",
+        "meta.embedded.expression.go.gox": "go"
+      }
+    }]
+  }
+}

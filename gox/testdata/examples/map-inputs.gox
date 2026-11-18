@@ -1,0 +1,31 @@
+package plugin
+
+import (
+	"evmruntime"
+
+	"github.com/andreyvit/evm/gox"
+)
+
+func Page(b *gox.Builder) {
+	var ambient *evmruntime.Ambient
+	ambient = ambient.CloneWith(map[string]any{"color": "parent"})
+	key := "label"
+	<Card
+		someExtras:label="first"
+		otherExtras:{key}="second"
+		ambient:color="child"
+	/>
+	<p>ambient.Get("color")</p>
+}
+
+func Card(b *gox.Builder, someExtras map[string]any, otherExtras map[string]string, ambient *evmruntime.Ambient) {
+	<p>
+		someExtras["label"]
+		otherExtras["label"]
+	</p>
+	<Inherited />
+}
+
+func Inherited(b *gox.Builder, ambient *evmruntime.Ambient) {
+	<em>ambient.Get("color")</em>
+}

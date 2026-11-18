@@ -1,0 +1,349 @@
+================================================================================
+Markup separates Go statements without newlines
+================================================================================
+
+import "strings"
+
+func Card(name string, items []int) {
+  <>name<Card.Label aria-hidden disabled={len(items) == 0} data-key='user:{name}' />
+  for _, n := range items {
+    if (n<10) { <b>n</b> } else { <br> }
+  }
+  </><!-- <not-a-tag> -->
+  name | strings.ToUpper
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (import_declaration
+    (import_spec
+      (interpreted_string_literal
+        (interpreted_string_literal_content))))
+  (function_declaration
+    (identifier)
+    (parameter_list
+      (parameter_declaration
+        (identifier)
+        (type_identifier))
+      (parameter_declaration
+        (identifier)
+        (slice_type
+          (type_identifier))))
+    (block
+      (statement_list
+        (gox_fragment_open)
+        (expression_statement
+          (identifier))
+        (gox_open_tag
+          (gox_tag_name)
+          (gox_attribute
+            (gox_attribute_name))
+          (gox_attribute
+            (gox_attribute_name)
+            (gox_interpolation
+              (binary_expression
+                (call_expression
+                  (identifier)
+                  (argument_list
+                    (identifier)))
+                (int_literal))))
+          (gox_attribute
+            (gox_attribute_name)
+            (gox_attribute_string
+              (gox_interpolation
+                (identifier)))))
+        (for_statement
+          (range_clause
+            (expression_list
+              (identifier)
+              (identifier))
+            (identifier))
+          (block
+            (statement_list
+              (if_statement
+                (parenthesized_expression
+                  (binary_expression
+                    (identifier)
+                    (int_literal)))
+                (block
+                  (statement_list
+                    (gox_open_tag
+                      (gox_tag_name))
+                    (expression_statement
+                      (identifier))
+                    (gox_close_tag
+                      (gox_tag_name))))
+                (block
+                  (statement_list
+                    (gox_open_tag
+                      (gox_tag_name))))))))
+        (gox_fragment_close)
+        (gox_comment)
+        (expression_statement
+          (binary_expression
+            (identifier)
+            (selector_expression
+              (identifier)
+              (field_identifier))))))))
+
+================================================================================
+Markup in callbacks and comparisons in Go expressions
+================================================================================
+
+package page
+
+func Page(a, b int) {
+  f(func() {
+    <my-card data-map={map[string]int{"a": a}} title="{fmt.Sprint("x")}">
+      a<<b
+      "<example>"
+      // <ignored>
+    </my-card>
+  }, a<b)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (package_clause
+    (package_identifier))
+  (function_declaration
+    (identifier)
+    (parameter_list
+      (parameter_declaration
+        (identifier)
+        (identifier)
+        (type_identifier)))
+    (block
+      (statement_list
+        (expression_statement
+          (call_expression
+            (identifier)
+            (argument_list
+              (func_literal
+                (parameter_list)
+                (block
+                  (statement_list
+                    (gox_open_tag
+                      (gox_tag_name)
+                      (gox_attribute
+                        (gox_attribute_name)
+                        (gox_interpolation
+                          (composite_literal
+                            (map_type
+                              (type_identifier)
+                              (type_identifier))
+                            (literal_value
+                              (keyed_element
+                                (literal_element
+                                  (interpreted_string_literal
+                                    (interpreted_string_literal_content)))
+                                (literal_element
+                                  (identifier)))))))
+                      (gox_attribute
+                        (gox_attribute_name)
+                        (gox_attribute_string
+                          (gox_interpolation
+                            (call_expression
+                              (selector_expression
+                                (identifier)
+                                (field_identifier))
+                              (argument_list
+                                (interpreted_string_literal
+                                  (interpreted_string_literal_content))))))))
+                    (expression_statement
+                      (binary_expression
+                        (identifier)
+                        (identifier)))
+                    (expression_statement
+                      (interpreted_string_literal
+                        (interpreted_string_literal_content)))
+                    (comment)
+                    (gox_close_tag
+                      (gox_tag_name)))))
+              (binary_expression
+                (identifier)
+                (identifier)))))))))
+
+================================================================================
+Raw bodies and their interpolations
+================================================================================
+
+func Page() {
+  <script>if (a < b) { alert("</stylesheet>"); } const name = {=user.Name};</SCRIPT>
+  <style>.badge { color: {=theme.Color}; }</style>
+  <script src="app.js" />
+  <script></script>
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block
+      (statement_list
+        (gox_script
+          (gox_tag_name)
+          (gox_script_body
+            (gox_script_text)
+            (gox_raw_interpolation
+              (selector_expression
+                (identifier)
+                (field_identifier)))
+            (gox_script_text))
+          (gox_tag_name))
+        (gox_style
+          (gox_tag_name)
+          (gox_style_body
+            (gox_style_text)
+            (gox_raw_interpolation
+              (selector_expression
+                (identifier)
+                (field_identifier)))
+            (gox_style_text))
+          (gox_tag_name))
+        (gox_script
+          (gox_tag_name)
+          (gox_attribute
+            (gox_attribute_name)
+            (gox_attribute_string)))
+        (gox_script
+          (gox_tag_name)
+          (gox_tag_name))))))
+
+==================
+Opaque frontmatter before Go declarations
+==================
+---
+title: "A block"
+classes: {
+  "card": "flex",
+  }
+---
+package example
+
+func Name() string { return "demo" }
+
+---
+
+(source_file
+  (gox_frontmatter
+    (gox_frontmatter_open)
+    (gox_frontmatter_body)
+    (gox_frontmatter_close))
+  (package_clause
+    (package_identifier))
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (type_identifier)
+    (block
+      (statement_list
+        (return_statement
+          (expression_list
+            (interpreted_string_literal
+              (interpreted_string_literal_content))))))))
+
+================================================================================
+Assigned calls, for ordinary statements and Go initializers
+================================================================================
+
+func Page(section string) {
+  name := <Label text:name="Hello" /> other := name
+  switch section {
+  case "title": name = <Label attrs:values:{key(other)}={name} />
+  }
+  if title := <Label text:{section}='Title: {name}' />; title != "" {
+    <h1>title</h1>
+  }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameter_list
+      (parameter_declaration
+        (identifier)
+        (type_identifier)))
+    (block
+      (statement_list
+        (short_var_declaration
+          (expression_list
+            (identifier))
+          (gox_open_tag
+            (gox_tag_name)
+            (gox_attribute
+              (gox_attribute_name)
+              (gox_attribute_string))))
+        (short_var_declaration
+          (expression_list
+            (identifier))
+          (expression_list
+            (identifier)))
+        (expression_switch_statement
+          (identifier)
+          (expression_case
+            (expression_list
+              (interpreted_string_literal
+                (interpreted_string_literal_content)))
+            (statement_list
+              (assignment_statement
+                (expression_list
+                  (identifier))
+                (gox_open_tag
+                  (gox_tag_name)
+                  (gox_attribute
+                    (gox_attribute_name)
+                    (gox_interpolation
+                      (call_expression
+                        (identifier)
+                        (argument_list
+                          (identifier))))
+                    (gox_interpolation
+                      (identifier))))))))
+        (if_statement
+          (short_var_declaration
+            (expression_list
+              (identifier))
+            (gox_open_tag
+              (gox_tag_name)
+              (gox_attribute
+                (gox_attribute_name)
+                (gox_interpolation
+                  (identifier))
+                (gox_attribute_string
+                  (gox_interpolation
+                    (identifier))))))
+          (binary_expression
+            (identifier)
+            (interpreted_string_literal))
+          (block
+            (statement_list
+              (gox_open_tag
+                (gox_tag_name))
+              (expression_statement
+                (identifier))
+              (gox_close_tag
+                (gox_tag_name)))))))))
+
+================================================================================
+Empty frontmatter
+================================================================================
+---
+---
+func Empty() {}
+--------------------------------------------------------------------------------
+
+(source_file
+  (gox_frontmatter
+    (gox_frontmatter_open)
+    (gox_frontmatter_close))
+  (function_declaration
+    (identifier)
+    (parameter_list)
+    (block)))

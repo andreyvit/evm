@@ -170,7 +170,7 @@ func (p *Program) hasInterfaceMethod(value values.Value, name string, signature 
 	if id == 0 || id >= uint64(len(p.types)) {
 		return false
 	}
-	methodID, ok := p.methodIDs[name]
+	methodID, ok := p.lookupMethodID(name)
 	if !ok {
 		return false
 	}

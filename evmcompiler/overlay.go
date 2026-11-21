@@ -83,18 +83,10 @@ func (e *typeEnvironment) overlay(files *token.FileSet) *typeEnvironment {
 	return &o
 }
 
-// moduleShapes yields the shapes a module lists after those its code uses:
-// the base shapes of the packages the source can use, then the shapes built
-// here. A lazily built environment has only shapes of imported packages.
-func (e *typeEnvironment) moduleShapes(used packageSet) func(yield func(*values.Shape) bool) {
+// ownShapes yields the shapes built here, not those of a base. A lazily
+// built environment has only shapes of imported packages.
+func (e *typeEnvironment) ownShapes() func(yield func(*values.Shape) bool) {
 	return func(yield func(*values.Shape) bool) {
-		if e.base != nil {
-			for i, s := range e.base.shapeOrder {
-				if e.base.shapePackages[i].within(used) && !yield(s) {
-					return
-				}
-			}
-		}
 		for _, s := range e.shapeOrder {
 			if !yield(s) {
 				return

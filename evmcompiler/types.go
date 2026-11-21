@@ -80,6 +80,11 @@ type typeEnvironment struct {
 	shapePackages     []packageSet                  // by shapeOrder index: the packages whose types the shape's type names
 	sourceTexts       map[*types.Package]map[string]string
 	dereferenceWrites map[token.Pos]bool
+	// The method tables its modules share; see method_tables.go.
+	methodImports  []evm.Import
+	methodBindings []*evm.ExternalFunction // by method import
+	methodNumbers  map[importKey]uint32
+	hostMethods    map[*values.Shape][]evm.DynamicMethod
 
 	// Written while importing and while compiling. An overlay has its own
 	// and reads the base through the accessors in overlay.go.

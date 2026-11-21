@@ -797,9 +797,14 @@ Details: [host contracts](_docs/embedding.md), [`evmbind`](evmbind/README.md),
   build one `LinkEnvironment` and keep it. It never changes and is safe for
   concurrent use. Both ways produce the same program.
 - `env.NewLinkEnvironment(packages...)` on an `evmcompiler.Environment` also
-  shares the linked storage shapes of the host types among the programs of
-  the modules that environment compiles. Pass the bound packages; a program
-  then keeps only the tables of its own module.
+  shares, among the programs of the modules that environment compiles, the
+  linked storage shapes of the host types, their bound native methods and
+  the method tables of the types whose methods are all native. Pass the
+  bound packages; a program then keeps only the tables of its own module.
+  Such a module shares its method imports, those method tables and the list
+  it selects host shapes from with its compile environment and must not
+  change them. It links from a package
+  list or through any other link environment too, with tables of its own.
 - `evm.New(program)` creates a session. Initialization runs once, before the
   first call. Package variables persist until `vm.Reset()`.
 - `vm.RunEntryNative(ctx, "Entry", []any{...}, results, budget)` passes and

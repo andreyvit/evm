@@ -85,10 +85,10 @@ func (env *Environment) Shapes() []*values.Shape {
 // NewLinkEnvironment prepares packages for linking the modules this
 // environment compiles. The packages declare what the environment was built
 // from and bind the implementations, which a compile does not need. Programs
-// linked through the result share the linked form of the host shapes; see
-// [evm.LinkOptions].
+// linked through the result share the linked form of the host shapes and
+// the bound method tables of host types; see [evm.LinkOptions].
 func (env *Environment) NewLinkEnvironment(packages ...evm.Package) (*evm.LinkEnvironment, error) {
-	return evm.LinkOptions{Shapes: env.Shapes()}.NewEnvironment(packages...)
+	return evm.LinkOptions{Shapes: env.Shapes(), Methods: []evm.MethodTables{env.MethodTables()}}.NewEnvironment(packages...)
 }
 
 // NewFileSet returns a file set for syntax passed to Analyze and AnalyzeFiles.
@@ -198,6 +198,9 @@ func freeze(packages []evm.Package, files *token.FileSet, facade bool) (*typeEnv
 		return nil, fmt.Errorf("internal error: unfinished host declarations")
 	}
 	e.pendingNativeStorage, e.pendingSourceChecks, e.pendingMapKeys = nil, nil, nil
+	if !facade { // Modules are compiled against the other universe.
+		e.shapeNativeSignatures()
+	}
 
 	for _, path := range slices.Sorted(maps.Keys(e.imported)) {
 		e.importOrder = append(e.importOrder, e.imported[path])
@@ -219,7 +222,12 @@ func freeze(packages []evm.Package, files *token.FileSet, facade bool) (*typeEnv
 		return nil, check.errors
 	}
 	e.completeTypes()
+	// Modules share the list: an append must never write into it.
+	e.shapeOrder = slices.Clip(e.shapeOrder)
 	e.computeReach()
+	if !facade { // Modules are compiled against the other universe.
+		e.prepareMethodTables()
+	}
 	e.uses, e.using = nil, nil
 	for _, std := range e.standard {
 		if std.declarationsOnly {

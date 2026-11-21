@@ -39,12 +39,12 @@ func TestLinkEnvironmentFingerprintDetectsWrites(t *testing.T) {
 			return func() { env.shapes.snapshots[1].Native.Size-- }
 		},
 		"binding layout": func() func() {
-			export.resolved.native.params.Slots[0]++
-			return func() { export.resolved.native.params.Slots[0]-- }
+			export.resolved.params.Slots[0]++
+			return func() { export.resolved.params.Slots[0]-- }
 		},
 		"binding signature": func() func() {
-			export.resolved.native.Signature.Params[0] = values.IntType
-			return func() { export.resolved.native.Signature.Params[0] = values.StringType }
+			export.resolved.Signature.Params[0] = values.IntType
+			return func() { export.resolved.Signature.Params[0] = values.StringType }
 		},
 	} {
 		before := env.Fingerprint()

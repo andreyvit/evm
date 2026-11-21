@@ -440,7 +440,7 @@ func TestEnvironmentTypeIdentity(t *testing.T) {
 			t.Fatal("Describe is not imported")
 		}
 		byName := make(map[string]*values.Shape)
-		for _, s := range m.Shapes {
+		for s := range m.ListedShapes() {
 			byName[s.Type.Name()] = s
 		}
 		return byName

@@ -92,15 +92,20 @@ func (vm *VM) resolveInvoke(v values.Value, desc *linkedInvoke) (FunctionRef, va
 	return method.Function, receiver, err
 }
 func (vm *VM) callLayouts(ref FunctionRef, env unsafe.Pointer) (Signature, Layout, Layout) {
-	if ref.Native && ref.Index == nativeFunctionIndex {
-		g := &(*nativeFunction)(env).typ.native
+	if !ref.Native {
+		g := &vm.program.functions[ref.Index]
 		return g.Signature, g.params, g.results
 	}
-	if ref.Native {
-		g := &vm.program.natives[ref.Index]
-		return g.Signature, g.params, g.results
+	// Kept small enough to inline.
+	var g *linkedNative
+	switch {
+	case ref.Index < MethodImportBase:
+		g = &vm.program.natives[ref.Index]
+	case ref.Index == nativeFunctionIndex:
+		g = &(*nativeFunction)(env).typ.native
+	default:
+		g = &vm.program.methodNatives[ref.Index-MethodImportBase]
 	}
-	g := &vm.program.functions[ref.Index]
 	return g.Signature, g.params, g.results
 }
 func (vm *VM) enterCode(cur *frame, ref FunctionRef, env unsafe.Pointer, recoverToken uint32, budget *executionBudget) error {

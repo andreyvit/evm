@@ -227,7 +227,7 @@ func (c *Call) formatScalar(s *values.Shape, v values.Value) error {
 				}
 				ref := c.program.functionRefs[v.R-1]
 				if ref.Native {
-					ptr = unsafe.Pointer(&c.program.natives[ref.Index])
+					ptr = unsafe.Pointer(c.program.native(ref.Index))
 				} else {
 					ptr = unsafe.Pointer(&c.program.functions[ref.Index])
 				}

@@ -3,7 +3,9 @@ package evm
 import (
 	"context"
 	"fmt"
+	"iter"
 	"maps"
+	"math/bits"
 	"path"
 	"reflect"
 	"slices"
@@ -100,7 +102,9 @@ type Function struct {
 	RCount, PCount int
 	Code           []Instruction
 	// Lines is optional; when present it has one source line per instruction.
-	Lines     []int
+	Lines []int
+	// Positions is optional too, and takes precedence over Lines. Without
+	// either, every instruction has the zero position.
 	Positions []SourcePosition
 }
 type Import struct {
@@ -129,16 +133,71 @@ type Module struct {
 	Closures     []Closure
 	Signatures   []Signature
 	Functions    []Function
-	Imports      []Import
-	Words        []uint64
-	Strings      []string
-	Conversions  []Conversion
-	Shapes       []*values.Shape
-	ExtendedOps  []ExtendedOp
-	Globals      []*values.Shape
-	Init         string
+	// Imports lists the natives that instructions, function references and
+	// defers name by index, and any native a method table names here.
+	Imports []Import
+	// MethodImports lists native methods for the method tables of Types
+	// alone; see FunctionRef. A link binds those the tables name, so the
+	// list may hold more. Modules compiled through one environment share
+	// one list and the method tables of host types that name nothing else:
+	// the module does not own them and they must not change.
+	MethodImports []Import
+	Words         []uint64
+	Strings       []string
+	Conversions   []Conversion
+	// Shapes lists the shapes instructions index, then others the program
+	// must know by type.
+	Shapes []*values.Shape
+	// HostShapes lists more shapes for the program to know by type.
+	HostShapes  HostShapes
+	ExtendedOps []ExtendedOp
+	Globals     []*values.Shape
+	Init        string
 	// SourceBranches is reporting metadata keyed by function name, then instruction PC.
 	SourceBranches map[string]map[int]SourceBranch
+}
+
+// HostShapes selects shapes from a table that the modules of one compile
+// environment share: the shapes of the host types a module's source can
+// reach, a few thousand on a large host. The module does not own the table
+// and must not change it.
+type HostShapes struct {
+	Table []*values.Shape
+	// Set has bit i%64 of word i/64 set for each Table[i] the module lists.
+	Set []uint64
+	// After is the number of leading Module.Shapes that the selection
+	// follows in the order of the listing; see Module.ListedShapes.
+	After int
+}
+
+// ListedShapes yields every shape the module lists, in the order a link
+// takes them: a type with several shapes resolves to the first. The
+// selection of HostShapes follows the first HostShapes.After of Shapes.
+func (m *Module) ListedShapes() iter.Seq[*values.Shape] {
+	return func(yield func(*values.Shape) bool) {
+		after := min(max(m.HostShapes.After, 0), len(m.Shapes))
+		for _, s := range m.Shapes[:after] {
+			if !yield(s) {
+				return
+			}
+		}
+		for i, word := range m.HostShapes.Set {
+			for ; word != 0; word &= word - 1 {
+				n := i*64 + bits.TrailingZeros64(word)
+				if n >= len(m.HostShapes.Table) {
+					return // Link rejects the module.
+				}
+				if !yield(m.HostShapes.Table[n]) {
+					return
+				}
+			}
+		}
+		for _, s := range m.Shapes[after:] {
+			if !yield(s) {
+				return
+			}
+		}
+	}
 }
 
 // Call borrows an in-place argument/result window for this native call. Read
@@ -387,6 +446,13 @@ type Program struct {
 	// instruction, and their places in the struct are part of its timing.
 	sharedShapes *sharedShapes // the environment's snapshots, or nil
 	sharedSeen   []uint64      // those this program reaches
+	// methodNatives are the natives only method tables name, indexed from
+	// MethodImportBase: the environment's, shared and never written, or the
+	// program's own.
+	methodNatives []linkedNative
+	// sharedMethodIDs are the method IDs the environment assigned. They
+	// come before the program's own in methodIDs.
+	sharedMethodIDs map[string]uint32
 }
 
 func copySignature(s Signature) Signature {
@@ -426,10 +492,11 @@ func (e *LinkEnvironment) link(m *Module, hostData any) (*Program, error) {
 	if m == nil {
 		return nil, fmt.Errorf("nil module")
 	}
-	if len(m.Functions) == 0 || uint64(len(m.Functions)) > 1<<32 || uint64(len(m.Imports)) > 1<<32 {
+	// References to the two import lists share one index space.
+	if len(m.Functions) == 0 || uint64(len(m.Functions)) > 1<<32 || uint64(len(m.Imports)) > MethodImportBase-nativeErrorNatives-panicNatives || uint64(len(m.MethodImports)) >= nativeFunctionIndex-MethodImportBase {
 		return nil, fmt.Errorf("invalid function/import count")
 	}
-	p := &Program{hostData: hostData, jsonTypes: m.JSONTypes, methodIDs: make(map[string]uint32), requirements: make(map[*values.Shape][]methodRequirement), typeIDs: make(map[*values.Type]uint32), words: slices.Clone(m.Words), entries: make(map[string]int), conversions: slices.Clone(m.Conversions)}
+	p := &Program{hostData: hostData, jsonTypes: m.JSONTypes, sharedMethodIDs: e.methodIDs, methodIDs: make(map[string]uint32), requirements: make(map[*values.Shape][]methodRequirement), typeIDs: make(map[*values.Type]uint32), words: slices.Clone(m.Words), entries: make(map[string]int), conversions: slices.Clone(m.Conversions)}
 	if e.codecsErr != nil {
 		return nil, e.codecsErr
 	}
@@ -437,7 +504,23 @@ func (e *LinkEnvironment) link(m *Module, hostData any) (*Program, error) {
 	p.init = -1
 	p.nativeImports = len(m.Imports)
 	shapes := newShapeSnapshots(e.shapes)
-	p.shapes = make([]*values.Shape, 0, len(m.Shapes))
+	// A module lists the shapes its instructions index first and then the
+	// shapes of the host types it can reach, a few thousand on a large
+	// host. The program knows all of them by type and keeps a table of
+	// those an instruction can index.
+	indexed := 0
+	for i := range m.Functions {
+		for _, ins := range m.Functions[i].Code {
+			switch ins.Op() {
+			case OpAlloc:
+				indexed = max(indexed, int(ins.B())+1)
+			case OpLoad, OpStore:
+				indexed = max(indexed, int(ins.C())+1)
+			}
+		}
+	}
+	indexed = min(indexed, len(m.Shapes))
+	p.shapes = make([]*values.Shape, 0, indexed)
 	p.globals = make([]*values.Shape, 0, len(m.Globals))
 	p.extendedOps = make([]ExtendedOp, 0, len(m.ExtendedOps))
 	p.strings = make([]values.Value, 0, len(m.Strings))
@@ -448,22 +531,40 @@ func (e *LinkEnvironment) link(m *Module, hostData any) (*Program, error) {
 		natives += nativeErrorNatives
 	}
 	p.natives = make([]linkedNative, 0, natives)
-	for _, set := range []struct {
-		from []*values.Shape
-		to   *[]*values.Shape
-	}{{m.Shapes, &p.shapes}, {m.Globals, &p.globals}} {
-		for _, s := range set.from {
-			c, err := shapes.snapshot(s)
-			if err != nil {
-				return nil, err
-			}
-			if c == nil {
-				return nil, fmt.Errorf("nil storage shape")
-			}
-			*set.to = append(*set.to, c)
+	for i, word := range m.HostShapes.Set {
+		if word != 0 && i*64+bits.Len64(word) > len(m.HostShapes.Table) {
+			return nil, fmt.Errorf("invalid host shape selection")
 		}
 	}
-	if len(p.shapes) > 65536 {
+	for s := range m.ListedShapes() {
+		c, err := shapes.snapshot(s)
+		if err != nil {
+			return nil, err
+		}
+		if c == nil {
+			return nil, fmt.Errorf("nil storage shape")
+		}
+	}
+	// The table holds the linked form of the first shapes of the module,
+	// whatever the order of the listing.
+	for _, s := range m.Shapes[:indexed] {
+		c, err := shapes.snapshot(s)
+		if err != nil {
+			return nil, err
+		}
+		p.shapes = append(p.shapes, c)
+	}
+	for _, s := range m.Globals {
+		c, err := shapes.snapshot(s)
+		if err != nil {
+			return nil, err
+		}
+		if c == nil {
+			return nil, fmt.Errorf("nil storage shape")
+		}
+		p.globals = append(p.globals, c)
+	}
+	if len(m.Shapes) > 65536 {
 		return nil, fmt.Errorf("too many storage shapes")
 	}
 	for _, op := range m.ExtendedOps {
@@ -533,78 +634,10 @@ func (e *LinkEnvironment) link(m *Module, hostData any) (*Program, error) {
 		return nil, e.bindingsErr
 	}
 	for i := range m.Imports {
-		imp := &m.Imports[i]
-		// Copy the declaration: the host owns it, and a program keeps its
-		// own signature and effects.
-		var f ExternalFunction
-		export, ok := e.exports[exportKey{imp.Package, imp.Name, imp.Receiver}]
-		resolved := export.resolved
-		if resolved != nil {
-			f = resolved.native.ExternalFunction
-		} else if ok {
-			f = *export.declared
-		} else if imp.Receiver == nil {
-			if standard, found := BindStandardFunction(imp.Package, imp.Name, imp.Signature); found {
-				if err := validateStandardSignature(imp, shapes); err != nil {
-					return nil, err
-				}
-				f, ok = *standard, true
-			}
+		p.natives = append(p.natives, linkedNative{})
+		if _, err := e.linkImport(&m.Imports[i], shapes, &p.natives[i]); err != nil {
+			return nil, err
 		}
-		if !ok {
-			return nil, fmt.Errorf("unresolved import %s.%s", imp.Package, imp.Name)
-		}
-		if f.Instantiate != nil {
-			name := f.Name
-			var err error
-			for _, arg := range imp.TypeArgs {
-				if arg == nil {
-					return nil, fmt.Errorf("nil type argument for %s.%s", imp.Package, imp.Name)
-				}
-			}
-			f, err = f.Instantiate(slices.Clone(imp.TypeArgs))
-			f.Name = name
-			if err != nil {
-				return nil, fmt.Errorf("%s.%s: %w", imp.Package, imp.Name, err)
-			}
-			if f.Instantiate != nil || f.Call == nil && f.Direct.Call == nil || f.Direct.Op != 0 && f.Direct.Call == nil {
-				return nil, fmt.Errorf("invalid generic binding %s.%s", imp.Package, imp.Name)
-			}
-			if f.Direct.Op != 0 || f.Direct.Call != nil {
-				instance := Package{Path: imp.Package}
-				if imp.Receiver == nil {
-					instance.Functions = []ExternalFunction{f}
-				} else {
-					if len(f.Signature.Params) == 0 || f.Signature.Params[0] != imp.Receiver {
-						return nil, fmt.Errorf("generic method receiver mismatch")
-					}
-					instance.Methods = []ExternalMethod{{Name: imp.Name, Receiver: imp.Receiver, Signature: Signature{Params: f.Signature.Params[1:], Results: f.Signature.Results}, Direct: f.Direct, Variadic: f.Variadic}}
-				}
-				// The host types of the prepared packages decide which
-				// register forms fit the instance.
-				if err := validateDirectBindings([]Package{instance}, e.hostKinds); err != nil {
-					return nil, err
-				}
-			}
-		} else if len(imp.TypeArgs) != 0 {
-			return nil, fmt.Errorf("unexpected type arguments for %s.%s", imp.Package, imp.Name)
-		}
-		if resolved == nil {
-			resolved = e.resolve(f, imp.Receiver != nil)
-		}
-		if resolved.ownershipErr != nil {
-			return nil, fmt.Errorf("%s.%s: %w", imp.Package, imp.Name, resolved.ownershipErr)
-		}
-		if !imp.Ownership.Equal(resolved.native.Ownership) {
-			return nil, fmt.Errorf("ownership effects mismatch for %s.%s", imp.Package, imp.Name)
-		}
-		if !sameSignature(imp.Signature, resolved.native.Signature) {
-			return nil, fmt.Errorf("signature mismatch for %s.%s", imp.Package, imp.Name)
-		}
-		if resolved.layoutErr != nil {
-			return nil, resolved.layoutErr
-		}
-		p.natives = append(p.natives, resolved.native)
 	}
 	if len(m.SourceBranches) != 0 {
 		p.sourceBranches = make(map[string]map[int]SourceBranch, len(m.SourceBranches))
@@ -663,7 +696,7 @@ func (e *LinkEnvironment) link(m *Module, hostData any) (*Program, error) {
 	if err := p.linkFunctions(m); err != nil {
 		return nil, err
 	}
-	if err := p.linkInterfaces(m, shapes, e.shapes); err != nil {
+	if err := p.linkInterfaces(e, m, shapes); err != nil {
 		return nil, err
 	}
 	if err := p.checkJSONTypes(); err != nil {
@@ -844,6 +877,91 @@ func (e *LinkEnvironment) link(m *Module, hostData any) (*Program, error) {
 		}
 	}
 	return p, nil
+}
+
+// linkImport binds one import of a module to what the packages export and
+// writes the binding to dst. A prepared environment answers with the binding
+// it resolved when it was built: prepared is its index in e.natives, or -1
+// for a binding resolved for this import alone, as a generic one is.
+func (e *LinkEnvironment) linkImport(imp *Import, shapes *shapeSnapshots, dst *linkedNative) (prepared int, _ error) {
+	// Copy the declaration: the host owns it, and a program keeps its
+	// own signature and effects.
+	var f ExternalFunction
+	export, ok := e.exports[exportKey{imp.Package, imp.Name, imp.Receiver}]
+	resolved, errs := export.resolved, export.errs
+	if resolved != nil {
+		f = resolved.ExternalFunction
+	} else if ok {
+		f = *export.declared
+	} else if imp.Receiver == nil {
+		if standard, found := BindStandardFunction(imp.Package, imp.Name, imp.Signature); found {
+			if err := validateStandardSignature(imp, shapes); err != nil {
+				return -1, err
+			}
+			f, ok = *standard, true
+		}
+	}
+	if !ok {
+		return -1, fmt.Errorf("unresolved import %s.%s", imp.Package, imp.Name)
+	}
+	if f.Instantiate != nil {
+		name := f.Name
+		var err error
+		for _, arg := range imp.TypeArgs {
+			if arg == nil {
+				return -1, fmt.Errorf("nil type argument for %s.%s", imp.Package, imp.Name)
+			}
+		}
+		f, err = f.Instantiate(slices.Clone(imp.TypeArgs))
+		f.Name = name
+		if err != nil {
+			return -1, fmt.Errorf("%s.%s: %w", imp.Package, imp.Name, err)
+		}
+		if f.Instantiate != nil || f.Call == nil && f.Direct.Call == nil || f.Direct.Op != 0 && f.Direct.Call == nil {
+			return -1, fmt.Errorf("invalid generic binding %s.%s", imp.Package, imp.Name)
+		}
+		if f.Direct.Op != 0 || f.Direct.Call != nil {
+			instance := Package{Path: imp.Package}
+			if imp.Receiver == nil {
+				instance.Functions = []ExternalFunction{f}
+			} else {
+				if len(f.Signature.Params) == 0 || f.Signature.Params[0] != imp.Receiver {
+					return -1, fmt.Errorf("generic method receiver mismatch")
+				}
+				instance.Methods = []ExternalMethod{{Name: imp.Name, Receiver: imp.Receiver, Signature: Signature{Params: f.Signature.Params[1:], Results: f.Signature.Results}, Direct: f.Direct, Variadic: f.Variadic}}
+			}
+			// The host types of the prepared packages decide which
+			// register forms fit the instance.
+			if err := validateDirectBindings([]Package{instance}, e.hostKinds); err != nil {
+				return -1, err
+			}
+		}
+	} else if len(imp.TypeArgs) != 0 {
+		return -1, fmt.Errorf("unexpected type arguments for %s.%s", imp.Package, imp.Name)
+	}
+	prepared = -1
+	if resolved != nil {
+		prepared = int((uintptr(unsafe.Pointer(resolved)) - uintptr(unsafe.Pointer(unsafe.SliceData(e.natives)))) / unsafe.Sizeof(linkedNative{}))
+		*dst = *resolved
+	} else {
+		errs = nil
+		if ownership, layout := e.resolve(dst, f, imp.Receiver != nil); ownership != nil || layout != nil {
+			errs = &resolveErrors{ownership, layout}
+		}
+	}
+	if errs != nil && errs.ownership != nil {
+		return -1, fmt.Errorf("%s.%s: %w", imp.Package, imp.Name, errs.ownership)
+	}
+	if !imp.Ownership.Equal(dst.Ownership) {
+		return -1, fmt.Errorf("ownership effects mismatch for %s.%s", imp.Package, imp.Name)
+	}
+	if !sameSignature(imp.Signature, dst.Signature) {
+		return -1, fmt.Errorf("signature mismatch for %s.%s", imp.Package, imp.Name)
+	}
+	if errs != nil && errs.layout != nil {
+		return -1, errs.layout
+	}
+	return prepared, nil
 }
 
 // UnaryHostOpcode selects the fused argument move, external call and result move.

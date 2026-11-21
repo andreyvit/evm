@@ -51,7 +51,37 @@ func linkTestPackages(t testing.TB) []evm.Package {
 			return evm.ExternalFunction{Signature: evm.Signature{Params: []*values.Type{args[0], args[0]}, Results: args}, Call: func(c *evm.Call) error { c.SetResult(0, c.Argument(0)); return nil }}, nil
 		}},
 	}, Values: []evm.ExternalValue{{Name: "Limit", Type: values.IntType, Read: func(c *evm.Call) error { c.SetResult(0, values.Int(40)); return nil }}}}
-	return append([]evm.Package{db, host}, evmstd.Packages()...)
+	// Host types with native methods: a scalar with value methods, whose
+	// pointer needs wrappers, and a struct with methods on its pointer.
+	text := &values.Shape{Type: values.StringType, Kind: values.StringKind, Cells: 1}
+	number := &values.Shape{Type: values.IntType, Kind: values.IntKind, Bits: 64, Cells: 1}
+	code := &values.Shape{Type: values.NewType("shop.Code", values.Raw), Kind: values.IntKind, Bits: 64, Cells: 1}
+	item := &values.Shape{Type: values.NewType("shop.Item", values.Pointer), Kind: values.StructKind, Cells: 1, Fields: []values.Field{{Name: "N", Shape: number}}}
+	itemPtr := &values.Shape{Type: values.NewType("*shop.Item", values.Pointer), Kind: values.PointerKind, Cells: 1, Elem: item}
+	describe := &values.Shape{Type: values.NewType("shop describe", values.Pair), Kind: values.FunctionKind, Cells: 1, Results: []*values.Shape{text}}
+	describer := &values.Shape{Type: values.NewType("shop.Describer", values.Pair), Kind: values.InterfaceKind, Cells: 1, Methods: []values.Method{{ID: "Describe", Signature: describe}}}
+	strings := evm.Signature{Results: []*values.Type{values.StringType}}
+	shop := evm.Package{Path: "shop", Types: []evm.TypeDecl{{Name: "Code", Shape: code}, {Name: "Item", Shape: item}, {Shape: itemPtr}, {Name: "Describer", Shape: describer}}, Methods: []evm.ExternalMethod{
+		{Name: "Describe", Receiver: code.Type, Signature: strings, Call: func(c *evm.Call) error { c.SetValue(0, values.String(fmt.Sprint("code", c.R[0]))); return nil }},
+		{Name: "String", Receiver: code.Type, Signature: strings, Call: func(c *evm.Call) error { c.SetValue(0, values.String(fmt.Sprint("#", c.R[0]))); return nil }},
+		{Name: "Next", Receiver: code.Type, Signature: evm.Signature{Params: []*values.Type{values.IntType}, Results: []*values.Type{code.Type}}, Call: func(c *evm.Call) error { c.R[0] += c.R[1]; return nil }},
+		{Name: "Describe", Receiver: itemPtr.Type, Signature: strings, Call: func(c *evm.Call) error {
+			if c.P[0] == nil {
+				c.SetValue(0, values.String("no item"))
+			} else {
+				c.SetValue(0, values.String(fmt.Sprint("item", item.GetField(c.P[0], 0).AsInt())))
+			}
+			return nil
+		}},
+	}, Functions: []evm.ExternalFunction{
+		{Name: "Make", Signature: evm.Signature{Params: []*values.Type{values.IntType}, Results: []*values.Type{describer.Type}}, DynamicTypes: []*values.Type{code.Type, itemPtr.Type}, Call: func(c *evm.Call) error {
+			if n := c.Argument(0).AsInt(); n != 0 {
+				return c.SetInterface(0, code.Type, values.Int(n))
+			}
+			return c.SetInterface(0, itemPtr.Type, values.Value{})
+		}},
+	}}
+	return append([]evm.Package{db, host, shop}, evmstd.Packages()...)
 }
 
 var linkTestSources = map[string]string{
@@ -94,6 +124,31 @@ func Read(c *db.Customer) int64 { copy := *c; return copy.total * 10 }
 func Run() string { return "records" }`,
 	"panic": `import "host"
 func Run() string { panic(host.Fail(3)) }`,
+	// Interface calls on host types reach native methods through the method
+	// tables: straight, through a wrapper that loads the receiver, as method
+	// values, deferred, and by name from fmt.
+	"methods": `import ("fmt";"shop";"time")
+type Local int
+func (l Local) Describe() string { return "local" }
+type Wrapped struct{ shop.Code }
+func late(d shop.Describer, out *string) { defer func() { *out += " deferred" }(); defer d.Describe(); *out += d.Describe() }
+func Run() string {
+	out := ""
+	for i := 0; i < 3; i++ { out += shop.Make(i).Describe() + " " }
+	code := shop.Code(7)
+	var d shop.Describer = code
+	var p shop.Describer = &code
+	var w shop.Describer = Wrapped{code.Next(2)}
+	var l shop.Describer = Local(1)
+	var it shop.Describer = &shop.Item{N: 5}
+	f := d.Describe
+	var s fmt.Stringer = code.Next(1)
+	var elapsed fmt.Stringer = 90 * time.Second
+	_, isCode := d.(shop.Code)
+	_, isStringer := it.(fmt.Stringer)
+	late(it, &out)
+	return fmt.Sprint(out, " ", d.Describe(), p.Describe(), w.Describe(), l.Describe(), it.Describe(), f(), " ", s, " ", s.String(), " ", elapsed, " ", code, " ", isCode, isStringer)
+}`,
 }
 
 func linkTestRun(p *evm.Program) string {
@@ -134,11 +189,18 @@ func TestLinkEnvironmentMatchesPackageList(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				// The two compiles give the same result, however linked.
+				var result string
 				for _, m := range []*evm.Module{lazy, prepared} {
 					listing := m.Disassemble()
 					want, err := evm.Link(m, packages...)
 					if err != nil {
 						t.Fatal(err)
+					}
+					if m == lazy {
+						result = linkTestRun(want)
+					} else if got := linkTestRun(want); got != result {
+						t.Fatalf("package-list module result %q, prepared module result %q", result, got)
 					}
 					for _, env := range []*evm.LinkEnvironment{shared, plain} {
 						for round := 0; round < 2; round++ {
@@ -149,7 +211,7 @@ func TestLinkEnvironmentMatchesPackageList(t *testing.T) {
 							if got.HostData() != name {
 								t.Fatalf("host data = %v", got.HostData())
 							}
-							if a, b := evm.ProgramListing(want), evm.ProgramListing(got); a != b {
+							if a, b := evm.ModuleProgramListing(m, want), evm.ModuleProgramListing(m, got); a != b {
 								t.Fatalf("round %d: programs differ\npackage list:\n%s\nenvironment:\n%s", round, a, b)
 							}
 							if a, b := linkTestRun(want), linkTestRun(got); a != b || strings.HasPrefix(a, "error") != (name == "panic") {
@@ -161,6 +223,23 @@ func TestLinkEnvironmentMatchesPackageList(t *testing.T) {
 							}
 							if (env != shared || m != prepared) && sharedShapes != 0 {
 								t.Fatalf("a module with its own shapes shares %d", sharedShapes)
+							}
+							// A prepared module takes the environment's method
+							// tables and natives for host types whose methods are
+							// all native; any other binds its own.
+							sharedTables, _, sharedNatives := env.SharedMethods(got)
+							_, ownNatives := evm.MethodNatives(got, env)
+							if env == shared && m == prepared {
+								if name == "methods" && (sharedTables < 2 || !sharedNatives) {
+									t.Fatalf("a prepared module shares %d method tables, natives %v", sharedTables, sharedNatives)
+								}
+								if ownNatives != 0 {
+									t.Fatalf("a prepared module bound %d method natives of its own", ownNatives)
+								}
+							} else if sharedTables != 0 || sharedNatives {
+								t.Fatalf("a module with its own method tables shares %d, natives %v", sharedTables, sharedNatives)
+							} else if name == "methods" && ownNatives == 0 {
+								t.Fatal("no method natives")
 							}
 						}
 					}
@@ -233,7 +312,8 @@ func Run() int { return other.Value() }`, append(packages, other)...)
 	}
 }
 
-// Links and runs on one environment do not interfere; run with -race.
+// Compiles, links and runs on one pair of environments do not interfere; run
+// with -race.
 func TestLinkEnvironmentConcurrentUse(t *testing.T) {
 	packages := linkTestPackages(t)
 	compiler, err := evmcompiler.NewEnvironment(packages...)
@@ -251,6 +331,7 @@ func TestLinkEnvironmentConcurrentUse(t *testing.T) {
 		want   string
 	}
 	var modules []compiled
+	wants := make(map[string]string)
 	for name, source := range linkTestSources {
 		for _, compile := range []func() (*evm.Module, error){
 			func() (*evm.Module, error) { return compiler.Compile(name+".go", source, evmcompiler.Options{}) },
@@ -265,6 +346,7 @@ func TestLinkEnvironmentConcurrentUse(t *testing.T) {
 				t.Fatal(err)
 			}
 			modules = append(modules, compiled{name, m, linkTestRun(p)})
+			wants[name] = linkTestRun(p)
 		}
 	}
 	var wg sync.WaitGroup
@@ -283,6 +365,34 @@ func TestLinkEnvironmentConcurrentUse(t *testing.T) {
 						t.Errorf("%s: got %q, want %q", c.name, got, c.want)
 						return
 					}
+				}
+				// Each worker also compiles modules of its own, which share
+				// the environment's method tables, and holds on to the
+				// programs while the others link.
+				var programs []*evm.Program
+				for name, source := range linkTestSources {
+					m, err := compiler.Compile(fmt.Sprintf("%s%d_%d.go", name, worker, round), fmt.Sprintf("%s\n// worker %d round %d\n", source, worker, round), evmcompiler.Options{})
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					p, err := env.Link(m)
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					if shared, _, _ := env.SharedMethods(p); name == "methods" && shared == 0 {
+						t.Error("a prepared module shares no method tables")
+						return
+					}
+					programs = append(programs, p)
+					if got := linkTestRun(p); got != wants[name] {
+						t.Errorf("%s: got %q, want %q", name, got, wants[name])
+						return
+					}
+				}
+				for _, p := range programs {
+					linkTestRun(p)
 				}
 			}
 		}()

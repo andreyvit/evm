@@ -5,6 +5,8 @@ import (
 	"go/types"
 	"slices"
 	"strings"
+
+	"github.com/andreyvit/evm/values"
 )
 
 var ModuleDifference = moduleDifference
@@ -24,6 +26,28 @@ func (env *Environment) Fingerprint() string {
 		for _, s := range e.shapeOrder {
 			fmt.Fprintf(&b, "shape %s kind=%d cells=%d fields=%d methods=%d native=%v\n", s.Type.Name(), s.Kind, s.Cells, len(s.Fields), len(s.Methods), s.Native != nil)
 		}
+		// The method tables modules share.
+		typeNames := func(ts []*values.Type) string {
+			names := make([]string, len(ts))
+			for i, t := range ts {
+				names[i] = t.Name()
+			}
+			return strings.Join(names, ",")
+		}
+		fmt.Fprintf(&b, "method imports=%d bindings=%d numbers=%d tables=%d\n", len(e.methodImports), len(e.methodBindings), len(e.methodNumbers), len(e.hostMethods))
+		for i, imp := range e.methodImports {
+			fmt.Fprintf(&b, "method import %d %s.%s receiver=%s (%s)(%s) ownership=%+v\n", i, imp.Package, imp.Name, imp.Receiver.Name(), typeNames(imp.Signature.Params), typeNames(imp.Signature.Results), imp.Ownership)
+		}
+		var tables []string
+		for s, methods := range e.hostMethods {
+			table := "method table " + s.Type.Name()
+			for _, m := range methods {
+				table += fmt.Sprintf(" %s(%s)(%s)%v%v", m.ID, typeNames(m.Signature.Params), typeNames(m.Signature.Results), m.Variadic, m.Function)
+			}
+			tables = append(tables, table)
+		}
+		slices.Sort(tables)
+		b.WriteString(strings.Join(tables, "\n") + "\n")
 		for _, pkg := range e.importOrder {
 			fmt.Fprintf(&b, "package %s %q complete=%v imports=%d\n", pkg.Path(), pkg.Name(), pkg.Complete(), len(pkg.Imports()))
 			scope := pkg.Scope()

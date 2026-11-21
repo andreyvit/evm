@@ -2,7 +2,6 @@ package evm
 
 import (
 	"fmt"
-	"slices"
 
 	"github.com/andreyvit/evm/values"
 )
@@ -43,15 +42,6 @@ type methodRequirement struct {
 	method values.Method
 }
 
-func (p *Program) methodID(name string) uint32 {
-	if id, ok := p.methodIDs[name]; ok {
-		return id
-	}
-	id := uint32(len(p.methodIDs))
-	p.methodIDs[name] = id
-	return id
-}
-
 type linkedInvoke struct {
 	methodID uint32
 	Invoke
@@ -68,10 +58,13 @@ func methodSignature(s *values.Shape) Signature {
 	}
 	return sig
 }
-func (p *Program) linkInterfaces(m *Module, shapes *shapeSnapshots, shared *sharedShapes) error {
+func (p *Program) linkInterfaces(e *LinkEnvironment, m *Module, shapes *shapeSnapshots) error {
+	shared := e.shapes
 	p.types = make([]linkedDynamicType, 1, max(1, len(m.Types))+nativeErrorTypes+panicTypes)
 	p.invokes = make([]linkedInvoke, 0, len(m.Invokes))
-	for id, t := range m.Types {
+	methods := newMethodLinker(e, p, m, shapes)
+	for id := range m.Types {
+		t := &m.Types[id]
 		if id == 0 {
 			if t.Shape != nil || len(t.Methods) != 0 {
 				return fmt.Errorf("dynamic type zero is reserved for nil")
@@ -89,34 +82,12 @@ func (p *Program) linkInterfaces(m *Module, shapes *shapeSnapshots, shared *shar
 			return fmt.Errorf("invalid dynamic concrete type")
 		}
 		d := linkedDynamicType{shape: s}
-		if len(t.Methods) != 0 {
-			d.methods = make(map[uint32]*DynamicMethod, len(t.Methods))
-		}
-		methods := slices.Clone(t.Methods)
 		if _, ok := p.typeIDs[s.Type]; ok {
 			return fmt.Errorf("duplicate dynamic type")
 		}
 		p.typeIDs[s.Type] = uint32(len(p.types))
-		for i := range methods {
-			method := &methods[i]
-			if method.ID == "" {
-				return fmt.Errorf("empty method identity")
-			}
-			if _, ok := d.methods[p.methodID(method.ID)]; ok {
-				return fmt.Errorf("duplicate method identity")
-			}
-			sig, ok := p.functionSignature(method.Function)
-			if !ok || len(sig.Params) == 0 || sig.Params[0] != s.Type || !sameSignature(Signature{sig.Params[1:], sig.Results}, method.Signature) {
-				return fmt.Errorf("invalid dynamic method target %s", method.ID)
-			}
-			if method.Function.Native && m.Imports[method.Function.Index].Receiver == nil || !method.Function.Native && !p.functions[method.Function.Index].Method {
-				return fmt.Errorf("dynamic target lacks receiver slot")
-			}
-			if !method.Function.Native && len(p.functions[method.Function.Index].Captures) > 0 {
-				return fmt.Errorf("method target captures")
-			}
-			method.Signature = copySignature(method.Signature)
-			d.methods[p.methodID(method.ID)] = method
+		if d.methods, err = methods.link(s.Type, t); err != nil {
+			return err
 		}
 		p.types = append(p.types, d)
 	}

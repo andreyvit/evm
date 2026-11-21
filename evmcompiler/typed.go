@@ -36,6 +36,7 @@ type typedCompiler struct {
 	functions         map[*ssa.Function]uint32
 	globals           map[*ssa.Global]uint32
 	imports           map[importKey]uint32
+	methodImports     map[importKey]uint32 // into module.MethodImports, unless the environment numbers them
 	words             map[uint64]uint32
 	strings           map[string]uint32
 	conversions       map[evm.Conversion]uint16
@@ -62,7 +63,7 @@ func compileTypedFiles(sources map[string]string, environment *Environment, opti
 		return nil, Diagnostics{{Message: "a source file is required"}}
 	}
 	filename := filenames[0]
-	c := &typedCompiler{dereferenceWrites: make(map[token.Pos]bool), addedLines: make(map[string]int), invokes: make(map[evm.Invoke]uint32), dynamic: make(map[*values.Shape]uint32), filename: filename, files: environment.NewFileSet(), functions: make(map[*ssa.Function]uint32), globals: make(map[*ssa.Global]uint32), imports: make(map[importKey]uint32), words: make(map[uint64]uint32), strings: make(map[string]uint32), conversions: make(map[evm.Conversion]uint16), shapes: make(map[*values.Shape]uint16), refs: make(map[*ssa.Function]uint32), callSignatures: make(map[*values.Shape]uint32)}
+	c := &typedCompiler{dereferenceWrites: make(map[token.Pos]bool), addedLines: make(map[string]int), invokes: make(map[evm.Invoke]uint32), dynamic: make(map[*values.Shape]uint32), filename: filename, files: environment.NewFileSet(), functions: make(map[*ssa.Function]uint32), globals: make(map[*ssa.Global]uint32), imports: make(map[importKey]uint32), methodImports: make(map[importKey]uint32), words: make(map[uint64]uint32), strings: make(map[string]uint32), conversions: make(map[evm.Conversion]uint16), shapes: make(map[*values.Shape]uint16), refs: make(map[*ssa.Function]uint32), callSignatures: make(map[*values.Shape]uint32)}
 	c.module.NoOptimization = options.NoOptimization
 	c.module.StrictCallWindows = true
 	total := 0
@@ -305,20 +306,50 @@ func compileTypedFiles(sources map[string]string, environment *Environment, opti
 	if len(c.errors) > 0 {
 		return nil, c.errors
 	}
-	for s := range c.env.moduleShapes(usedSet) {
-		if _, ok := c.shapes[s]; !ok {
-			if len(c.module.Shapes) >= 65536 {
-				c.fail(token.NoPos, "too many storage shapes")
-				break
+	// After the shapes its code uses, a module lists the shapes of the host
+	// packages its source can use, and then the rest of those built here. A
+	// frozen environment has thousands of the former, the same for every
+	// module with these imports: the module selects them from the
+	// environment's list instead of listing each.
+	listed := len(c.module.Shapes)
+	list := func(s *values.Shape) bool {
+		if _, ok := c.shapes[s]; ok {
+			return false
+		}
+		if listed >= 65536 {
+			c.fail(token.NoPos, "too many storage shapes")
+			return false
+		}
+		listed++
+		return true
+	}
+	if base := c.env.base; base != nil {
+		c.module.HostShapes = evm.HostShapes{Table: base.shapeOrder, Set: make([]uint64, (len(base.shapeOrder)+63)/64), After: listed}
+		for i, s := range base.shapeOrder {
+			if base.shapePackages[i].within(usedSet) && len(c.errors) == 0 && list(s) {
+				c.module.HostShapes.Set[i/64] |= 1 << (i % 64)
 			}
-			c.shapes[s] = uint16(len(c.module.Shapes))
+		}
+	}
+	for s := range c.env.ownShapes() {
+		if len(c.errors) == 0 && list(s) {
 			c.module.Shapes = append(c.module.Shapes, s)
 		}
 	}
 	if len(c.errors) > 0 {
 		return nil, c.errors
 	}
+	// A function no source line produced, such as the wrapper that loads a
+	// receiver for a method, has no positions to keep: without the list
+	// every instruction has the zero position too.
+	for i := range c.module.Functions {
+		f := &c.module.Functions[i]
+		if !slices.ContainsFunc(f.Positions, func(p evm.SourcePosition) bool { return p != evm.SourcePosition{} }) {
+			f.Positions = nil
+		}
+	}
 	c.env.addSourceTexts(c.module.Sources, used)
+	c.trimModule()
 	// A pointer into c would keep the type universe, SSA and syntax alive
 	// for as long as the caller holds the module.
 	module := c.module
@@ -370,4 +401,31 @@ func (c *typedCompiler) recordDereferenceWrites(file *ast.File) {
 		}
 		return true
 	})
+}
+
+// trimModule gives each table of the module an array of its own length.
+// The tables grow by appending, which leaves up to as much capacity again
+// unused, and a host keeps the module of every plugin it has loaded.
+func (c *typedCompiler) trimModule() {
+	m := &c.module
+	m.Defers, m.Types, m.Invokes, m.FunctionRefs, m.Closures = exact(m.Defers), exact(m.Types), exact(m.Invokes), exact(m.FunctionRefs), exact(m.Closures)
+	m.Signatures, m.Functions, m.Imports, m.MethodImports, m.Words = exact(m.Signatures), exact(m.Functions), exact(m.Imports), exact(m.MethodImports), exact(m.Words)
+	m.Strings, m.Conversions, m.Shapes, m.ExtendedOps, m.Globals = exact(m.Strings), exact(m.Conversions), exact(m.Shapes), exact(m.ExtendedOps), exact(m.Globals)
+	for i := range m.Functions {
+		f := &m.Functions[i]
+		f.Code, f.Lines, f.Positions, f.Captures, f.OwnershipSites = exact(f.Code), exact(f.Lines), exact(f.Positions), exact(f.Captures), exact(f.OwnershipSites)
+	}
+	for i := range m.Types {
+		m.Types[i].Methods = exact(m.Types[i].Methods)
+	}
+}
+
+// exact returns s in an array without spare capacity. It leaves alone a
+// slice that has none, such as a table the module shares with its
+// environment.
+func exact[T any](s []T) []T {
+	if cap(s) == len(s) {
+		return s
+	}
+	return append(make([]T, 0, len(s)), s...)
 }

@@ -12,9 +12,18 @@ import (
 // programListing describes everything Link derived for a program, without
 // addresses, so that two links of one module can be compared: one from a
 // package list and one through a prepared environment. Method IDs are
-// assigned in map order, so methods are listed by name. Tests use it, and so
+// assigned in map order, or by the environment for every module, so methods
+// are listed by name and only those the program uses. The natives that only
+// method tables name are numbered by the program or by the environment, so
+// each is described where a method names it. Tests use the listing, and so
 // does the evmcrosscheck build; see link_crosscheck.go.
-func programListing(p *Program) string {
+func programListing(p *Program) string { return moduleProgramListing(nil, p) }
+
+// moduleProgramListing is programListing with, in addition, the shape the
+// program knows for each type the module lists a shape of: the program
+// keeps a table of the shapes instructions index, and knows the rest by
+// type alone.
+func moduleProgramListing(m *Module, p *Program) string {
 	var out strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&out, format+"\n", args...) }
 	typeNames := func(ts []*values.Type) string {
@@ -57,22 +66,31 @@ func programListing(p *Program) string {
 		return fmt.Sprintf("%s kind=%d bits=%d len=%d cells=%d display=%q pointerLike=%t variadic=%t cell=%t pointerType=%v elem=%s key=%s fields=%v methods=%v params=(%s) results=(%s) native=%s allocation=%s",
 			s.Type.Name(), s.Kind, s.Bits, s.Len, s.Cells, s.DisplayName, s.PointerLike, s.Variadic, s.CellStruct != nil, s.NativePointerType, shapeName(s.Elem), shapeName(s.Key), fields, methods, shapeNames(s.Params), shapeNames(s.Results), layout(s.Native), layout(s.NativeAllocation))
 	}
-	methodNames := make(map[uint32]string, len(p.methodIDs))
+	methodNames := make(map[uint32]string, len(p.methodIDs)+len(p.sharedMethodIDs))
+	for name, id := range p.sharedMethodIDs {
+		methodNames[id] = name
+	}
 	for name, id := range p.methodIDs {
 		methodNames[id] = name
 	}
-
-	line("init=%d recordListSlots=%d runtimeError=%d panicNil=%d nativeImports=%d json=%v", p.init, p.recordListSlots, p.runtimeError, p.panicNil, p.nativeImports, p.jsonTypes)
-	line("entries=%v", slices.Sorted(maps.Keys(p.entries)))
-	line("methods=%v", slices.Sorted(maps.Keys(p.methodIDs)))
-	line("words=%v conversions=%v", p.words, p.conversions)
-	for i, s := range p.strings {
-		line("string %d %q", i, s.AsString())
+	usedMethods := make(map[string]bool)
+	for name := range p.methodIDs {
+		usedMethods[name] = true
 	}
-	for i, f := range p.functions {
-		line("func %d %s method=%t internal=%t sig=(%s)(%s) params=%v results=%v r=%d/%d p=%d/%d definedRaw=%t recover=%d captures=%d localReads=%v code=%x", i, f.Name, f.Method, f.Internal, typeNames(f.Signature.Params), typeNames(f.Signature.Results), f.params, f.results, f.RCount, f.rSize, f.PCount, f.pSize, f.definedRaw, f.RecoverPC, len(f.Captures), f.localReads, f.Code)
+	for _, t := range p.types {
+		for id := range t.methods {
+			usedMethods[methodNames[id]] = true
+		}
 	}
-	for i, g := range p.natives {
+	for _, op := range p.invokes {
+		usedMethods[methodNames[op.methodID]] = true
+	}
+	for _, required := range p.requirements {
+		for _, m := range required {
+			usedMethods[methodNames[m.id]] = true
+		}
+	}
+	native := func(g *linkedNative) string {
 		form, record := "-", "-"
 		if g.form != nil {
 			form = fmt.Sprintf("%+v", *g.form)
@@ -80,7 +98,21 @@ func programListing(p *Program) string {
 		if g.record != nil {
 			record = g.record.Name
 		}
-		line("native %d %s sig=(%s)(%s) params=%v results=%v r=%d p=%d resultString=%t record=%s form=%s op=%v window=%t word=%t call=%t panics=%t variadic=%t ownership=%+v", i, g.Name, typeNames(g.Signature.Params), typeNames(g.Signature.Results), g.params, g.results, g.rSize, g.pSize, g.resultString, record, form, g.Direct.Op, g.Direct.Window, g.Direct.word != nil, g.Call != nil, g.panics, g.Variadic, g.Ownership)
+		return fmt.Sprintf("%s sig=(%s)(%s) params=%v results=%v r=%d p=%d resultString=%t record=%s form=%s op=%v window=%t word=%t call=%t panics=%t variadic=%t ownership=%+v", g.Name, typeNames(g.Signature.Params), typeNames(g.Signature.Results), g.params, g.results, g.rSize, g.pSize, g.resultString, record, form, g.Direct.Op, g.Direct.Window, g.Direct.word != nil, g.Call != nil, g.panics, g.Variadic, g.Ownership)
+	}
+
+	line("init=%d recordListSlots=%d runtimeError=%d panicNil=%d nativeImports=%d json=%v", p.init, p.recordListSlots, p.runtimeError, p.panicNil, p.nativeImports, p.jsonTypes)
+	line("entries=%v", slices.Sorted(maps.Keys(p.entries)))
+	line("methods=%v", slices.Sorted(maps.Keys(usedMethods)))
+	line("words=%v conversions=%v", p.words, p.conversions)
+	for i, s := range p.strings {
+		line("string %d %q", i, s.AsString())
+	}
+	for i, f := range p.functions {
+		line("func %d %s method=%t internal=%t sig=(%s)(%s) params=%v results=%v r=%d/%d p=%d/%d definedRaw=%t recover=%d captures=%d localReads=%v code=%x", i, f.Name, f.Method, f.Internal, typeNames(f.Signature.Params), typeNames(f.Signature.Results), f.params, f.results, f.RCount, f.rSize, f.PCount, f.pSize, f.definedRaw, f.RecoverPC, len(f.Captures), f.localReads, f.Code)
+	}
+	for i := range p.natives {
+		line("native %d %s", i, native(&p.natives[i]))
 	}
 	for id, t := range p.types {
 		if id == 0 {
@@ -88,7 +120,11 @@ func programListing(p *Program) string {
 		}
 		var methods []string
 		for mid, m := range t.methods {
-			methods = append(methods, fmt.Sprintf("%s=%s(%s)(%s)%t%v", methodNames[mid], m.ID, typeNames(m.Signature.Params), typeNames(m.Signature.Results), m.Variadic, m.Function))
+			target := fmt.Sprint(m.Function)
+			if _, ok := m.Function.MethodImport(); ok {
+				target = "{" + native(p.native(m.Function.Index)) + "}"
+			}
+			methods = append(methods, fmt.Sprintf("%s=%s(%s)(%s)%t%v", methodNames[mid], m.ID, typeNames(m.Signature.Params), typeNames(m.Signature.Results), m.Variadic, target))
 		}
 		slices.Sort(methods)
 		line("type %d %s id=%d methods=%v", id, shape(t.shape), p.typeIDs[t.shape.Type], methods)
@@ -133,6 +169,14 @@ func programListing(p *Program) string {
 	for _, s := range p.shapes {
 		all = append(all, s.Type)
 	}
+	if m != nil {
+		for s := range m.ListedShapes() {
+			all = append(all, s.Type)
+		}
+		for _, s := range m.Globals {
+			all = append(all, s.Type)
+		}
+	}
 	for _, t := range p.types {
 		if t.shape != nil {
 			all = append(all, t.shape.Type)
@@ -141,6 +185,15 @@ func programListing(p *Program) string {
 	for _, g := range p.natives {
 		all = append(all, g.Signature.Params...)
 		all = append(all, g.Signature.Results...)
+	}
+	for _, t := range p.types {
+		for _, m := range t.methods {
+			if _, ok := m.Function.MethodImport(); ok {
+				g := p.native(m.Function.Index)
+				all = append(all, g.Signature.Params...)
+				all = append(all, g.Signature.Results...)
+			}
+		}
 	}
 	names = nil
 	for _, t := range all {

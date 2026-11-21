@@ -12,6 +12,7 @@ import (
 )
 
 var ProgramListing = programListing
+var ModuleProgramListing = moduleProgramListing
 
 // SharedShapes reports how many linked shapes a program takes from its
 // environment and how many it snapshotted for itself.
@@ -22,9 +23,44 @@ func SharedShapes(p *Program) (shared, own int) {
 	return shared, len(p.shapeByType)
 }
 
+// SharedMethods reports how many of a program's method tables are the
+// environment's and how many the program built, and whether the natives
+// those tables name are the environment's.
+func (e *LinkEnvironment) SharedMethods(p *Program) (shared, own int, natives bool) {
+	tables := make(map[unsafe.Pointer]bool)
+	for _, s := range e.methods {
+		for _, table := range s.types {
+			if table.linked != nil {
+				tables[reflect.ValueOf(table.linked).UnsafePointer()] = true
+			}
+		}
+	}
+	for _, t := range p.types {
+		if t.methods == nil {
+			continue
+		}
+		if tables[reflect.ValueOf(t.methods).UnsafePointer()] {
+			shared++
+		} else {
+			own++
+		}
+	}
+	return shared, own, len(p.methodNatives) != 0 && len(e.natives) != 0 && &p.methodNatives[0] == &e.natives[0]
+}
+
+// MethodNatives returns how many natives a program has for its bytecode and
+// how many of its own for its method tables.
+func MethodNatives(p *Program, e *LinkEnvironment) (static, methods int) {
+	if len(p.methodNatives) != 0 && len(e.natives) != 0 && &p.methodNatives[0] == &e.natives[0] {
+		return p.nativeImports, 0
+	}
+	return p.nativeImports, len(p.methodNatives)
+}
+
 // Fingerprint hashes everything programs share through the environment:
-// shape snapshots with their native layouts, resolved bindings, codecs and
-// native slice layouts. It changes if anything writes to them.
+// shape snapshots with their native layouts, resolved bindings, method
+// tables, method IDs, codecs and native slice layouts. It changes if
+// anything writes to them.
 func (e *LinkEnvironment) Fingerprint() uint64 {
 	h := fingerprint{visited: make(map[unsafe.Pointer]bool)}
 	h.hash.SetSeed(fingerprintSeed)
@@ -45,13 +81,33 @@ func (e *LinkEnvironment) Fingerprint() uint64 {
 		add(reflect.ValueOf(e.shapes.sameType))
 	}
 	for _, x := range e.exports {
-		if x.resolved != nil {
-			g := &x.resolved.native
+		if g := x.resolved; g != nil {
 			add(reflect.ValueOf(&g.ExternalFunction).Elem())
 			add(reflect.ValueOf(&g.params).Elem())
 			add(reflect.ValueOf(&g.results).Elem())
 			add(reflect.ValueOf(g.form))
 			add(reflect.ValueOf(g.record))
+			add(reflect.ValueOf(&g.resultString).Elem())
+			add(reflect.ValueOf(&g.rSize).Elem())
+			add(reflect.ValueOf(&g.pSize).Elem())
+		}
+	}
+	// The method tables programs share, with the IDs their keys come from.
+	for name, id := range e.methodIDs {
+		add(reflect.ValueOf(&name).Elem())
+		h.word(uint64(id))
+		total += h.hash.Sum64()
+	}
+	for _, s := range e.methods {
+		add(reflect.ValueOf(&s.native).Elem())
+		add(reflect.ValueOf(&s.imports).Elem())
+		for _, table := range s.types {
+			add(reflect.ValueOf(&table.methods).Elem())
+			for id, method := range table.linked {
+				add(reflect.ValueOf(method).Elem())
+				h.word(uint64(id))
+				total += h.hash.Sum64()
+			}
 		}
 	}
 	for _, codec := range e.nativeCodecs {

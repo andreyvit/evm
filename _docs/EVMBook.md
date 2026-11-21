@@ -3347,7 +3347,7 @@ ref, receiver, err = vm.resolveInvoke(
 r[rb], p[pb] = receiver.R, receiver.P
 ```
 
-If the resolved target is script code, `enterCode` sees its concrete receiver already in incoming slot zero. If the target is native, `invokeNative` exposes the outgoing window to the Go wrapper and returns to the current loop. In both cases the caller resumes at the instruction following `call.virt`.
+If the resolved target is script code, `enterCode` sees its concrete receiver already in incoming slot zero. If the target is native, `invokeNative` exposes the outgoing window to the Go wrapper and returns to the current loop. A native method that no instruction calls is not among the imports that `call.host` indexes: the module lists it in `MethodImports`, and the program keeps it in a second table that only method tables refer to. Programs linked through one prepared link environment share that table. In both cases the caller resumes at the instruction following `call.virt`.
 
 For a concrete pointer receiver the compiler already knows the method. Take `call.host.method.su v3 p4 imp6`, a tag check returning a boolean. The linker binds import 6 to the wrapper and its operand description. In the interpreter’s private instruction stream the opcode becomes `opCallDirect`. `invokeDirect` reads the two inputs from the caller’s register arrays.
 

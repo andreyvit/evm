@@ -176,6 +176,9 @@ func importName(imp Import) string {
 	return imp.Package + "." + imp.Name
 }
 func functionName(m *Module, ref FunctionRef) string {
+	if n, ok := ref.MethodImport(); ok {
+		return importName(m.MethodImports[n])
+	}
 	if ref.Native {
 		imp := m.Imports[ref.Index]
 		return imp.Package + "." + imp.Name

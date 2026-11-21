@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"go/types"
 	"golang.org/x/tools/go/ssa"
+	"slices"
 )
 
 func withoutReceiver(sig *types.Signature) *types.Signature {
@@ -40,7 +41,7 @@ func (c *typedCompiler) dynamicType(t types.Type, pos token.Pos) uint32 {
 			continue
 		}
 		fn := c.pkg.Prog.MethodValue(sel)
-		target, _, ok := c.target(fn, pos)
+		target, ok := c.methodTarget(fn, pos)
 		if !ok {
 			continue
 		}
@@ -52,8 +53,54 @@ func (c *typedCompiler) dynamicType(t types.Type, pos token.Pos) uint32 {
 		}
 		methods = append(methods, evm.DynamicMethod{ID: obj.Id(), Signature: vs, Variadic: sig.Variadic(), Function: target})
 	}
+	if base := c.env.base; base != nil {
+		if shared := base.hostMethods[s]; shared != nil && sameMethodTable(methods, shared) {
+			methods = shared
+		}
+	}
 	c.module.Types[i].Methods = methods
 	return i
+}
+
+// methodTarget returns the function a method table names. A native method
+// that is not generic goes to the module's method imports: nothing but
+// method tables names those, and a module compiled through an environment
+// shares the environment's list of them.
+func (c *typedCompiler) methodTarget(f *ssa.Function, pos token.Pos) (evm.FunctionRef, bool) {
+	if _, ok := c.functions[f]; !ok {
+		reported := len(c.errors)
+		if binding, typeArgs, ok := c.nativeBindingFor(f); ok && len(typeArgs) == 0 && binding.function != nil && binding.function.Instantiate == nil && binding.key.receiver != nil {
+			if i, ok := c.methodImport(binding); ok {
+				return evm.MethodImportRef(i), true
+			}
+		}
+		c.errors = c.errors[:reported] // target looks the binding up again
+	}
+	target, _, ok := c.target(f, pos)
+	return target, ok
+}
+
+func (c *typedCompiler) methodImport(binding nativeBinding) (int, bool) {
+	if base := c.env.base; base != nil {
+		// The environment numbered the native methods for all its modules.
+		n, ok := base.methodNumbers[binding.key]
+		if !ok || base.methodBindings[n] != binding.function {
+			return 0, false
+		}
+		c.module.MethodImports = base.methodImports
+		return int(n), true
+	}
+	if i, ok := c.methodImports[binding.key]; ok {
+		return int(i), true
+	}
+	if len(c.module.MethodImports) >= evm.MethodImportBase-1 {
+		return 0, false
+	}
+	i := len(c.module.MethodImports)
+	c.methodImports[binding.key] = uint32(i)
+	external := binding.function
+	c.module.MethodImports = append(c.module.MethodImports, evm.Import{Package: binding.key.pkg, Name: binding.key.name, Receiver: binding.key.receiver, Signature: evm.Signature{Params: slices.Clone(external.Signature.Params), Results: slices.Clone(external.Signature.Results)}, Ownership: external.Ownership.Clone()})
+	return i, true
 }
 func (f *lowerer) makeInterface(i *ssa.MakeInterface) {
 	s := f.shape(i.X.Type())

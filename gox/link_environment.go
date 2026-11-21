@@ -35,10 +35,12 @@ func NewLinkEnvironment(packages ...evm.Package) (*LinkEnvironment, error) {
 // NewEnvironment prepares the packages for linking; see [NewLinkEnvironment].
 func (o LinkOptions) NewEnvironment(packages ...evm.Package) (*LinkEnvironment, error) {
 	var shapes []*values.Shape
+	var methods []evm.MethodTables
 	for _, compiler := range o.Compilers {
 		shapes = append(shapes, compiler.Shapes()...)
+		methods = append(methods, compiler.MethodTables())
 	}
-	links, err := evm.LinkOptions{Shapes: shapes}.NewEnvironment(withBuiltinPackages(packages)...)
+	links, err := evm.LinkOptions{Shapes: shapes, Methods: methods}.NewEnvironment(withBuiltinPackages(packages)...)
 	if err != nil {
 		return nil, err
 	}

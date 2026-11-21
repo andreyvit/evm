@@ -35,6 +35,9 @@ func (p *Program) linkDefers(m *Module) error {
 		switch d.Kind {
 		case DeferDirect:
 			sig, ok := p.functionSignature(d.Target)
+			if _, method := d.Target.MethodImport(); method {
+				ok = false // Bytecode names natives among the imports.
+			}
 			if !ok || !d.Target.Native && len(p.functions[d.Target.Index].Captures) > 0 {
 				return fmt.Errorf("invalid deferred target")
 			}

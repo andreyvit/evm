@@ -9,10 +9,41 @@ import (
 // FunctionRef selects a linked code or host function. Function values store its
 // module-local index plus one in R, with zero reserved for nil. Runtime native
 // closures use a separate tagged value and retain their owning program.
+//
+// A native reference indexes Module.Imports. One at or above MethodImportBase
+// names Module.MethodImports instead; only the method tables of Module.Types
+// hold such references.
 type FunctionRef struct {
 	Native bool
 	Index  uint32
 }
+
+// MethodImportBase is the Index of the reference to Module.MethodImports[0].
+const MethodImportBase = 1 << 31
+
+// MethodImportRef refers to Module.MethodImports[index].
+func MethodImportRef(index int) FunctionRef {
+	return FunctionRef{Native: true, Index: MethodImportBase + uint32(index)}
+}
+
+// MethodImport returns the index into Module.MethodImports that the
+// reference names, and whether it names one.
+func (r FunctionRef) MethodImport() (int, bool) {
+	if !r.Native || r.Index < MethodImportBase || r.Index == nativeFunctionIndex {
+		return 0, false
+	}
+	return int(r.Index - MethodImportBase), true
+}
+
+// native returns the native a linked reference names: one of the natives
+// bytecode calls by index, or one that only method tables name.
+func (p *Program) native(index uint32) *linkedNative {
+	if index >= MethodImportBase {
+		return &p.methodNatives[index-MethodImportBase]
+	}
+	return &p.natives[index]
+}
+
 type CaptureSlot struct {
 	Type *values.Type
 	Slot uint16
@@ -30,10 +61,17 @@ func rValid(r Operand, f *linkedFunction) bool { return int(r.Slot) < f.rSize }
 func pValid(r Operand, f *linkedFunction) bool { return int(r.Slot) < f.pSize }
 func (p *Program) functionSignature(ref FunctionRef) (Signature, bool) {
 	if ref.Native {
-		if uint64(ref.Index) >= uint64(len(p.natives)) {
+		// Kept small enough to inline: an indirect call asks for the
+		// signature of its target. A native function value has the
+		// largest index and is in neither table.
+		natives, index := p.natives, ref.Index
+		if index >= MethodImportBase {
+			natives, index = p.methodNatives, index-MethodImportBase
+		}
+		if uint64(index) >= uint64(len(natives)) {
 			return Signature{}, false
 		}
-		return p.natives[ref.Index].Signature, true
+		return natives[index].Signature, true
 	}
 	if uint64(ref.Index) >= uint64(len(p.functions)) {
 		return Signature{}, false
@@ -43,7 +81,8 @@ func (p *Program) functionSignature(ref FunctionRef) (Signature, bool) {
 func (p *Program) linkFunctions(m *Module) error {
 	p.functionRefs = slices.Clone(m.FunctionRefs)
 	for _, ref := range p.functionRefs {
-		if _, ok := p.functionSignature(ref); !ok {
+		// Function values name natives among the imports.
+		if _, ok := p.functionSignature(ref); !ok || ref.Native && uint64(ref.Index) >= uint64(len(m.Imports)) {
 			return fmt.Errorf("invalid function reference")
 		}
 		// Method expressions use a callable thunk with the function-value ABI.

@@ -23,8 +23,15 @@ A host that compiles and links many scripts against one package set prepares
 the packages once: `evmcompiler.NewEnvironment(declared...)` for compiling and
 its `NewLinkEnvironment(bound...)` for linking. Each compile then checks only
 the script. Each link copies only the tables of its module; the programs
-share the bindings and the linked storage shapes of the host types, which the
-VM and native bindings only read. Both environments are immutable and safe
+share the bindings, the linked storage shapes of the host types and the
+method tables of host types whose methods are all native, which the VM and
+native bindings only read. A module lists the native methods that only
+method tables name in `MethodImports`, apart from the `Imports` its bytecode
+calls; the modules of one compile environment share that list and those
+method tables, so they must not be changed. Such a module also selects the
+shapes of the host types it reaches from its environment's list,
+`HostShapes`, instead of listing each in `Shapes`; `ListedShapes` yields
+both. Both environments are immutable and safe
 for concurrent use, and the packages must not change while they are in use.
 A program of such a module knows the shapes its module reaches, as one linked
 from the package list does: `Program.Shape` returns nil for the others.

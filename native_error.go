@@ -143,7 +143,7 @@ func (c *Call) ErrorValue(err error) (values.Value, error) {
 	// Use a linked concrete type only when its exposed methods include Error.
 	if s := c.program.nativeGoShapes[reflect.TypeOf(err)]; s != nil {
 		id := c.program.typeIDs[s.Type]
-		methodID, exists := c.program.methodIDs["Error"]
+		methodID, exists := c.program.lookupMethodID("Error")
 		if method := c.program.types[id].methods[methodID]; exists && method != nil && len(method.Signature.Params) == 0 && len(method.Signature.Results) == 1 && method.Signature.Results[0] == values.StringType {
 			return c.anyValue(err)
 		}

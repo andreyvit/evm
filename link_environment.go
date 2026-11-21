@@ -38,6 +38,13 @@ type LinkEnvironment struct {
 	nativeSlices            []nativeSliceType // without shapes, which belong to programs
 	nativeSliceLayouts      map[*values.NativeLayout]*NativeSliceDecl
 	nativeSliceLogicalTypes map[nativeSliceLogicalKey]reflect.Type
+
+	// natives holds every binding a prepared environment resolved. Programs
+	// copy the ones their bytecode calls and share the table for the ones
+	// only their method tables name; see link_methods.go.
+	natives   []linkedNative
+	methods   map[*Import]*sharedMethods // by the first import of a list
+	methodIDs map[string]uint32
 }
 
 type exportKey struct {
@@ -54,15 +61,13 @@ type exportKey struct {
 // bindings its one module imports.
 type linkExport struct {
 	declared *ExternalFunction
-	resolved *resolvedNative
+	resolved *linkedNative  // in LinkEnvironment.natives
+	errs     *resolveErrors // nil unless resolving failed
 }
 
-// resolvedNative is a binding ready to enter a program. A link compares the
-// import with it between reporting the two errors.
-type resolvedNative struct {
-	ownershipErr, layoutErr error
-	native                  linkedNative
-}
+// resolveErrors are the two failures of resolving a binding. A link compares
+// the import with the binding between reporting them.
+type resolveErrors struct{ ownership, layout error }
 
 // LinkOptions configures a prepared link environment.
 type LinkOptions struct {
@@ -72,6 +77,11 @@ type LinkOptions struct {
 	// A program snapshots for itself any other shape its module names.
 	// The shapes must not change while the environment is in use.
 	Shapes []*values.Shape
+	// Methods lists the method tables that the modules to link share, one
+	// for each compile environment that produces them. The environment
+	// binds them once and its programs share the result. A program binds
+	// for itself the method tables of any other module.
+	Methods []MethodTables
 }
 
 // NewLinkEnvironment validates and binds the packages. It fails where every
@@ -88,6 +98,9 @@ func (o LinkOptions) NewEnvironment(packages ...Package) (*LinkEnvironment, erro
 	}
 	if len(o.Shapes) != 0 {
 		e.shapes = newSharedShapes(o.Shapes)
+	}
+	if len(o.Methods) != 0 {
+		e.prepareMethods(o.Methods)
 	}
 	return e, nil
 }
@@ -139,13 +152,26 @@ func newLinkEnvironment(packages []Package, prepared bool) *LinkEnvironment {
 		return e
 	}
 	if prepared {
+		count := 0
+		for _, x := range e.exports {
+			if x.declared.Instantiate == nil {
+				count++
+			}
+		}
+		e.natives = make([]linkedNative, 0, count)
 		for key, x := range e.exports {
 			if x.declared.Instantiate == nil {
-				if resolved := e.resolveQuietly(*x.declared, key.receiver != nil); resolved != nil {
-					e.exports[key] = linkExport{resolved: resolved}
+				e.natives = append(e.natives, linkedNative{})
+				resolved := &e.natives[len(e.natives)-1]
+				if errs, ok := e.resolveQuietly(resolved, *x.declared, key.receiver != nil); ok {
+					e.exports[key] = linkExport{resolved: resolved, errs: errs}
+				} else {
+					e.natives = e.natives[:len(e.natives)-1]
 				}
 			}
 		}
+		// Programs share the table: an append must never write into it.
+		e.natives = slices.Clip(e.natives)
 	}
 	e.nativeSlicesErr = e.prepareNativeSlices()
 	return e
@@ -235,25 +261,23 @@ func (e *LinkEnvironment) prepareBindings() error {
 	return nil
 }
 
-// resolve copies what a program keeps of a binding and derives its call
-// layout. It reads only the environment's tables.
-func (e *LinkEnvironment) resolve(f ExternalFunction, method bool) *resolvedNative {
-	r := &resolvedNative{native: linkedNative{ExternalFunction: f}}
-	if r.ownershipErr = f.Ownership.Validate(f.Signature); r.ownershipErr != nil {
-		return r
+// resolve copies what a program keeps of a binding into dst and derives its
+// call layout. It reads only the environment's tables.
+func (e *LinkEnvironment) resolve(dst *linkedNative, f ExternalFunction, method bool) (ownershipErr, layoutErr error) {
+	*dst = linkedNative{ExternalFunction: f}
+	if err := f.Ownership.Validate(f.Signature); err != nil {
+		return err, nil
 	}
 	f.Ownership = f.Ownership.Clone()
 	f.Signature = copySignature(f.Signature)
-	r.native.ExternalFunction = f
+	dst.ExternalFunction = f
 	args, err := ParameterLayout(f.Signature.Params, method)
 	if err != nil {
-		r.layoutErr = err
-		return r
+		return nil, err
 	}
 	results, err := LayoutOf(f.Signature.Results)
 	if err != nil {
-		r.layoutErr = err
-		return r
+		return nil, err
 	}
 	g := linkNative(f, args, results)
 	if g.resultString {
@@ -266,19 +290,23 @@ func (e *LinkEnvironment) resolve(f ExternalFunction, method bool) *resolvedNati
 			g.resultString = false
 		}
 	}
-	r.native = g
-	return r
+	*dst = g
+	return nil, nil
 }
 
 // resolveQuietly resolves a binding no module may ever import. If that
-// panics, the link that imports the binding resolves it again.
-func (e *LinkEnvironment) resolveQuietly(f ExternalFunction, method bool) (r *resolvedNative) {
+// panics, it reports false and the link that imports the binding resolves it
+// again.
+func (e *LinkEnvironment) resolveQuietly(dst *linkedNative, f ExternalFunction, method bool) (errs *resolveErrors, ok bool) {
 	defer func() {
 		if recover() != nil {
-			r = nil
+			errs, ok = nil, false
 		}
 	}()
-	return e.resolve(f, method)
+	if ownership, layout := e.resolve(dst, f, method); ownership != nil || layout != nil {
+		return &resolveErrors{ownership, layout}, true
+	}
+	return nil, true
 }
 
 func (e *LinkEnvironment) prepareNativeSlices() error {

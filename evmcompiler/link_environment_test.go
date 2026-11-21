@@ -19,7 +19,7 @@ func linkedShapes(m *evm.Module, p *evm.Program) string {
 	add := func(t *values.Type) {
 		names = append(names, fmt.Sprintf("%s=%t", t.Name(), p.Shape(t) != nil))
 	}
-	for _, s := range m.Shapes {
+	for s := range m.ListedShapes() {
 		add(s.Type)
 	}
 	for _, imp := range m.Imports {

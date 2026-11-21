@@ -836,7 +836,8 @@ against the same packages.
 and binds the packages once, and `links.Link(tmpl)` and
 `links.LinkModule(module)` then cost and keep only what the template itself
 needs. Programs of templates that `env` compiled share the linked storage
-shapes of the host types. A host that compiles Go through a separate
+shapes of the host types, their bound native methods and the method tables
+of types whose methods are all native. A host that compiles Go through a separate
 `evmcompiler.Environment` names both in
 `gox.LinkOptions{Compilers: ...}.NewEnvironment(packages...)`. Without a
 compile environment, `gox.NewLinkEnvironment(packages...)` still binds the

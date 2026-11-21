@@ -922,9 +922,16 @@ func (vm *VM) invokeNative(cur *frame, index uint32, budget *executionBudget, po
 }
 
 func (vm *VM) invokeFunctionNative(cur *frame, ref FunctionRef, env unsafe.Pointer, budget *executionBudget, position SourcePosition) error {
-	if ref.Index == nativeFunctionIndex {
-		f := (*nativeFunction)(env)
-		return vm.invokeNativeCall(cur, &f.typ.native, f.call, budget, position)
+	// A reference an instruction or a function value holds indexes the
+	// natives bytecode calls. Method tables can also name a native that
+	// nothing else does, and a native function value carries its own.
+	if ref.Index >= MethodImportBase {
+		if ref.Index == nativeFunctionIndex {
+			f := (*nativeFunction)(env)
+			return vm.invokeNativeCall(cur, &f.typ.native, f.call, budget, position)
+		}
+		g := &vm.program.methodNatives[ref.Index-MethodImportBase]
+		return vm.invokeNativeCall(cur, g, g.Call, budget, position)
 	}
 	return vm.invokeNative(cur, ref.Index, budget, position, false)
 }

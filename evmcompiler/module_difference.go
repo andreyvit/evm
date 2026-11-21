@@ -16,11 +16,15 @@ import (
 //
 // Equivalent modules have the same code, tables and metadata. Types the
 // compiler derives, such as []int, have a new identity in every compile, so
-// they are compared by name. One difference is allowed: besides the shapes
+// they are compared by name. Two differences are allowed. Besides the shapes
 // its code uses, a module lists the shapes and sources of the host packages
 // its source can reach. The prepared module may list more of them, because
 // it selects packages by what the imported declarations name, and the
-// package-list module by what importing happened to touch.
+// package-list module by what importing happened to touch; it selects them
+// from its environment's list instead of listing each. And the prepared
+// module has the method imports of its environment, numbered for every
+// module, where the package-list module lists those its method tables name:
+// a method table is compared by the imports it names, not by their numbers.
 func moduleDifference(lazy, prepared *evm.Module) string {
 	if a, b := lazy.Disassemble(), prepared.Disassemble(); a != b {
 		return "disassembly differs:\n" + firstDifferentLine(a, b)
@@ -29,7 +33,7 @@ func moduleDifference(lazy, prepared *evm.Module) string {
 		return "tables differ:\n" + firstDifferentLine(a, b)
 	}
 	counts := make(map[string]int)
-	for _, s := range prepared.Shapes {
+	for s := range prepared.ListedShapes() {
 		counts[shapeName(s)]++
 	}
 	for _, s := range lazy.Shapes {
@@ -96,6 +100,17 @@ func moduleTables(m *evm.Module) string {
 	fmt.Fprintf(&b, "words %v\nstrings %q\nconversions %v\nrefs %v\n", m.Words, m.Strings, m.Conversions, m.FunctionRefs)
 	for i, t := range m.Types {
 		fmt.Fprintf(&b, "type %d %s methods=%d\n", i, shapeName(t.Shape), len(t.Methods))
+		for _, method := range t.Methods {
+			target := fmt.Sprint(method.Function)
+			if n, ok := method.Function.MethodImport(); ok {
+				target = "<invalid>"
+				if n < len(m.MethodImports) {
+					imp := m.MethodImports[n]
+					target = fmt.Sprintf("method import %s.%s receiver=%s args=%s %s ownership=%+v", imp.Package, imp.Name, typeNames([]*values.Type{imp.Receiver}), typeNames(imp.TypeArgs), signature(imp.Signature), imp.Ownership)
+				}
+			}
+			fmt.Fprintf(&b, "  method %s %s variadic=%v -> %s\n", method.ID, signature(method.Signature), method.Variadic, target)
+		}
 	}
 	for i, s := range m.Signatures {
 		fmt.Fprintf(&b, "signature %d %s\n", i, signature(s))

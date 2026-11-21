@@ -96,7 +96,7 @@ func (c *Call) runCallback(ref FunctionRef, native *nativeFunction, sig Signatur
 			if captures != nil {
 				return ErrFunction
 			}
-			g = &c.program.natives[ref.Index]
+			g = c.program.native(ref.Index)
 			call = g.Call
 		}
 		if err := vm.grow(g.rSize, g.pSize, b); err != nil {
@@ -142,7 +142,7 @@ func (c *Call) RunInterfaceMethod(value values.Value, name string, signature Sig
 		return ErrNil
 	}
 	id := c.program.typeShapes.Index(value)
-	methodID, ok := c.program.methodIDs[name]
+	methodID, ok := c.program.lookupMethodID(name)
 	if !ok {
 		return ErrFunction
 	}

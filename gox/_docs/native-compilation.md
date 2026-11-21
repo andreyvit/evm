@@ -1,141 +1,142 @@
-# Native Go compilation: proposed compatibility contract
+# Native Go compilation: design proposal
 
-Status: design proposal. GoX currently compiles and runs through EVM.
-`Preprocess` exposes diagnostic Go output, not a native compilation target.
-No native generator, freshness verifier, dev watcher or automatic backend selector
-is implemented by this proposal.
+> **Status:** Design proposal—not yet implemented. GoX currently compiles and
+> runs through EVM. `Preprocess` produces diagnostic Go output, not a native
+> compilation target, and no native generator, freshness verifier, dev watcher,
+> or backend selector exists yet.
 
 ## Goal
 
-Use one set of GoX sources and host API contracts in two modes:
+Let an application use one set of GoX templates and host API contracts in two
+explicit modes:
 
-- Development: compile edited templates through EVM inside the running host.
-- Production: generate native Go, build it into the application, and select that
-  implementation explicitly.
+- **Development:** Compile edited templates through EVM inside the running
+  server for instant feedback.
+- **Production (optional):** Generate native Go code, compile it into the
+  application binary, and select that backend explicitly.
 
-EVM rendering remains a valid production choice for applications that need live
-updates. Native compilation should be optional, not a new prerequisite for GoX.
-Neither mode should silently serve an older template when a newer one is expected.
+Running GoX on EVM remains a first-class production option for apps that want
+live template updates—native compilation should stay optional. Above all,
+neither mode should ever silently serve stale templates when newer ones are
+expected.
 
 ## One frontend, two backends
 
-Keep parsing, name resolution, implicit arguments, components, typed slots,
-contextual escaping and nil-guard insertion in one frontend. Its result must
-include the rendering plan, constants, source maps and resolved host contracts.
-Both backends consume that result. Do not independently reimplement these rules
-in a native text emitter.
+Parsing, name resolution, implicit arguments, components, typed slots,
+contextual escaping, and nil-guard insertion must stay in a single shared
+frontend. Its output—the rendering plan, constants, source maps, and resolved
+host contracts—feeds both backends. Never reimplement GoX semantics in a
+separate native text emitter.
 
-The current generated Go calls operations by index. Their meaning lives in the
-separate rendering plan, and Builder operations currently verify their owning
-rendering program. Native generation must emit a complete immutable plan and
-provide a supported native rendering context; copying GeneratedSources into a
-.go file is insufficient.
+Two gaps must be closed before native generation can work:
 
-Generated files need real Go import paths. EVM paths such as `gox` and application
-virtual packages are not necessarily native import paths. A host binding manifest
-must map virtual identities to native packages, types, functions and adapters.
-Reject missing mappings during generation. Never guess a native path by basename.
+1. **Self-contained plans:** Today's `GeneratedSources` calls rendering
+   operations by index into a separate plan, and `Builder` checks its owning
+   EVM program. Native output must emit a complete, immutable plan and a native
+   rendering context—copying `GeneratedSources` into a `.go` file is not
+   enough.
+2. **Real Go import paths:** Virtual EVM paths such as `gox` or application
+   virtual packages are not necessarily real Go import paths. A host binding
+   manifest must map virtual identities to real Go packages, types, functions,
+   and adapters, rejecting missing mappings at generation time rather than
+   guessing by basename.
 
 ## Portable language and binding contract
 
-Define a documented portable subset: the intersection of supported EVM Go and
-native GoX behavior. Native mode must not quietly accept language features that
-fail during development. Validate portable sources through the shared frontend
-and EVM compatibility checks during generation.
+Define an explicit **portable subset**—the intersection of supported EVM Go and
+native GoX—so native mode never silently accepts code that fails in development.
+Validate portable sources through the shared frontend and EVM compatibility
+checks during generation.
 
-Host contracts must include parameter names as well as types: implicit arguments
-and component attributes depend on those names. Include exported field aliases,
-method sets, trusted-content identities, constants and model schemas where they
-affect compilation. Treat changes to these as compatibility changes even if an
-ordinary Go caller would still compile.
+Host contracts must capture parameter *names* as well as types (implicit
+arguments and component attributes depend on them), along with exported field
+aliases, method sets, trusted-content identities, constants, and model schemas.
+Treat changes to any of these as compatibility-breaking even when ordinary Go
+callers would still compile.
 
-Bindings need explicit policies for values that are not interchangeable:
+Types that are not interchangeable across backends need explicit adapters:
 
-- KVO model selectors and record operations need native adapters that retain
-  their schema and mutation rules; a similarly shaped Go struct is not enough.
-- Guest function handles, closures and bound methods need backend-aware adapters.
-  An EVM function value is not a native Go function pointer.
-- Ambient values and interface payloads must preserve supported concrete type
-  identities. Reject unsupported round trips rather than stringify or copy them.
-- Native host callbacks must preserve caller context, errors and argument
-  ownership. Builder lifetimes remain render-scoped in both modes.
+- **KVO models:** Native adapters must preserve schema semantics and mutation
+  rules; a similarly shaped Go struct is not sufficient.
+- **Guest callables:** EVM function handles, closures, and bound methods are
+  not native Go function pointers and need backend-aware adapters.
+- **Ambient and interface values:** Preserve supported concrete type identities
+  and reject unsupported round trips instead of stringifying or copying them.
+- **Host callbacks and builders:** Preserve caller context, errors, and
+  argument ownership, keeping builder lifetimes render-scoped in both modes.
 
-Build a backend-neutral renderer registry with stable renderer IDs, input schemas
-and invocation adapters. Generated native wrappers can additionally expose typed
-Go entry points. The host selects a backend at initialization; it does not infer
-one from whichever files happen to be present.
+Expose a backend-neutral renderer registry with stable renderer IDs, input
+schemas, and invocation adapters (generated native packages can also expose
+typed Go entry points). The host selects its backend explicitly at startup
+rather than guessing from whichever files happen to be on disk.
 
-## Prevent stale generated output
+## Preventing stale generated code
 
-Generation produces a manifest and deterministic files. The manifest includes:
+Generation should produce deterministic files plus a manifest hashing:
 
-- Every source filename and content hash, including ordinary Go helpers and
-  imported template packages, in deterministic order.
+- Every source filename and full file contents (including `.go` helpers and
+  imported template packages) in deterministic order—no timestamps—so adding,
+  deleting, or renaming a file changes the fingerprint.
 - The transitive host contract hash and binding-generator version.
-- GoX language, compiler and rendering-plan ABI versions.
-- Compilation options, output format and relevant target/build settings.
-- Renderer IDs, input schemas and generated artifact hashes.
+- GoX language, compiler, and rendering-plan ABI versions.
+- Compilation options, output format, and relevant build constraints/settings.
+- Renderer IDs, input schemas, and generated artifact hashes.
 
-Hash full source contents, not timestamps. Include the complete filename set so
-adding, deleting or renaming a file changes the fingerprint. Build constraints
-and generated host schemas must participate in dependency discovery. Embed the
-fingerprint into the generated package and application build metadata.
+Embed that fingerprint into both the generated package and application build
+metadata, and enforce freshness across the release pipeline:
 
-The production build must verify freshness before compiling the application.
-A proposed check command recomputes the manifest and fails on any difference,
-missing generated file or unexpected leftover generated file. CI also regenerates
-into a temporary directory and compares deterministic output. `go build` does not
-run `go generate`; a generate directive alone is not an enforcement mechanism.
-
-Build the source snapshot, generated files and final binary in one release job.
-After verification, do not overlay a different source tree onto that build.
-Deployment must check the artifact fingerprint against the release's expected
-fingerprint. A self-consistent old binary is still old; checking only its embedded
-manifest cannot detect that the wrong release was deployed.
-
-At startup, if templates are mounted externally, compare their fingerprint with
-the generated manifest and refuse a mismatch. If production ships no sources,
-use the release manifest and deployment check. Expose the selected backend and
-fingerprint in diagnostics. Keep rollbacks explicit and roll back the matching
-binary and manifest together.
+- **Pre-build & CI check:** Because `go build` never runs `go generate`, a
+  proposed freshness command recomputes the manifest and fails on any
+  difference, missing file, or leftover generated file. CI regenerates into a
+  temp directory and compares byte-for-byte.
+- **Single release build:** Build the source snapshot, generated files, and
+  final binary in one job without overlaying a different source tree afterward.
+- **Deploy & startup verification:** Check the binary's embedded fingerprint
+  against the release's expected fingerprint (a self-consistent old binary is
+  still old). If templates are mounted externally at startup, compare their
+  fingerprint against the generated manifest and refuse mismatches. Surface the
+  active backend and fingerprint in diagnostics, and roll back binary and
+  manifest together.
 
 ## Development updates
 
-An application watcher may compile and link a complete new EVM template bundle
-in the background, then atomically replace the active bundle. In-flight renders
-keep the old bundle until they finish; never mix a new module with an old plan.
+An application watcher can compile and link a fresh EVM template bundle in the
+background and swap it in atomically, letting in-flight renders finish on the
+old bundle (never mixing a new module with an old plan).
 
-On an invalid edit, report the new diagnostics and keep the last valid bundle only
-under an explicit development policy. Display that it is stale, together with
-both fingerprints. Do not silently fall back to generated native code. Watcher
-integration and publication policy belong to the host application.
+If an edit fails to compile, report diagnostics and keep the last valid bundle
+only under an explicit dev policy—displaying that it is stale alongside both
+fingerprints—and never silently fall back to generated native code. Watching
+and publication policy remain the host application's responsibility.
 
-## Behavioral parity and deliberate limits
+## Behavioral parity and honest limits
 
-For portable templates, both backends must agree on output bytes, contextual
-escaping, attribute handling, evaluation order, implicit argument selection,
-slot captures, nil diagnostics and source locations. Run the same rendering
-fixtures through both backends, including malformed data and failure paths.
+For portable templates, both backends must agree byte-for-byte on output,
+contextual escaping, attribute handling, evaluation order, implicit arguments,
+slot captures, nil diagnostics, and source locations, verified by running the
+same conformance fixtures (including malformed data and failure paths) through
+both.
 
-Execution controls are not automatically equivalent. EVM instruction budgets
-and cancellation checks do not appear in ordinary native Go loops. Before native
-mode is released, choose either explicit native instrumentation or a documented
-trusted-code-only native mode with weaker interruption guarantees. Do not promise
-an enforceable CPU deadline merely because a context is passed to native code.
-Output limits can be shared in the builder. Also specify which panic and error
-behavior is portable; avoid pretending native crashes are recoverable VM errors.
+Execution controls, however, are not automatically identical: EVM instruction
+budgets and cancellation checks do not exist in plain native Go loops. Before
+shipping native mode, either add explicit native instrumentation or document a
+trusted-code-only native mode with weaker interruption guarantees—never imply
+an enforceable CPU deadline just because a `context.Context` is passed. Output
+byte limits can be shared in `Builder`, and portable error/panic semantics must
+be specified honestly without pretending native crashes are recoverable VM
+errors.
 
-## Bounded implementation sequence
+## Implementation roadmap
 
-1. Freeze portable semantics and build shared backend conformance fixtures.
+1. Freeze the portable subset and build shared backend conformance fixtures.
 2. Extract the complete frontend result and version its rendering-plan ABI.
-3. Define native binding mappings and backend-neutral renderer registration.
-4. Emit native Go and immutable plans; verify parity for the portable subset.
-5. Add deterministic manifests, freshness checks and release verification.
-6. Add development bundle replacement and explicit backend selection, then
-   document supported execution limits before calling native mode production-ready.
+3. Define native binding manifests and backend-neutral renderer registration.
+4. Emit native Go and immutable plans; verify parity across the portable subset.
+5. Add deterministic manifests, freshness checks, and release verification.
+6. Add dev bundle swapping, explicit backend selection, and documented
+   execution limits before declaring native mode production-ready.
 
-Open decisions: generated package layout, build-tag versus explicit registry
-selection, native execution instrumentation, and how applications supply their
-expected release fingerprint. Those choices should be settled with a working
-host integration, not hidden behind an automatic dev/prod heuristic.
+**Open decisions:** generated package layout, build-tag vs. explicit registry
+selection, native loop instrumentation, and how apps supply their expected
+release fingerprint. Settle these against a real host integration rather than
+hiding them behind an automatic dev/prod heuristic.

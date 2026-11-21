@@ -1,8 +1,8 @@
 # Source-defined host bindings
 
-`New(guestPath, source, options)` builds a schema from the Go source of a
-package. There is one way to supply source: an `fs.FS` holding the package's
-`.go` files, usually the package's own files through `//go:embed`.
+`evmbind.New(guestPath, source, options)` builds a script-facing schema directly
+from a Go package's own source files. Supply the source as an `fs.FS`
+containing the package's `.go` files—usually through `//go:embed`:
 
 ```go
 //go:embed app.go
@@ -14,324 +14,373 @@ schema, err := evmbind.New("app", source, evmbind.Options{
 })
 ```
 
-By default the schema exposes everything the source exports: every type with
-its exported fields and methods, every package function and every constant.
+By default, the schema exposes everything the source exports: every type with
+its exported fields and methods, every package function, and every constant.
 Function bodies, unbound variables, unexported declarations, unexported struct
-fields and `_test.go` files are ignored, so real implementation source works
-as is.
-The source supplies declarations, parameter names and doc comments; it is not
-executed. See the [runnable example](../examples/gox-basic).
+fields, and `_test.go` files are ignored, so you can embed real implementation
+files as they are. The source supplies declarations, parameter names, and doc
+comments without ever being executed. See the
+[runnable example](../examples/gox-basic).
 
-Go cannot look a function or a type up by name, so the host supplies them:
+Because Go cannot look up functions or types by name at run time, the host
+provides the Go values:
 
-- `Options.Functions` maps each exported package function to its Go value.
-  A function can instead be a method of `Options.Host` taking a leading
-  `*evm.Call`; `schema.Bind(host)` then supplies the receiver.
-- Native types are found by reflection through bound function signatures,
-  method signatures and struct fields. `Options.Types` adds types that nothing
-  leads to. Concrete context types register with `Pointer[T]()`.
+- **`Options.Functions`** maps each exported package function to its Go value.
+  Alternatively, you can implement package functions as methods on an
+  `Options.Host` type taking a leading `*evm.Call`, and supply the receiver
+  when calling `schema.Bind(host)`.
+- **`Options.Types`** registers native Go types that no bound function, method,
+  or struct field reaches on its own (reachable types are discovered
+  automatically by reflection). Register concrete context types with
+  `Pointer[T]()`.
+- **`Options.Values`** maps exported package variables to their Go values. Only
+  explicitly bound variables are exposed, and the source must declare their
+  types. Scripts can read these variables and call their methods, but cannot
+  reassign them.
 
-- `Options.Values` maps an exported package variable to its Go value. Only
-  bound variables are exposed, and the source must declare their types.
-  Scripts read a variable and call its methods; they cannot assign it.
+Schema construction fails—naming the offending declaration—if an exported
+function has no binding, a type has no native Go type, or a declaration uses an
+unsupported type. To trim the API, use `Options.Omit` (by name, or
+`Type.Method` for methods—types still referenced by exposed declarations are
+kept), `Options.Methods` (methods per type), and `Options.Fields` or
+`Options.OmitFields` (fields per type).
 
-Construction fails, naming the declaration, when an exported function has no
-binding, a type has no native Go type, or a declaration uses a type the
-binding does not support. `Options.Omit` leaves declarations out: a type,
-function or constant by name, a method as `Type.Method`. A type that an
-exposed declaration still refers to stays. `Options.Methods` selects methods
-per type; `Options.Fields` and `Options.OmitFields` select fields.
+Compile scripts against `schema.Package()`, and link each module against
+`schema.Bind(receiver)` (or `schema.Bind(nil)` when there is no host receiver).
+You can create as many VM sessions from a linked program as needed. Remember
+that a **schema** owns nominal type identities, while a **program** owns the
+numeric dynamic type IDs used during execution.
 
-Compile scripts against `schema.Package()`. For each distinct host receiver,
-link the module against `schema.Bind(receiver)`; use `Bind(nil)` without one.
-Create as many sessions from a linked program as needed. A schema owns type
-identities. A program owns the numeric dynamic type IDs used during execution.
-
-Keep the schema in a host-level `sync.OnceValue`. Parsing, type checking, enum
-extraction and native layout binding then happen once per binary, while every
-environment reuses `schema.Package()` and its type identities.
+Store each schema in a host-level `sync.OnceValue`. Parsing, type checking,
+enum extraction, and native layout binding then happen once per binary, and
+every environment shares `schema.Package()` and its type identities.
 
 ## Expose part of a package
 
-Set `Options.Only` to pick declarations out of a larger native package without
-duplicating them. The schema then exposes the listed types and the local types
-they reference, the methods listed in `Options.Methods`, the functions bound
-in `Options.Functions` and `GenericFunctions`, and the typed constants of
-exposed types. `Options.Selective` does the same with every exported type.
-Complete constant blocks are checked so `iota`, omitted expressions and
-aliases keep their native values; constants of unrelated types are not
-exported. Struct pointers retain the native layout. Exported embedded structs
-and struct pointers keep Go field promotion, value copying and pointer
-aliasing semantics. `Options.Omit` is an error here: a selective schema lists
-what it exposes.
+When you want to expose only a slice of a larger Go package without duplicating
+its declarations, set `Options.Only`. The schema then includes:
+
+- The listed types and any local types they reference.
+- Methods listed in `Options.Methods`.
+- Functions bound in `Options.Functions` and `Options.GenericFunctions`.
+- Typed constants belonging to exposed types.
+
+`Options.Selective` works the same way, starting from every exported type.
+Complete constant blocks are type-checked so `iota`, omitted expressions, and
+aliases keep their exact native values, while constants of unrelated types stay
+hidden. Struct pointers keep their native layout, and exported embedded structs
+and struct pointers preserve Go field promotion, value copying, and pointer
+aliasing. `Options.Omit` cannot be combined with selective mode—list only what
+you want to expose.
 
 ## Concrete generic structs
 
-`Options.Instances` binds explicit instances of a generic source struct:
+Use `Options.Instances` to bind concrete instantiations of a generic source
+struct:
 
 ```go
 Instances: []evmbind.Instance{{
-    Type: "Box",
+    Type:   "Box",
     Native: reflect.TypeFor[Box[int]](),
-    Args: []reflect.Type{reflect.TypeFor[int]()},
+    Args:   []reflect.Type{reflect.TypeFor[int]()},
 }},
 ```
 
-The source template supplies fields, constraints and selected method signatures.
-Scripts use `Box[int]`; the binding retains that instance's native layout.
-Every reachable instance must be registered. Reflection cannot recover generic
-arguments, so the host supplies them explicitly; mismatches fail registration.
-Field omissions and method selections use the template name and apply to all
-instances. Native generic aliases and non-struct templates are not supported.
-Instance bindings currently use reflection; `StaticOnly` rejects them.
+The source template supplies fields, constraints, and selected method
+signatures; scripts write `Box[int]` and the binding preserves that instance's
+native layout. Every reachable instantiation must be registered explicitly
+because reflection cannot recover generic type arguments (mismatches fail
+registration).
+
+Field omissions and method selections use the template name and apply to every
+instance. Native generic aliases and non-struct generic templates are not
+supported. Generic struct instances currently use reflection, so `StaticOnly`
+rejects them.
 
 ## Consolidated native type aliases
 
-A source package can re-export an imported native type with a Go alias when
-both schemas use the same guest package path and the type name stays unchanged.
-The alias shares the dependency's type, pointer shape and native layout; it
-emits no second guest declaration. `Schema.Type` resolves the alias name.
-Same-name constant re-exports share the owning declaration when their Go types
-and exact values match; conflicting declarations fail during schema building.
-Merge the dependency and consumer package fragments before compiling or linking.
-Register native methods, field omissions and interface implementations on the
-owning schema. Renamed aliases and aliases into another guest package are not
-supported by this re-export path.
+A source package can re-export an imported native type using a Go type alias
+when both schemas share the same guest package path and keep the same type
+name. The alias reuses the dependency's type, pointer shape, and native layout
+without emitting a second guest declaration, and `Schema.Type` resolves the
+alias name.
+
+Same-name constant re-exports share the owning declaration as long as their Go
+types and exact values match (conflicts fail schema construction). Merge the
+dependency and consumer packages before compiling or linking, and register
+native methods, field omissions, and interface implementations on the owning
+schema. Renamed aliases and aliases across different guest packages are not
+supported by this path.
 
 ## Native model arguments and results
 
-Pass the shared model package in `Options.Models` when selecting native model
-source with `Options.Only`. The model metadata supplies its native Go types; no
-second Go-type-to-model registry is needed. `NativePackage` identifies the
-original Go package when it differs from the script path. It can also be
-inferred from the selected `Types`, `Implementations`, or generated `Static.Types`.
-Supply `NativePackage` explicitly when those roots include unrelated native
-packages with types sharing a local declaration name.
-Model struct fields are omitted before dependency selection. Their script type
-is the model package's immutable row, not a second native struct declaration.
+When selecting native model source with `Options.Only`, pass the shared model
+package in `Options.Models`. The model metadata already knows its native Go
+types, so you do not need a separate Go-type-to-model registry.
+
+- Set `NativePackage` if the original Go package path differs from the script
+  path. It can also be inferred from `Types`, `Implementations`, or
+  `Static.Types`; set it explicitly when those roots include unrelated packages
+  that happen to share a local type name.
+- Model struct fields are stripped before dependency selection. Their script
+  type is the model package's immutable row type, not a duplicate native struct
+  declaration.
 
 Import that schema into callable host schemas through `Options.Imports` and
-link the shared model package. Native pointers retain their identity and nil
-value. Native values use ordinary Go struct assignment. Encoded rows and rows
-backed by a different native struct require explicit conversion before being
-passed to a native pointer parameter. The binding does not decode, cache, or
-copy changes back. Native-backed immutable rows remain live views: native code
-can change their source object.
+link the shared model package alongside it:
 
-A native method returning a single `[]byte` can lend its result to the guest.
-Mark its Go declaration with `//evm:borrow-bytes domain [nativeMethod]`.
-The method must keep its arguments local and preserve outstanding borrows.
-The receiver supplies the scope. An optional native method with the same
-signature supplies the bytes when the public Go method returns an owned copy.
-Both generated and reflection bindings expose the original guest method name.
-A guest read uses the lent storage. A write, mutable address, or escape makes
-one writable copy shared by all slices of that result.
+- Native pointers keep their identity and `nil` value; native values use
+  ordinary Go struct assignment.
+- Encoded rows and rows backed by a different native struct require explicit
+  conversion before being passed to a native pointer parameter—bindings never
+  decode, cache, or copy changes back implicitly.
+- Native-backed immutable rows are live views: host code can still mutate the
+  underlying Go object.
 
-Use `Options.Mutable` on the callable schema to expose selected native model
-pointer parameters/results as editable rows:
+### Borrowing byte slices from native methods
+
+A native method that returns a single `[]byte` can lend its backing bytes to
+the guest instead of copying them. Annotate its Go declaration with:
+
+```go
+//evm:borrow-bytes domain [nativeMethod]
+```
+
+The method must keep its arguments local and must not invalidate outstanding
+borrows; the receiver supplies the borrow scope. If the public Go method
+returns an owned copy, you can pass an optional `nativeMethod` (with the same
+signature) that supplies the borrowed bytes instead. Both generated and
+reflection bindings expose the original guest method name. Guest reads use the
+lent storage directly, while any write, mutable address, or escape triggers a
+single writable copy shared across all slices of that result.
+
+### Editable model slots
+
+To expose selected native model pointer parameters or results as editable rows
+in a callable schema, list them in `Options.Mutable`:
 
 ```go
 opt := evmbind.Options{
     Imports: imports,
     Mutable: map[string]evmbind.MutableSlots{
-        "GetCustomer": {Results: []int{0}},
+        "GetCustomer":    {Results: []int{0}},
         "UpdateCustomer": {Params: []int{0}},
     },
 }
 ```
 
-Indices start at zero and exclude the method receiver and host-only `*evm.Call`.
-Method keys use `Type.Method`. The same options must be supplied to generated
-bindings. Unknown names, invalid indices, and non-model or non-pointer slots
-fail schema construction. An annotation applies only to that call site;
-ordinary model pointers and `any` results remain immutable by default.
+Slot indices are zero-based and exclude the method receiver and any host-only
+`*evm.Call` (method keys use `Type.Method`). Pass the same `Mutable` options to
+`Generate`. Unknown names, out-of-range indices, or non-model / non-pointer
+slots fail schema construction. Each annotation applies only to that call site;
+ordinary model pointers and `any` results stay immutable by default.
 
-For native `GetCustomer() *Customer`, the annotated script result is
-`*db.CustomerEdit`. The script can write `customer.name = "Ada"`; the original
-native object changes immediately. Pointer equality and interface boxing retain
-its identity. Native callbacks observe the change without a flush. An editable
-encoded database record cannot be passed as a native pointer; that requires
-explicit conversion. Native code remains responsible for persistence, just as
-when it writes a Go struct directly.
+For a native `GetCustomer() *Customer`, an annotated result becomes
+`*db.CustomerEdit` in scripts:
 
-Child reads retain native pointers, including nil. Whole-child replacement
-remains unsupported by the row API. Native slices retain their backing arrays,
-including nested scalar slices and slices of modeled pointers. Assigning a
-VM-cell slice to a native field requires explicit conversion; there is no hidden
-copy. Native model maps need an explicitly bound native map layout. Optional
-collection wrappers and slices of model struct values are not adapted implicitly.
+- Writing `customer.name = "Ada"` mutates the underlying Go struct immediately;
+  native callbacks see the change without a flush, and pointer equality and
+  interface boxing preserve identity.
+- Editable encoded database records cannot be passed as native pointers without
+  explicit conversion, and persistence remains the host's responsibility.
+- Child reads keep native pointers (including `nil`), and whole-child
+  replacement remains unsupported.
+- Native slices keep their backing arrays (including nested scalar slices and
+  slices of modeled pointers), while assigning a VM-cell slice to a native
+  field requires explicit conversion.
+- Native model maps require an explicitly bound native map layout; optional
+  collection wrappers and slices of model struct values are not adapted
+  implicitly.
 
-Editable row handles use two VM words to distinguish native pointers from
-encoded editors. Native scalar writes do not allocate an editor; string writes
-retain the native setter's ownership rules. Programs exposing native model
-slices use tagged addresses for their possible element types and general slice
-operations where cell-only fast paths would be unsafe. Guest allocations still
-use their ordinary storage; no per-object registry is introduced.
+Under the hood, editable row handles use two VM words to distinguish native
+pointers from encoded editors. Native scalar writes allocate no editor, and
+string writes follow the native setter's ownership rules. Programs that expose
+native model slices use tagged addresses and general slice operations where
+cell-only fast paths would be unsafe, while ordinary guest allocations need no
+per-object registry.
 
-Registered concrete generic models retain their shared model identity. Only
-registered instantiations may cross the model boundary. Aliases resolve to their
-original native types. Reflective and generated wrappers use the same binding
-rules. Local model source needs a selective schema; callable sources import
-that shared schema.
+Registered concrete generic models keep their shared model identity (only
+registered instantiations may cross the model boundary), aliases resolve to
+their original native types, and generated and reflected wrappers follow the
+same rules. Local model source requires a selective schema; callable sources
+import that shared schema.
 
 ## Omit host-only fields
 
-Set `Options.OmitFields` to a map from local type names to field names. Fields
-are removed before dependency selection, so omitted context fields do not pull
-their service interfaces into the script API. Unknown types, unknown fields and
-duplicate omissions fail schema construction. Unexported fields are omitted
-automatically. Pass the same omissions to `Generate` when generating wrappers.
+Use `Options.OmitFields` to hide specific exported fields from scripts, mapped
+by local type name. Omitted fields are removed before dependency selection, so
+hiding a context or service field prevents its interface from being pulled into
+the script API. Unknown types, unknown fields, and duplicates fail schema
+construction (unexported fields are always omitted automatically). Pass the
+same omissions to `Generate`.
 
-The native Go struct and its field offsets stay unchanged. A native value copy
-retains omitted fields in an inaccessible snapshot; copying or changing exposed
-fields does not discard that state. Assigning a newly constructed script value
-zeros omitted fields. Snapshots are shallow copies, matching Go struct copying,
-and their allocations count against the VM budget. Script field operations,
-equality and hashing use the exposed fields only.
+Omitting a field changes only the script declaration, never the Go struct
+layout. Native value copies keep omitted fields intact in an inaccessible
+shallow snapshot (allocations count against the VM budget), while newly
+constructed script values leave omitted fields zeroed. Script field operations,
+equality, and hashing consider only exposed fields.
 
 ## Share declarations across packages
 
-`Options.Imports` maps native Go import paths to previously built schemas.
-Native source keeps its original imports; script signatures and fields use the
-shared schema's guest package and type identity. Link all dependency packages
-alongside the consuming schema. Local and imported structs retain native pointer
-aliasing, including through transitive schema dependencies.
+`Options.Imports` maps native Go import paths to previously built schemas. The
+native source keeps its ordinary Go imports, while script signatures and fields
+reuse the imported schema's guest package and type identity. Link every
+dependency package alongside the consuming schema so local and imported structs
+keep native pointer aliasing across transitive dependencies.
 
-Each native import path must resolve to one shared schema instance across the
-import graph. Consumers reuse its parsed native declarations, including
-transitive types; separately selected subsets should be combined in that schema.
-Standard declarations are shared across schemas and initialized once. Several
-native packages may emit into one script package without losing Go type identity.
+A few rules keep shared schemas clean:
 
-Pass the same map to `Generate` when generating native wrappers.
-The generated code imports the actual native Go packages. Imported data layouts
-remain owned by the dependency schema; constructing a consumer does not mutate
-them. Imported interfaces reuse the owning schema's registered implementations
-and conversions, including typed nils. Link the owner's `Bind(nil)` package
-(or `Bind(host)` when it has package functions) to install its methods. Scripts
-need not explicitly import that package merely to receive an implementation
-through a consumer's API.
+- Each native import path must resolve to a single shared schema instance
+  across the import graph. If multiple consumers need different subsets of a
+  package, combine them into that one schema.
+- Standard declarations are shared across schemas and initialized once. Several
+  native packages may also emit into one guest package without losing Go type
+  identity.
+- Pass the same `Imports` map to `Generate` so generated code imports the real
+  native Go packages.
+- Imported layouts stay owned by the dependency schema and are never mutated by
+  consumers. Imported interfaces reuse the owning schema's registered
+  implementations and conversions (including typed nils).
+- Link the owning schema's `Bind(nil)` (or `Bind(host)` if it has package
+  functions) to install its methods. Scripts do not need to import that package
+  just to receive an implementation through another package's API.
 
 ## Generic native functions
 
-Register compiled package-function instances with `Options.GenericFunctions`:
+Register compiled instantiations of generic package functions with
+`Options.GenericFunctions`:
 
-    GenericFunctions: map[string][]evmbind.FunctionInstance{
-        "Var": {
-            {Args: []reflect.Type{reflect.TypeFor[string]()}, Function: forms.Var[string]},
-            {Args: []reflect.Type{reflect.TypeFor[int64]()}, Function: forms.Var[int64]},
-        },
-    }
+```go
+GenericFunctions: map[string][]evmbind.FunctionInstance{
+    "Var": {
+        {Args: []reflect.Type{reflect.TypeFor[string]()}, Function: forms.Var[string]},
+        {Args: []reflect.Type{reflect.TypeFor[int64]()}, Function: forms.Var[int64]},
+    },
+},
+```
 
-Scripts use the original signature, with inferred or explicit type arguments:
-`forms.Var(&name)` or `forms.Var[string](&name)`. Native pointer arguments retain
-their storage. The host supplies every compiled instance; unsupported script
-types fail at compilation/linking rather than triggering runtime specialization.
-Constraints and the native function signature are checked during schema setup.
+Scripts call the original generic signature with inferred or explicit type
+arguments (`forms.Var(&name)` or `forms.Var[string](&name)`), and native
+pointer arguments keep their storage. The host must register every supported
+instantiation—unregistered types fail at compile or link time rather than
+specializing at run time. Constraints and signatures are validated during
+schema setup.
 
-Register generic structs appearing in these signatures through `Instances` too,
-for example `Binding[string]`. Arguments must match registered VM type identities;
-a script-defined named type does not match its underlying native scalar type.
-These instances currently use reflected calls; generated bindings and `StaticOnly`
-reject them. Generic package functions are separate from generic function types
-such as `Validator[T]`, which still need binding support.
+Register any generic structs that appear in those signatures (such as
+`Binding[string]`) through `Options.Instances` as well. Type arguments must
+match registered VM type identities (a script-defined named type does not match
+its underlying native scalar). Generic function instances currently use
+reflected calls, so generated bindings and `StaticOnly` reject them. Generic
+function *types* (such as `Validator[T]`) are separate and not yet supported.
 
 ## Generate bindings
 
-Generate direct Go wrappers in a separate package:
+To generate direct, reflection-free Go wrappers for a whole package into a
+separate bindings package, run:
 
-    go run github.com/andreyvit/evm/evmbind/cmd/evmbind \
-        -dir ../api -path demo -native example.org/project/api \
-        -package apibindings -o bindings_gen.go
+```sh
+go run github.com/andreyvit/evm/evmbind/cmd/evmbind \
+    -dir ../api -path demo -native example.org/project/api \
+    -package apibindings -o bindings_gen.go
+```
 
-The command covers a whole package. A program calling
-`Generate(path, nativeImport, outputPackage, source, options)` takes the same
-options as `New`, including `Only`, `Selective`, `Omit` and `Imports`.
+For selective schemas or custom options (`Only`, `Selective`, `Omit`,
+`Imports`, and so on), call
+`evmbind.Generate(path, nativeImport, outputPackage, source, options)` from a
+small generator program using the same `Options` as `New`.
 
-Pass &apibindings.Bindings in Options.Static. Automatic selects generated
-wrappers when the source fingerprint and complete set of wrapper names match.
-Missing or stale bindings select reflection. With StaticOnly, `New` panics
-on a mismatch and `RegisterMethods` returns an error.
-The evmreflect build tag excludes generated Go references, so native API
-renames/removals can be developed before regeneration. A package imported in
-both builds can supply a zero Static under that tag.
+Supply the generated bindings via `Options.Static: &apibindings.Bindings`:
 
-Native package functions and methods support variadic arguments, including
-interface dispatch and bound method values. Calls use ordinary Go semantics:
-omitted arguments give an empty tail, and `values...` retains the supplied
-slice backing. Generated wrappers use Go's `...` call syntax; reflected
-wrappers use `reflect.Value.CallSlice`. Variadic calls use the ordinary call
-window rather than specialized direct-call opcodes. Variadic native function
-fields remain a separate, unsupported case.
+- **`evmbind.Automatic`** (default) uses generated wrappers when both the
+  source fingerprint and the full set of wrapper names match, and falls back to
+  reflection when bindings are missing or stale.
+- **`evmbind.StaticOnly`** enforces freshness: `New` panics on a mismatch, and
+  `RegisterMethods` returns an error.
+- The **`evmreflect`** build tag excludes generated files from a build, letting
+  you rename or remove native APIs before regenerating (supply a zero `Static`
+  value under that tag when a package builds in both modes).
+
+### Variadic functions and methods
+
+Native package functions and methods support variadic parameters, including
+through interface dispatch and bound method values. Calls follow Go semantics:
+omitted arguments produce an empty tail, and `values...` keeps the supplied
+slice's backing array. Generated wrappers use Go's `...` call syntax, while
+reflected wrappers use `reflect.Value.CallSlice`. Variadic calls use the
+ordinary call window rather than direct-call opcodes. Variadic native function
+*fields* are not yet supported.
 
 ## Native values
 
-Pass a host interface argument with schema.Interface(program, ptr). The concrete
-type must have been registered and implement a declared interface. R contains
-the program's nonzero type index. P holds the original, GC-visible Go pointer.
-A typed nil keeps its type index. Both dispatch paths expose only declared
-interface methods, and the generated path calls the native interface directly.
-Context values passed back to native code must originate from a registered host
-implementation. Repack using the destination program when crossing programs.
-Use `PointerForCall` when a receiver needs the current VM call to open or
-close a budget scope. It can return a shallow receiver copy for that call;
-the original pointer stays in the guest interface. Embedded host interfaces
-can be passed to procedures accepting just the smaller method set.
+### Interfaces
 
-The data boundary supports bools, integers, floats, strings, named
-scalars, nested data structs with exported fields, and pointer fields to data
-structs or scalars. Data structs cross by value. Host pointers retain their
-original Go address: guest fields, aliases, escaped field addresses, and native
-methods read and mutate the same object. `schema.NativePointer(ptr)` supplies
-a registered struct pointer as a guest entry argument. This borrows the native
-object; callers must synchronize concurrent access.
+Pass a host interface value into a script with `schema.Interface(program, ptr)`.
+The concrete type must be registered and implement a declared interface. In the
+VM pair, `R` carries the program's nonzero type index and `P` holds the
+original GC-visible Go pointer (typed nils preserve their type index).
 
-Guest allocations of registered data structs/scalars and their globals use
-native Go storage too. Other guest addresses backed by VM cells retain the
-call-scoped temporary/copyback boundary. Host interfaces carry opaque pointers
-and expose methods.
-Typed slices and maps of supported native types can appear in fields, arguments,
-and results. They retain native backing storage: element updates, map mutations,
-and aliases follow Go semantics. Slice growth may replace its backing array.
+- Both generated and reflected paths expose only declared interface methods,
+  and generated code dispatches through the native Go interface directly.
+- Context values passed back to native code must come from a registered host
+  implementation; repack them for the destination program when crossing
+  programs.
+- Use `PointerForCall` when a receiver needs the active `*evm.Call` (for
+  example, to open or close a budget scope): it may return a shallow receiver
+  copy for that call while leaving the original pointer in the guest interface.
+- Embedded host interfaces can be passed wherever a smaller method set is
+  expected.
 
-Maps such as `map[string]any` use the same native storage as other typed
-maps, including nested maps and slices. Numbers retain their Go types and
-host mutations reach the shared map. Native method-interface fields, slice
-elements and map values preserve the concrete native object and typed nils.
-Their values must be registered native implementations; guest-only types cannot
-be stored in a native method-interface slot. Reading a native-written value
-whose concrete type is not registered fails with an unregistered-type error,
-including error implementations; no proxy is created. Interface map keys
-are not supported. Unsupported declarations fail schema creation.
+### Data structs, pointers, and collections
 
-Ordinary `any` works in arguments, results, struct fields and typed slices.
-Registered native values retain their Go types and reference identity. Values
-whose types exist only in the guest use `*evm.GuestValue`, retaining the owning
-program and exact VM value; passing that handle back preserves its type and
-aliases. A handle from another program is rejected. No JSON conversion occurs.
-Native result types must be registered; schemas exposing `any` link their
-registered concrete types and primitive scalar types automatically.
+The data boundary supports booleans, integers, floats, strings, named scalars,
+nested data structs with exported fields, and pointers to data structs or
+scalars:
 
-When an immutable model row is linked, `any` values containing a registered
-native model pointer become that row type. The original pointer, including a
-typed nil, survives the return to native Go. Several Go types can share one
-model. If one Go type belongs to several linked models, pass a `kvo.Record`
-with its model to select the interpretation. This does not limit table access.
-A modeled `kvo.Record` retains its representation; encoded rows return as
-records without decoding. A guest-created nil row returns as a missing record
-with the model attached. Model rows take precedence over a separately exposed
-native struct type. This handoff currently covers pointers and known-model
-records, not native struct values or unmodeled records.
+- Data structs cross by value. Host pointers keep their Go address so guest
+  fields, aliases, escaped field addresses, and native methods all operate on
+  the same object. Pass a registered struct pointer as an entry argument with
+  `schema.NativePointer(ptr)` (the host must synchronize concurrent access).
+- Guest allocations and package variables of registered data structs and
+  scalars use native Go storage too. Other guest addresses backed by VM cells
+  use the call-scoped temporary and copy-back boundary.
+- Typed slices and maps of supported native types—including `map[string]any`
+  and nested collections—keep their Go backing storage, element mutations, and
+  aliases (slice growth may replace the backing array, as in Go). Numbers
+  retain their Go types.
+- Native method-interface fields, slice elements, and map values preserve the
+  concrete native object and typed nils. Only registered native implementations
+  can be stored in those slots (reading an unregistered concrete type—including
+  an `error` implementation—fails with an unregistered-type error rather than
+  synthesizing a proxy). Interface map keys and unsupported declarations fail
+  schema creation.
 
+### `any`, model rows, and `error`
 
-Builtin `error` works in native arguments, results, struct fields and map values. Native
-and guest errors retain identity, nil values and error methods through the
-existing EVM error bridge. Generated and reflected bindings use the same
-conversion. Native `[]error` storage is not yet supported.
+- **`any`:** Works in arguments, results, struct fields, and typed slices.
+  Registered native values keep their Go types and identity; guest-only types
+  reach Go as `*evm.GuestValue` (carrying their owning program and exact VM
+  value, and rejected by any other program). No JSON conversion happens.
+  Schemas exposing `any` automatically link their registered concrete and
+  primitive scalar types.
+- **Model rows through `any`:** When an immutable model row is linked, a
+  registered native model pointer inside `any` becomes that row type and keeps
+  its original pointer (including typed nils) on return. Multiple Go types can
+  share one model; if one Go type belongs to several linked models, pass a
+  `kvo.Record` with its model to disambiguate. Modeled `kvo.Record` values keep
+  their representation (encoded rows return without decoding), and guest-created
+  `nil` rows return as missing records with the model attached. Model rows take
+  precedence over a separately exposed native struct type. This applies to
+  pointers and known-model records, not native struct values or unmodeled
+  records.
+- **`error`:** Built-in `error` works in arguments, results, struct fields, and
+  map values. Native and guest errors preserve identity, `nil`, and `Error()`
+  through EVM's error bridge in both generated and reflected bindings. Native
+  `[]error` storage is not yet supported.
 
 ## Native package functions
 
-Use `Options.Functions` to bind source declarations to Go function values:
+Use `Options.Functions` to bind source declarations directly to Go function
+values or closures:
 
 ```go
 schema, err := evmbind.New("db", edb.TransactionBindingSource, evmbind.Options{
@@ -340,119 +389,131 @@ schema, err := evmbind.New("db", edb.TransactionBindingSource, evmbind.Options{
 })
 ```
 
-In a selective schema only the bound functions enter the guest package. Their
-referenced types are selected recursively; implementation bodies are omitted. Binding checks
-argument and result types against the supplied function. Calls use that value,
-including a supplied closure, without a synthetic `*evm.Call` parameter or
-host method. Returned native references keep their native sharing behavior.
+In a selective schema, only bound functions enter the guest package, and the
+types they reference are pulled in recursively while function bodies are
+ignored. Binding validates argument and result types against the supplied Go
+function, calls it directly without a synthetic `*evm.Call` or host receiver,
+and preserves native reference sharing on return.
 
-`Generate` uses the same options and selection as `New`. Generated
-calls invoke the registered function value, including named function values.
-The binding fingerprint distinguishes package functions from host methods,
-so generated wrappers for one form cannot silently serve the other.
+`Generate` uses the same options and selection, invoking the registered
+function value directly. Because the fingerprint distinguishes package
+functions from host methods, generated wrappers for one form can never silently
+serve the other.
 
-## Retained functions
+## Retained functions and callbacks
 
-Use `*evm.NamedFunctionOf[any]` only when the host validates the signature at
-registration, such as a GoX renderer whose data type is declared by the script.
-Scripts see an `any` parameter. The binding accepts public, noncapturing guest
-functions or nil and rejects other values; the host receives `*evm.NamedFunction`.
-A typed nil function is rejected. Ordinary `any` parameters keep their normal
-value conversion. This handle is input-only; use a typed `FunctionOf` when the
-host needs to return a callable or retain captures.
+EVM gives you typed and untyped handles for passing script functions across the
+host boundary.
 
+### Typed function handles
 
-Use `*evm.FunctionOf[any]` for the same host-checked signature when captures
-are allowed. The host receives a retained `*evm.FunctionHandle`. Named functions,
-closures and bound methods use the normal retained-function representation.
-Both nil and a typed nil function produce a nil handle, as with typed
-`FunctionOf` parameters. Nonfunction values fail at the call boundary. This
-form is input-only; the host must inspect the signature before invocation.
+- **`*evm.FunctionOf[func(int) int]`** accepts closures, bound methods, and
+  native functions; Go sees `*evm.FunctionHandle`. Both generated and reflected
+  bindings accept and return these handles as script function values. Returned
+  handles must belong to the current program and match the declared signature
+  (`nil` round-trips as `nil`). Handle creation is allocation-metered, captures
+  keep their identity across calls, and the host invokes them with
+  `VM.RunFunction`, `RunFunctionWithBudget`, or `RunFunctionNative`.
+  - Struct fields may also use `FunctionOf`: reads, writes, address-taking, and
+    struct copies translate through the current program (foreign handles fail
+    before invocation), stores meter the retained handle, and Go keeps an
+    ordinary typed pointer field.
+- **`*evm.NamedFunctionOf[func(int) any]`** accepts only public, non-capturing
+  guest functions; Go sees `*evm.NamedFunction`. The type argument supplies the
+  guest signature so incompatible functions fail compilation, and both binding
+  paths resolve the handle without boxing it in `any` (`nil` gives `nil`).
+  - The signature may include nested function parameters and slices (such as
+    `func(func([]string), func([]any))` for a header/row producer). Those
+    values stay in VM storage, so invoke the handle with program-owned native
+    callbacks.
 
-Declare a native registration parameter as
-`*evm.NamedFunctionOf[func(int) any]`. The generic alias is an ordinary
-`*evm.NamedFunction` in native Go. Its type argument supplies the guest
-signature: scripts pass `func(int) any` directly, and incompatible functions
-fail compilation. Both generated and reflection bindings resolve the handle
-without boxing the guest function in an empty interface. A nil function gives
-the host a nil handle.
+### Untyped (host-validated) handles
 
-The annotated guest signature may contain nested function parameters and slices,
-including `func(func([]string), func([]any))` for a header/row producer. These
-values remain in VM storage; retaining the function does not convert its
-arguments into native collections. Use program-owned native callbacks when
-invoking it from the host. Ordinary native collection bindings retain the
-codec limits described above.
+Use these input-only forms when the host itself validates the signature at
+registration (for example, a GoX renderer whose data type is declared by the
+script). In both cases, scripts see an `any` parameter:
 
-These handles retain only public, noncapturing guest entry metadata. Invoke
-with the owning program; captured closures, bound methods and native functions
-are not retained by this API. Native function parameters, including typed
-callbacks, use the originating VM's globals, context and budgets. Native calls
-and callbacks must be serialized, like all other use of that VM. Guest panics
-unwind native defers and remain recoverable by guest callers.
+- **`*evm.NamedFunctionOf[any]`** accepts only public, non-capturing guest
+  functions or untyped `nil`, returning `*evm.NamedFunction` (typed `nil`
+  functions and other values are rejected).
+- **`*evm.FunctionOf[any]`** also allows closures and bound methods, returning
+  `*evm.FunctionHandle`. Both untyped `nil` and typed `nil` functions yield a
+  `nil` handle, while non-functions fail at the call boundary. Inspect the
+  signature before invoking.
 
-Native function fields retain their originating VM. To invoke them while that
-VM is idle, either run host work through `vm.RunNative(ctx, call, budget)` or
-explicitly open `vm.OpenCallbackScope(ctx, budget)`. Opening it after creating
-callbacks enables idle calls for those existing callbacks too.
-An open scope permits idle calls on that same VM with the supplied per-call
-budget and context; close it before reusing the VM for unrelated work. Reset
-also expires all exported callbacks. Without an open scope, idle calls fail.
-As with `Run`, an execution failure requires Reset before further execution;
-a failed idle callback therefore ends the usable session.
-Guest-defined error methods follow the same rules: keep their scope open while
-Go code formats or inspects those errors. The context must remain valid during
-that inspection. Native Go errors and native-created functions are unaffected.
+### Native Go function types and callback scopes
 
-Native callable values carry their original Go function value, so assigning a
-function back to native storage reuses it without accumulating wrapper layers.
-No global identity map or goroutine-local VM selection is used.
+Ordinary Go function types can also appear in data fields and method
+signatures. Native calls and callbacks use the originating VM's globals,
+context, and budget, and must be serialized like any other use of that VM.
+Guest panics unwind native defers and remain recoverable by guest callers.
 
-Use `*evm.FunctionOf[func(int) int]` when closures, bound methods or native
-functions are allowed. Native Go sees `*evm.FunctionHandle`. Both generated and
-reflection bindings accept and return these handles as script function values.
-Returned handles must belong to the current program and match the declared
-signature; nil round-trips as a nil function. Handle creation is allocation
-metered. Host code can invoke a retained handle with `VM.RunFunction` or
-`RunFunctionWithBudget`. Captures retain their identity across invocations.
-Native struct fields may use the same `FunctionOf` annotation. Field reads,
-writes, address-taking and struct copies translate through the current program;
-foreign handles fail before invocation. Stores allocate and meter a retained
-handle. Native Go keeps its ordinary typed pointer field.
+- `vm.RunFunctionNative(ctx, handle, args, results, budget)` converts ordinary
+  Go arguments and results within the supplied budget and VM state. Argument
+  types must match the registered signature exactly (no implicit numeric
+  conversions). Interface parameters accept `nil` or registered
+  implementations; interface results keep their concrete identity (guest-only
+  values return as `*evm.GuestValue`, and `nil` interfaces—including `nil`
+  errors—return `nil`).
+- **Idle callbacks:** Native function fields remember their originating VM. To
+  call them while that VM is idle, either run inside `vm.RunNative(ctx, call,
+  budget)` or open `vm.OpenCallbackScope(ctx, budget)` (which also enables
+  existing callbacks) and close it before reusing the VM for unrelated work.
+  Without an open scope, idle calls fail; `vm.Reset()` expires all exported
+  callbacks, and a failed idle callback invalidates the session until `Reset`.
+  Guest-defined `error` methods follow the same rules—keep the scope open and
+  the context valid while Go formats or inspects them. Native Go errors and
+  native-created functions are unaffected.
+- **Identity without wrapper stacking:** Native callable values remember their
+  original Go function value, and guest-created functions read back from native
+  storage recover their program-owned handle (tracked weakly and cleaned up
+  after the Go wrapper is collected), so round-tripping never accumulates
+  wrapper layers. Reading a native function field copies the function value, so
+  later field writes do not alter an already-loaded reference. Variadic native
+  function types are not supported.
 
 ## Direct calls and fields
 
-A generated wrapper qualifies for
-a function with up to two arguments or a pointer method with up to one explicit
-argument and zero or one result. Host functions and registered record methods
-share the same signature classifier and scalar conversion generator. Supported
-values are words (including named scalars and float bits), strings and true pointers. The compiler emits the instruction
-for the wrapper’s declared signature. Reflection and older generated wrappers
-continue to use their existing call ABI. Interface methods use virtual dispatch.
-For a handwritten binding, `Direct` alone also supports function values and
-deferred calls. Supply `Call` alongside it to provide your own window wrapper.
+A generated wrapper qualifies for a direct-call instruction when it is:
 
-A generated pointer wrapper passes native addresses directly. Only VM-cell
-arguments need a temporary and copyback. The VM charges a
-returned string once and keeps its Go data pointer visible to the GC. For a
-handwritten direct binding that returns a KVO row, use `Call.RecordValue` to
-construct its typed pair. A direct callback may return a conversion
-or execution error. Expose fallible application operations through `Native`.
+- a function with up to two arguments, or
+- a pointer method with up to one explicit argument,
 
-Generated output also supplies native struct field operations. `NativeFields`
-returns the shared `nativebind.Struct`; `NativeType` returns its nominal
-`values.Type`. KVO `Binding.WithNativeSchema` and `Projection.WithNativeSchema`
-reuse both, so property access and host methods operate on one Go object.
-The record codec generator uses the same field generator for types that need
-persistence bindings without script exposure. Generated field access, including
-escaped scalar addresses, uses typed Go operations; fallback bindings share
-nativebind's reflection implementation. Regenerate after changing declarations.
+returning zero or one result over words (including named scalars and floats),
+strings, and true pointers. Host functions and registered record methods share
+the same signature classifier and scalar conversion generator. The compiler
+emits the specialized opcode matching the wrapper's signature; reflection and
+older wrappers stay on the general call ABI, and interface methods use virtual
+dispatch. For hand-written bindings, `Direct` alone also handles function
+values and deferred calls (supply `Call` alongside it to override the window
+wrapper).
+
+A generated pointer wrapper passes native addresses directly—only VM-cell
+arguments need a temporary and copy-back. Returned strings are charged once and
+keep their Go data pointer visible to the GC. In a hand-written direct binding
+that returns a KVO row, construct its typed pair with `Call.RecordValue`.
+Direct callbacks may return conversion or execution errors; expose fallible
+application operations through `Native`.
+
+Generated output also provides typed struct field access:
+
+- `schema.NativeFields(goType)` returns the shared `nativebind.Struct`, and
+  `schema.NativeType(goType)` returns its nominal `values.Type`.
+- `kvo.Binding.WithNativeSchema` and `Projection.WithNativeSchema` reuse both,
+  so KVO property access and host methods operate on the exact same Go object.
+- KVO's record codec generator shares the same field generator for types that
+  need persistence bindings without script exposure.
+- Generated field access (including escaped scalar addresses) uses typed Go
+  operations, while fallback bindings share `nativebind`'s reflection path.
+  Regenerate whenever bound declarations change.
 
 ## Explicit record methods
 
-Ordinary Go helpers can become methods of a specific KVO model. The Go symbol,
-model and script method name are independent; no naming convention or prefix
-stripping controls registration. For example, in a native model package:
+You can expose ordinary Go helpers as methods on a specific KVO model. The Go
+function name, model, and script method name are completely independent—there
+is no naming convention or prefix stripping.
+
+For example, in a native model package:
 
 ```go
 func Customer_PointBalance(r kvo.Record) int64 {
@@ -472,89 +533,73 @@ func RecordMethods() []evmbind.Method {
 ```
 
 A small `go:generate` program imports that list, calls
-`evmbind.GenerateMethods("bindings", RecordMethods())`, and writes the result
-to a Go file in package `bindings`. The output package must differ from the
-helpers' packages. Pass its generated `MethodBindings` to registration **before
+`evmbind.GenerateMethods("bindings", RecordMethods())`, and writes the
+generated Go file to package `bindings` (which must be a different package from
+the helpers themselves). Register the generated `MethodBindings` **before
 compiling scripts or publishing the package**:
 
 ```go
 pkg := must(evm.ModelPackage("m", nm.Schema))
 ensure(evmbind.RegisterMethods(&pkg, RecordMethods(), evmbind.MethodOptions{
-    Mode: evmbind.StaticOnly,
+    Mode:   evmbind.StaticOnly,
     Static: bindings.MethodBindings,
 }))
 ```
 
-`must` and `ensure` panic on an error. Go callers use
-`nm.Customer_PointBalance(r)`; scripts use
-`stats.PointBalance()`. Both execute the same helper over the original 16-byte
-record, whether it references Fast2, Compact2, MessagePack, native struct or
-in-memory data. Calls do not decode or change representation. The method is
-available only on explicitly registered immutable model types; editors have a
-separate method set. The same helper can be registered on several models.
-Properties, existing methods and duplicate registrations cannot be shadowed.
-Registration errors leave the package unchanged.
+`must` and `ensure` panic on error. Go callers invoke
+`nm.Customer_PointBalance(r)` while scripts write `stats.PointBalance()`. Both
+run the same helper over the original 16-byte record—whether it is Fast2,
+Compact2, MessagePack, a native struct, or decoded memory—without decoding or
+changing its representation.
 
-`BorrowOnly` is a trusted promise: the helper must neither retain its arguments
-nor invalidate their backing storage, directly or through calls it makes. Use
-it for read-only calculations such as this balance helper. It prevents ownership
-analysis from inserting unnecessary copies. Omit it for conservative behavior;
-`NoRetain` and `NoInvalidate` can also be specified separately. This metadata is
-not inferred from Go code.
+Rules and limits:
 
-Generated adapters call Go functions directly, with no reflection or record
-boxing. `StaticOnly` rejects missing or stale adapters; `Automatic` can fall
-back to reflective calls, which allocate. Regenerate after changing a helper's
-signature. Generation requires exported top-level functions, with
-`kvo.Record` first, scalar arguments and scalar results. Supported scalars
-are bool, integers (excluding uintptr), floats and strings, including named Go
-types. Guest signatures use their underlying scalar types. Variadic functions,
-collections, record results, closures and bound Go methods are not supported
-by this generator. Signatures beyond the direct argument/result limits use the
-ordinary call window; bound methods, method expressions, interface calls
-and deferred calls work too.
+- Methods attach only to explicitly registered immutable model types (editors
+  have their own method set). One helper can be registered on multiple models,
+  and registration rejects shadowed properties, existing methods, or duplicates
+  without modifying the package.
+- `BorrowOnly` is a trusted promise that the helper neither retains its
+  arguments nor invalidates their backing storage (directly or transitively),
+  allowing ownership analysis to skip unnecessary copies. Omit it for
+  conservative behavior, or pass `NoRetain` and `NoInvalidate` separately.
+  EVM does not infer these properties from Go code.
+- Generated adapters call Go directly with no reflection or record boxing.
+  `StaticOnly` rejects missing or stale adapters, while `Automatic` falls back
+  to reflective calls (which allocate). Regenerate whenever a helper's
+  signature changes.
+- Generation requires exported top-level functions taking `kvo.Record` first,
+  followed by scalar arguments and scalar results (`bool`, integers other than
+  `uintptr`, floats, and strings, including named Go types—guest signatures use
+  their underlying scalar types). Variadic functions, collections, record
+  results, closures, and bound Go methods are not supported by the generator.
+  Signatures beyond the direct-call limits use the ordinary call window; bound
+  methods, method expressions, interface calls, and deferred calls all work.
+- String results are copied and charged to the VM allocation budget so they can
+  safely outlive borrowed storage; numeric and boolean calculations can stay
+  allocation-free (the helper's own allocations remain its responsibility).
+- Generated files respect the `evmreflect` build tag; pass an empty
+  `StaticMethods` with `Automatic` under that tag if you want reflection-only
+  development builds.
 
-String results are copied and charged to the VM allocation budget so they can
-safely outlive borrowed record storage. Numeric/bool calculations can remain
-allocation-free. A helper's own allocations are its responsibility. Generated
-files are excluded by `evmreflect`; supply an empty `StaticMethods` and use
-`Automatic` under that tag if reflection-only development builds are desired.
-
-See [record-method benchmarks](../_docs/bench-record-methods.md) and the executable
-generation example in `internal/methodfixture/gen`.
-
-See [binding consolidation benchmarks and API guide](../_docs/bindings.md) for
-void calls, metadata reuse, and manual Shape/DirectBinding declarations.
-
-Native Go function types can also appear in data fields and ordinary method
-signatures. The host owns their VM and callback lifetime as described above.
-`vm.RunFunctionNative(ctx, handle, args, results, budget)` converts ordinary
-arguments and results within the same supplied budget and VM state. Argument types
-must match the registered signature; no implicit numeric conversions occur.
-Interface parameters accept nil or values implementing the required methods.
-Interface results retain their concrete identity; guest-only values return as
-`*evm.GuestValue`. Nil interface results, including nil errors, return nil.
-
-Reading a guest-created function back from native storage recovers its original
-program-owned handle, so script calls keep the caller's budget and captures.
-The bridge tracks closure identities weakly and removes entries after the Go
-wrapper dies. Foreign-program handles are rejected. Native function values are
-copied when read from fields, so replacing a field does not change a previously
-loaded function. Variadic native function types remain unsupported.
+See [record-method benchmarks](../_docs/bench-record-methods.md), the runnable
+generator in `internal/methodfixture/gen`, and the
+[hand-written bindings guide](../_docs/bindings.md) for void calls, metadata
+reuse, and manual `Shape` / `DirectBinding` declarations.
 
 ## Reflection-based discovery
 
-`Discover` exposes native functions and their reachable types without embedded
-source. Prefer `New` when the source is available: reflection has no parameter
-names, doc comments or constants. Exported fields are included recursively;
-private fields remain hidden and preserve their native storage. Recursive
-references retain pointer identity.
+When you do not have embedded source available, `evmbind.Discover` exposes
+native functions and every type they reach using reflection. Prefer `New`
+whenever source is available, because reflection has no parameter names, doc
+comments, or constants. Exported fields are discovered recursively, unexported
+fields stay hidden while keeping their native storage, and recursive references
+preserve pointer identity.
 
 ```go
 _, packages, err := evmbind.Discover("app", evmbind.Discovery{
     Options: evmbind.Options{
         Functions: map[string]any{"Foo": Foo}, // Foo returns *Bar
-        Imports: existingSchemas,
+        Imports:   existingSchemas,
     },
     Packages: []evmbind.PackageExposure{
         {Pattern: "example.org/app/...", Methods: true},
@@ -564,30 +609,28 @@ _, packages, err := evmbind.Discover("app", evmbind.Discovery{
 })
 ```
 
-Pass the returned packages to compilation and linking, together with existing
-bound packages. Types mapped to the function path share its package, so
-`app.Foo` and `app.Bar` can sit side by side; each returned path appears once.
-`Discovery.Constants` adds named constants to the function package. The
-returned schema's `NativePointer` accepts any discovered struct pointer. No `Bar` declaration or explicit type root is needed. Use
-`Options.Types` for additional roots, particularly concrete types supplied through
-`any`, whose dynamic types cannot be inferred from a function signature.
+Pass the returned packages to `Compile` and `Link` alongside your existing
+bound packages:
 
-Types default to their native import paths, with exported fields and no concrete
-methods. A rule can enable every exported method, remap types into an umbrella
-package, or reject exposure. Interface declarations retain their method sets.
-Rules match exact import paths or `/...` descendants (including the parent).
-The longest match wins; exact rules beat descendant rules at the same path.
-Later rules break ties. A selected rule replaces the broader rule's settings.
-Name collisions under an umbrella package fail explicitly.
-
-Existing schemas in `Options.Imports` keep their identities and API selections;
-discovery does not broaden them. Their referenced types must already be bound.
-Discovery uses reflected adapters and does not require generated wrappers.
-
-Reflection cannot enumerate package globals, package functions or constants.
-Register functions and constants explicitly; host-owned global values can use
-`ExternalValue`.
-There is no automatic-globals option. Concrete generic instances still require
-explicit source bindings. Unsupported native shapes fail schema construction
-with a type/field error rather than being silently omitted. As with source
-bindings, pointers and supported collections retain native storage and mutations.
+- Types mapped into the function package share it (`app.Foo` and `app.Bar` sit
+  side by side), and each returned path appears once.
+- Add named constants with `Discovery.Constants`, and extra type roots (such as
+  concrete types passed through `any`) with `Options.Types`. The returned
+  schema's `NativePointer` accepts any discovered struct pointer.
+- By default, discovered types keep their native import paths with exported
+  fields and no concrete methods (interfaces keep their method sets). Package
+  rules can enable all exported methods, remap types into an umbrella package,
+  or exclude a path. Rules match exact paths or `/...` subtrees (including the
+  parent); longest match wins, exact beats `/...` at the same path, later rules
+  break ties, and a matching rule replaces broader settings. Name collisions
+  under an umbrella package fail explicitly.
+- Existing schemas in `Options.Imports` keep their identities and API
+  selections without being broadened (their referenced types must already be
+  bound).
+- Discovery uses reflection adapters and requires no generated wrappers.
+  Because reflection cannot enumerate package globals, functions, or constants,
+  register functions and constants explicitly (and use `ExternalValue` for
+  host-owned globals). Concrete generic instances still require source
+  bindings, and unsupported native shapes fail schema construction rather than
+  being silently dropped. As with source bindings, pointers and supported
+  collections keep their native storage and mutations.

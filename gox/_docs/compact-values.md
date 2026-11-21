@@ -1,59 +1,72 @@
 # Compact GoX values
 
-The native Go APIs stay unchanged. EVM value copies use compact cells; values
-whose addresses escape still use field-addressable storage. The compiler keeps
-nonescaping locals in registers, including writes to their fields.
+Templates pass `gox.Content` and `gox.Optional[T]` through component calls
+constantly. Without special handling, every small struct copy would allocate a
+heap snapshot in VM storage. Instead, EVM packs value copies of `Content` and
+common `Optional[T]` specializations into a single 16-byte `values.Value` cell,
+keeping non-escaping locals—including writes to their fields—entirely in
+registers.
 
-## Content
+Native Go APIs stay completely unchanged, and any value whose address escapes
+still gets ordinary field-addressable storage.
 
-`Content` occupies one `values.Value`: a GC-visible string pointer plus a tagged
-word. Two process-wide `TypedPair` representations share the same logical type:
-plain text and trusted HTML. The auxiliary uint32 holds the full byte length.
-Lengths above `math.MaxUint32` are rejected before conversion.
+## `Content`
 
-The zero cell means empty plain text. Equality and map hashing compare text and
-trust, never byte addresses. Packing, unpacking, and passing through `any` need
-no wrapper allocation or string copy. Ownership acquisition retains the trust
-bit while applying the normal string ownership rules. Rendering decodes the
-cell and uses the existing context-specific escaping rules.
+`gox.Content` fits in a single `values.Value` cell: a GC-visible string pointer
+in `P` and a tagged word in `R`. Two process-wide `TypedPair` representations
+share the same logical type—one for plain text and one for trusted HTML—with
+the auxiliary `uint32` storing the full byte length (lengths above
+`math.MaxUint32` are rejected before conversion).
 
-`Text` and `TrustedHTML` have direct VM bindings. Native Go callers still receive
-the public struct with `Content string` and `TrustedHTML bool` fields.
+- The zero cell represents empty plain text.
+- Equality and map hashing compare both the text and the trust flag, never byte
+  addresses.
+- Packing, unpacking, and passing through `any` allocate no wrapper and copy no
+  string bytes.
+- Ownership acquisition keeps the trust bit while applying standard string
+  ownership rules, and rendering decodes the cell and runs the normal
+  context-specific escaping filters.
+- `gox.Text` and `gox.TrustedHTML` have direct VM bindings, while native Go
+  callers still see the ordinary struct `{Content string, TrustedHTML bool}`.
 
-## Optional
+## `Optional[T]`
 
-GoX's source-defined `Optional[T]` instances use one cell when T is a boolean,
-integer, floating-point number, string, or registered compact struct such as
-`Content`. An ordinary present value uses T's existing cell. The zero cell means
-missing; a descriptor-owned marker distinguishes present zero. Other markers
-preserve a nonzero Value with Present=false, including writes to Value before
-setting Present. Packing and field reads allocate nothing.
+GoX's source-defined `Optional[T]` uses a single cell whenever `T` is a `bool`,
+integer, float, `string`, or registered compact struct such as `Content`:
 
-Optionality is not entirely erased: `Optional[int]` and `int` remain distinct
-runtime types through `any`. These optional cells box at that boundary. Markers
-are compilation metadata, not permanent representation IDs.
+- A present, nonzero value uses `T`'s ordinary cell directly.
+- The zero cell represents missing (`Present == false`, zero `Value`).
+- A descriptor-owned marker distinguishes a *present* zero value from a missing
+  one, and additional markers preserve a nonzero `Value` with `Present == false`
+  (for example, setting `Value` before setting `Present`).
+- Packing and field reads allocate nothing.
 
-Nested optionals, slices, maps, arbitrary structs, and other payloads retain
-ordinary struct storage. Native-bound generic instances also retain their
-registered layout. These fallbacks preserve Go field mutation, nominal type
-identity, and nested presence states without assuming spare bits in every T.
+Optionality is never erased at runtime: `Optional[int]` and `int` remain
+distinct dynamic types through `any`, where compact optionals box at the
+interface boundary. Markers are per-compilation metadata rather than permanent
+representation IDs.
+
+Nested optionals, slices, maps, arbitrary structs, other payloads, and
+native-bound generic instances fall back to ordinary struct storage, preserving
+Go field mutation, nominal type identity, and nested presence without assuming
+spare bits in arbitrary types.
 
 ## Host integration
 
-`values.CellStruct` describes a two-field compact struct. `evmbind.Options`
-accepts native descriptors in `CellStructs`; generated and reflected bindings
-both use the descriptor. Binding fingerprints include this representation so
-stale generated wrappers cannot silently read the previous layout.
-
-`evm.Package.StructValues` lets a package choose storage for its source-defined
-generic structs at compilation. Returning nil keeps the ordinary layout. GoX
-registers its Optional policy through this hook; EVM does not import GoX.
-
-Use `Shape.FieldValue` and `Shape.LogicalKind` when inspecting logical values.
-`Shape.GetField`/`SetField` address flattened storage, not a compact value cell.
-Native adapters constructing compact optionals use the descriptor's Pack method.
+- **`values.CellStruct`** describes a two-field compact struct. Pass native
+  descriptors in `evmbind.Options.CellStructs`; both generated and reflected
+  bindings use them, and binding fingerprints include this layout so stale
+  generated wrappers are caught automatically.
+- **`evm.Package.StructValues`** lets a package choose compact storage for its
+  source-defined generic structs during compilation (returning `nil` keeps the
+  standard layout). GoX registers its `Optional` policy through this hook so
+  EVM never has to import GoX.
+- Use `Shape.FieldValue` and `Shape.LogicalKind` to inspect logical values
+  (`Shape.GetField` and `Shape.SetField` address flattened storage, not compact
+  cells). Native adapters constructing compact optionals call the descriptor's
+  `Pack` method.
 
 Tests cover contextual escaping, zero values, copy and field-pointer semantics,
-native and generated bindings, conversions to other named structs, `any`, map
-keys, and allocation-free packing. Application benchmark output is checked
-against `html/template` before timing.
+generated and reflected bindings, conversions to other named structs, `any`,
+map keys, and allocation-free packing. Application benchmark output is verified
+byte-for-byte against `html/template` before timing.

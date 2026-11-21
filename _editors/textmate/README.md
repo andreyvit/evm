@@ -1,8 +1,9 @@
 # GoX syntax highlighting
 
-Highlights `.gox` templates with Go, tags, interpolations, YAML frontmatter,
-JavaScript, and CSS. The grammar reuses the editor's grammars for those languages.
+Syntax highlighting for `.gox` templates covering Go, HTML tags,
+interpolations, YAML frontmatter, JavaScript, and CSS—reusing your editor's
+built-in grammars for each embedded language.
 
-From this directory, run `code --extensionDevelopmentPath="$PWD"` to try it in
-VS Code. The [GoX editor guide](https://github.com/andreyvit/evm/tree/main/_editors)
-covers packaging, TextMate bundle installation, and tests.
+To try it in VS Code, run `code --extensionDevelopmentPath="$PWD"` from this
+directory. For VSIX packaging, TextMate bundle installation, and tokenizer
+tests, see the [GoX editor guide](https://github.com/andreyvit/evm/tree/main/_editors).

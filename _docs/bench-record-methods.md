@@ -1,17 +1,18 @@
 # Explicit record method calls
 
-Measured on Apple M5 Max, darwin/arm64, Go 1.27.3:
+Measured on Apple M5 Max, `darwin/arm64`, Go 1.27.3:
 
 ```sh
 go test ./evmbind -run '^$' -bench '^BenchmarkRecordMethods$' \
     -benchmem -benchtime=500ms -count=3
 ```
 
-The helper reads earned, redeemed and expired properties and returns
-`earned - redeemed - expired`. Each benchmark operation performs 256 calculations;
-the table reports median **nanoseconds per calculation**, amortizing VM entry.
-Compilation, binding, encoding, materialization and VM warm-up are excluded.
-These are property-access/call benchmarks, not database scans.
+The benchmarked helper reads `earned`, `redeemed`, and `expired` properties and
+returns `earned - redeemed - expired`. Each benchmark operation runs 256
+calculations, and the table reports median **nanoseconds per calculation**
+(amortizing VM entry). Compilation, binding, encoding, materialization, and VM
+warm-up are outside the timer. These are property-access and call benchmarks,
+not database scans.
 
 | Record representation | Native Go helper | EVM registered helper | EVM inline arithmetic |
 | --- | ---: | ---: | ---: |
@@ -22,19 +23,23 @@ These are property-access/call benchmarks, not database scans.
 | Native struct, reflected fields | 27.37 | 41.49 | 46.39 |
 | Memory | 9.72 | 23.27 | 28.79 |
 
-Every measured path reports **0 B/op, 0 allocs/op**, including the complete
-warmed EVM invocation. Tests also assert zero allocations for 1,000 registered
-method calls in one invocation across all six representations.
+Every measured path reports **0 B/op and 0 allocs/op**, including the full
+warmed EVM invocation. Tests also assert zero allocations across 1,000
+registered method calls in a single invocation for all six representations.
 
-The EVM registered-helper column always uses generated method bindings.
-“Reflected fields” describes native struct property access, not reflective host
-function invocation. The latter is an optional compatibility fallback and is
-not allocation-free. String results are copied at the method boundary and are
-outside the allocation-free scalar calculation claim.
+A few clarifications:
 
-The generated method saves approximately 5–7 ns per calculation versus three
-separate EVM property reads and arithmetic instructions. Compared with direct
-Go, the EVM loop and host-call boundary add approximately 14–16 ns. Registration
-selects the method at compile/link time; the record retains its existing
-representation. There is no per-call method-name lookup, full decode, boxing or
-implicit conversion to a native struct.
+- The **EVM registered helper** column always uses generated method bindings.
+- **Reflected fields** refers to native struct property access, not reflective
+  host function invocation (the reflective fallback is optional and does
+  allocate).
+- String results are copied at the method boundary and are outside the
+  allocation-free scalar claim.
+
+Compared with three separate EVM property reads and inline arithmetic, a
+registered helper saves roughly 5–7 ns per calculation. Compared with calling
+the Go helper directly, the EVM loop and host-call boundary add roughly
+14–16 ns. Registration resolves the method at compile and link time while
+keeping the record in its existing representation—there is no per-call
+method-name lookup, full decode, boxing, or implicit conversion to a native
+struct.

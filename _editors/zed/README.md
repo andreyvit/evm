@@ -1,37 +1,39 @@
 # GoX for Zed
 
-Highlights `.gox` files automatically. The [GoX grammar](../tree-sitter-gox)
-extends Tree-sitter Go with markup and interpolation. Zed highlights
-frontmatter as YAML and uses JavaScript and CSS for script and style bodies.
+Automatic syntax highlighting for `.gox` files in Zed. The
+[GoX Tree-sitter grammar](../tree-sitter-gox) extends Tree-sitter Go with
+markup tags and interpolation, highlighting frontmatter as YAML and `<script>`
+/ `<style>` bodies as JavaScript and CSS.
 
-## Install from a checkout
+## Install from a local checkout
 
-In Zed, run **zed: install dev extension** and select `_editors/zed`.
-Zed fetches the grammar revision pinned in `extension.toml`.
+In Zed, open the command palette, run **zed: install dev extension**, and
+select `_editors/zed`. Zed fetches the grammar commit pinned in
+`extension.toml`.
 
-To test an unpushed grammar revision, make a copy of this directory outside
-the checkout. In the copy's manifest, set the grammar's `repository` to the
-checkout's `file://` URL, and set `rev` to the local grammar commit. Select
-the copy in Zed. Zed downloads the WASI SDK when it first builds a grammar.
+To test an *unpushed* grammar commit, copy `_editors/zed` outside this
+repository, point `repository` in the copy's `extension.toml` to this
+checkout's `file://` URL, set `rev` to your local commit, and install that copy
+in Zed. (Zed downloads the WASI SDK the first time it builds a grammar.)
 
 ## Update the grammar
 
 From `_editors/tree-sitter-gox`, run `tree-sitter generate` and
-`tree-sitter test` with Tree-sitter CLI 0.25.10. Commit the generated sources
-and update `grammars.gox.rev` to that commit. Rebuild the dev extension in Zed
-and open `gox/testdata/examples/showcase.gox` to check highlighting.
+`tree-sitter test` with Tree-sitter CLI 0.25.10. Commit the generated files,
+update `grammars.gox.rev` in `extension.toml` to that commit, rebuild the dev
+extension in Zed, and open `gox/testdata/examples/showcase.gox` to verify.
 
-## Publish
+## Publish to the Zed registry
 
-Push the grammar and extension commits to the public EVM repository. Fork
-`zed-industries/extensions` and add EVM as a submodule over HTTPS.
+1. Push the grammar and extension commits to the public EVM repository.
+2. Fork `zed-industries/extensions` and add EVM as an HTTPS submodule:
 
 ```sh
 git submodule add https://github.com/andreyvit/evm extensions/gox
 ```
 
-Pin the submodule to the extension release commit on a public branch. Add
-the following entry to the registry's `extensions.toml`.
+3. Pin the submodule to the release commit on a public branch and add this
+   entry to `extensions.toml` (matching the version in `extension.toml`):
 
 ```toml
 [gox]
@@ -40,6 +42,6 @@ path = "_editors/zed"
 version = "0.1.0"
 ```
 
-Match the extension manifest's version, run `pnpm sort-extensions`, and open
-a PR against `zed-industries/extensions`. Zed publishes the extension after
-the PR merges. [Zed publishing guide](https://zed.dev/docs/extensions/publishing/publishing-guide)
+4. Run `pnpm sort-extensions` and open a PR against
+   `zed-industries/extensions`. Zed publishes the extension once merged—see the
+   [Zed publishing guide](https://zed.dev/docs/extensions/publishing/publishing-guide).

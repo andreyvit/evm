@@ -11,7 +11,6 @@ import (
 	"unicode"
 
 	"github.com/andreyvit/evm"
-	"github.com/andreyvit/evm/evmcompiler"
 	"golang.org/x/tools/go/ast/astutil"
 )
 
@@ -133,7 +132,7 @@ func (c *compiler) collectClasses() {
 }
 
 func (c *compiler) pruneImports() {
-	_, info, _ := evmcompiler.AnalyzeFiles(c.files, c.syntax, c.packages...)
+	_, info, _ := c.analyze(c.files, c.syntax)
 	used := map[string]bool{}
 	if info != nil {
 		ast.Inspect(c.file, func(n ast.Node) bool {

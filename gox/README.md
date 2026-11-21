@@ -823,6 +823,14 @@ missing imports; see [formatting rules](#formatting-rules).
 | `ImplicitTypes` | Types whose parameters are [implicit](#implicit-arguments) |
 | `ParseFrontmatter` | Parser for [file metadata](#files-and-frontmatter) |
 | `AllowMissingPackage` | Accept legacy files without a package clause |
+| `Environment` | Prepared packages, instead of a package list |
+
+`gox.NewEnvironment(packages...)` type-checks the packages, the GoX runtime
+and the standard packages once. With `Options{Environment: env}`, the compile,
+preprocess and format methods take no packages and check only the template's
+own sources. Build one `Environment` per package set and keep it: it never
+changes and is safe for concurrent use. `env.Compiler()` compiles ordinary Go
+against the same packages.
 
 To let templates use a Go package, give [`evmbind.New`](../evmbind/README.md)
 that package's own source; it exposes every exported type, method, function

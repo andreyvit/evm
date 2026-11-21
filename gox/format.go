@@ -125,6 +125,12 @@ func (o Options) FormatSource(filename, source string, packages ...evm.Package) 
 	if err != nil {
 		return "", err
 	}
+	if o.Environment != nil {
+		if len(packages) != 0 {
+			return "", fmt.Errorf("Options.Environment supplies the packages; pass none")
+		}
+		packages = o.Environment.packages
+	}
 	addFormattingImports(files, file, packages)
 	var buf bytes.Buffer
 	if err := format.Node(&buf, files, file); err != nil {

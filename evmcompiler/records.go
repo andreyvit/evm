@@ -107,7 +107,7 @@ func (e *typeEnvironment) defineRecords(pkg *types.Package, records []*evm.Recor
 		fieldType = func(k kvo.AnyType) types.Type {
 			if child := k.Model(); child != nil {
 				if decl := byModel[identity{child, r.Mutable}]; decl != nil {
-					return e.toGo[decl.Pointer]
+					return e.goOf(decl.Pointer)
 				}
 				return nil
 			}
@@ -118,7 +118,7 @@ func (e *typeEnvironment) defineRecords(pkg *types.Package, records []*evm.Recor
 							fieldErr = err
 							return nil
 						}
-						return e.toGo[shared.Type]
+						return e.goOf(shared.Type)
 					}
 				}
 			}
@@ -136,7 +136,7 @@ func (e *typeEnvironment) defineRecords(pkg *types.Package, records []*evm.Recor
 						fieldErr = err
 						return nil
 					}
-					t := e.toGo[scalar]
+					t := e.goOf(scalar)
 					if t == nil {
 						fieldErr = fmt.Errorf("native scalar %s is not declared", scalar.Name())
 					}
@@ -186,7 +186,7 @@ func (e *typeEnvironment) defineRecords(pkg *types.Package, records []*evm.Recor
 			if e.recordFacade {
 				selectorTypes[prop.Code()] = t
 			} else {
-				recv := types.NewVar(token.NoPos, pkg, "", e.toGo[r.Pointer])
+				recv := types.NewVar(token.NoPos, pkg, "", e.goOf(r.Pointer))
 				res := types.NewVar(token.NoPos, pkg, "", types.NewPointer(t))
 				sig := types.NewSignatureType(recv, nil, nil, nil, types.NewTuple(res), false)
 				fn := types.NewFunc(token.NoPos, pkg, property.method(), sig)
@@ -236,7 +236,7 @@ func (c *typedCompiler) registerJSONTypes(pos token.Pos) {
 	if c.module.JSONTypes.Object != 0 {
 		return
 	}
-	anyT := c.env.toGo[values.AnyType]
+	anyT := c.env.goOf(values.AnyType)
 	id := func(t types.Type) uint32 { return c.dynamicType(t, pos) }
 	c.module.JSONTypes = evm.JSONTypes{Boolean: id(types.Typ[types.Bool]), Integer: id(types.Typ[types.Int64]), Unsigned: id(types.Typ[types.Uint64]), Float: id(types.Typ[types.Float64]), String: id(types.Typ[types.String]), Array: id(types.NewSlice(anyT)), Object: id(types.NewMap(types.Typ[types.String], anyT))}
 }
@@ -393,16 +393,7 @@ func (f *lowerer) foldChildWord(ref *ssa.Call, leaf recordProperty, typ types.Ty
 	return true
 }
 
-func (f *lowerer) isReadRecord(t *values.Type) bool {
-	for _, p := range f.c.env.packages {
-		for _, r := range p.Records {
-			if r.Pointer == t {
-				return !r.Mutable
-			}
-		}
-	}
-	return false
-}
+func (f *lowerer) isReadRecord(t *values.Type) bool { return f.c.env.readRecords[t] }
 
 // A nonescaping row may occupy one slot per producing instruction and call
 // depth. Every observer must finish before that instruction runs again.
@@ -525,16 +516,7 @@ func (e *typeEnvironment) rewriteRecordOperations(file *ast.File, info *types.In
 func recordRepr(r *evm.RecordType) values.Repr {
 	return values.Pair
 }
-func (e *typeEnvironment) isReadRecord(t *values.Type) bool {
-	for _, p := range e.packages {
-		for _, r := range p.Records {
-			if r.Pointer == t {
-				return !r.Mutable
-			}
-		}
-	}
-	return false
-}
+func (e *typeEnvironment) isReadRecord(t *values.Type) bool { return e.readRecords[t] }
 
 // A new defined type would inherit the opaque Go facade but not its row
 // representation. Type aliases preserve the original identity and are allowed.
@@ -556,7 +538,7 @@ func (c *typedCompiler) checkRecordDerivedTypes(info *types.Info) {
 		}
 		for _, pkg := range c.env.packages {
 			for _, row := range pkg.Records {
-				original := c.env.toGo[row.Value]
+				original := c.env.goOf(row.Value)
 				if original != nil && name.Type() != original && types.Identical(t, original.Underlying()) {
 					c.fail(name.Pos(), "cannot define a new type based on model row %s; use a type alias", row.Name)
 					break

@@ -25,52 +25,89 @@ var goBasicValues = map[types.BasicKind]*values.Type{
 	types.Float32: values.Float32Type, types.Float64: values.Float64, types.String: values.StringType,
 }
 
+type lateType struct {
+	pkg  *types.Package
+	name string
+}
+
 type sourceInstanceCheck struct {
 	generic types.Type
 	args    []types.Type
 }
 
 type typeEnvironment struct {
-	nativeSourceMemo        map[*values.Type]bool
-	nativeMethodsByBase     map[*values.Type][]*evm.ExternalMethod
-	sharedOwners            map[*values.Type]string
+	// base is the frozen environment this one extends; see overlay.go.
+	base *typeEnvironment
+	// frozen environments never import or declare: every package was
+	// imported before freezing. A frozen environment is read concurrently.
+	frozen bool
+
+	// Derived from the package declarations alone. Never written after
+	// newTypeEnvironment returns.
+	packages            map[string]*evm.Package
+	nativeTypes         map[*values.Type]nativeType
+	unnamedNativeTypes  []*values.Type
+	recordOwners        map[*values.Type]string
+	recordValues        map[*values.Type]*evm.RecordType
+	readRecords         map[*values.Type]bool // record pointer to "is read-only"
+	nativeMethodsByBase map[*values.Type][]*evm.ExternalMethod
+	sharedOwners        map[*values.Type]string
+	nativeAllocations   map[*values.Type]*values.NativeLayout
+	nativeViewLeaves    map[*values.Type]bool
+
+	// Written while importing packages. An overlay shares these with its base.
+	declared                map[string]*types.Package
+	imported                map[string]*types.Package
+	importErrors            map[string]error
+	standard                map[string]*standardPackage
+	natives                 map[*types.Func]nativeBinding
+	nativeReceiverMethods   map[nativeReceiverMethod]nativeBinding
+	genericNativeDecls      map[*types.Func]bool
 	attachedNativeMethods   map[*evm.ExternalMethod]bool
 	attachedNativeFunctions map[*types.Func]bool
+	recordOperations        map[string]string // internal identifier to public type selector
+	recordFields            map[*types.Var]recordProperty
+	recordMethods           map[*types.Func]recordProperty
+	recordFacade            bool
 
-	pendingSourceChecks   []sourceInstanceCheck
-	declared              map[string]*types.Package
-	pendingMapKeys        []types.Type
-	importDepth           int
-	importing             map[string]bool
-	pendingNativeStorage  []nativeStorageShape
-	shaping               map[*values.Shape]bool
-	syntheticTypes        map[*values.Shape]reflect.Type
-	unnamedNativeTypes    []*values.Type
-	importErrors          map[string]error
-	nativeAllocations     map[*values.Type]*values.NativeLayout
-	nativeViewLeaves      map[*values.Type]bool
-	nativeLayouts         map[*values.Type]*values.NativeLayout
-	recordOperations      map[string]string // internal identifier to public type selector
-	recordFacade          bool
-	guest                 *types.Package
-	recordFields          map[*types.Var]recordProperty
-	recordMethods         map[*types.Func]recordProperty
-	files                 *token.FileSet
-	standard              map[string]*standardPackage
-	shapeOrder            []*values.Shape
-	buildingShapes        map[*values.Shape]bool
-	recordOwners          map[*values.Type]string
-	recordValues          map[*values.Type]*evm.RecordType
-	nativeTypes           map[*values.Type]nativeType
-	natives               map[*types.Func]nativeBinding
-	nativeReceiverMethods map[nativeReceiverMethod]nativeBinding
-	genericNativeDecls    map[*types.Func]bool
-	resolving             map[*values.Type]bool
-	packages              map[string]*evm.Package
-	imported              map[string]*types.Package
-	toGo                  map[*values.Type]types.Type
-	fromGo                typeutil.Map
-	shapes                typeutil.Map
+	// lateTypes are the types declared while freezing resolved dynamic and
+	// entry types; see goType.
+	lateTypes map[lateType]bool
+
+	// Set when an environment is frozen; see freeze in environment.go.
+	importOrder       []*types.Package              // by path
+	reach             map[*types.Package]packageSet // what a source importing the key can use
+	shapePackages     []packageSet                  // by shapeOrder index: the packages whose types the shape's type names
+	sourceTexts       map[*types.Package]map[string]string
+	dereferenceWrites map[token.Pos]bool
+
+	// Written while importing and while compiling. An overlay has its own
+	// and reads the base through the accessors in overlay.go.
+	toGo             map[*values.Type]types.Type
+	fromGo           typeutil.Map
+	shapes           typeutil.Map
+	shapeOrder       []*values.Shape
+	nativeLayouts    map[*values.Type]*values.NativeLayout
+	syntheticTypes   map[*values.Shape]reflect.Type
+	nativeSourceMemo map[*values.Type]bool
+	guest            *types.Package
+	files            *token.FileSet
+
+	// uses records, while a universe is built for freezing, which packages
+	// each package imports, declares or takes types from as it is imported.
+	// A lazily built environment imports those along with it.
+	uses  map[string]map[string]bool
+	using []string // the packages being imported or declared, innermost last
+
+	// Work in progress.
+	pendingSourceChecks  []sourceInstanceCheck
+	pendingMapKeys       []types.Type
+	pendingNativeStorage []nativeStorageShape
+	importDepth          int
+	importing            map[string]bool
+	shaping              map[*values.Shape]bool
+	buildingShapes       map[*values.Shape]bool
+	resolving            map[*values.Type]bool
 }
 
 func newTypeEnvironment(packages []evm.Package) (*typeEnvironment, error) {
@@ -81,17 +118,17 @@ func newTypeEnvironment(packages []evm.Package) (*typeEnvironment, error) {
 	if err := evm.ValidateDirectBindings(packages); err != nil {
 		return nil, err
 	}
-	e := &typeEnvironment{nativeAllocations: map[*values.Type]*values.NativeLayout{}, nativeLayouts: map[*values.Type]*values.NativeLayout{}, recordOwners: make(map[*values.Type]string), recordValues: make(map[*values.Type]*evm.RecordType), recordMethods: make(map[*types.Func]recordProperty), recordFields: make(map[*types.Var]recordProperty), standard: make(map[string]*standardPackage), buildingShapes: make(map[*values.Shape]bool), nativeTypes: make(map[*values.Type]nativeType), natives: make(map[*types.Func]nativeBinding), resolving: make(map[*values.Type]bool), packages: make(map[string]*evm.Package), imported: make(map[string]*types.Package), toGo: make(map[*values.Type]types.Type)}
+	e := &typeEnvironment{nativeAllocations: map[*values.Type]*values.NativeLayout{}, nativeLayouts: map[*values.Type]*values.NativeLayout{}, recordOwners: make(map[*values.Type]string), readRecords: make(map[*values.Type]bool), recordValues: make(map[*values.Type]*evm.RecordType), recordMethods: make(map[*types.Func]recordProperty), recordFields: make(map[*types.Var]recordProperty), standard: make(map[string]*standardPackage), buildingShapes: make(map[*values.Shape]bool), nativeTypes: make(map[*values.Type]nativeType), natives: make(map[*types.Func]nativeBinding), resolving: make(map[*values.Type]bool), packages: make(map[string]*evm.Package), imported: make(map[string]*types.Package), toGo: make(map[*values.Type]types.Type)}
 	for k, v := range goBasicValues {
 		e.toGo[v] = types.Typ[k]
 		e.fromGo.Set(types.Typ[k], v)
 	}
 	e.toGo[values.AnyType] = types.NewInterfaceType(nil, nil).Complete()
-	e.fromGo.Set(e.toGo[values.AnyType], values.AnyType)
+	e.fromGo.Set(e.goOf(values.AnyType), values.AnyType)
 	e.toGo[values.ErrorType] = types.Universe.Lookup("error").Type()
-	e.fromGo.Set(e.toGo[values.ErrorType], values.ErrorType)
-	e.toGo[evm.ErrorSliceType] = types.NewSlice(e.toGo[values.ErrorType])
-	e.fromGo.Set(e.toGo[evm.ErrorSliceType], evm.ErrorSliceType)
+	e.fromGo.Set(e.goOf(values.ErrorType), values.ErrorType)
+	e.toGo[evm.ErrorSliceType] = types.NewSlice(e.goOf(values.ErrorType))
+	e.fromGo.Set(e.goOf(evm.ErrorSliceType), evm.ErrorSliceType)
 	for i := range packages {
 		p := &packages[i]
 		if err := validateSourceFiles(p.Path, p.Sources()); err != nil {
@@ -141,6 +178,7 @@ func newTypeEnvironment(packages []evm.Package) (*typeEnvironment, error) {
 			e.recordOwners[r.Pointer] = p.Path
 			e.recordOwners[r.Value] = p.Path
 			e.recordValues[r.Value] = r
+			e.readRecords[r.Pointer] = !r.Mutable
 		}
 		for _, d := range p.Types {
 			if d.SourceName != "" && !p.HasSource() {
@@ -159,7 +197,7 @@ func newTypeEnvironment(packages []evm.Package) (*typeEnvironment, error) {
 				}
 				return nil, fmt.Errorf("duplicate native type")
 			}
-			if e.toGo[t] != nil {
+			if e.goOf(t) != nil {
 				// Native builtin interfaces add storage codecs, not new Go types.
 				if d.Name == "" && d.Shape.Kind == values.InterfaceKind && ((t == values.AnyType && d.NativeCodec == evm.NativeAnyCodec && len(d.Shape.Methods) == 0) || (t == values.ErrorType && d.NativeCodec == evm.NativeErrorCodec)) {
 					continue
@@ -197,7 +235,7 @@ func newTypeEnvironment(packages []evm.Package) (*typeEnvironment, error) {
 			if r.NativeAllocation != nil {
 				e.nativeAllocations[r.Pointer] = evm.NativeModelPointerLayout(r.Model, r.NativeAllocation)
 				e.nativeLayouts[r.Value] = evm.NativeModelValueLayout(r.Model, r.NativeAllocation)
-				e.nativeAllocations[r.Value] = e.nativeLayouts[r.Value]
+				e.nativeAllocations[r.Value] = e.nativeLayout(r.Value)
 			}
 		}
 	}
@@ -220,6 +258,9 @@ func newTypeEnvironment(packages []evm.Package) (*typeEnvironment, error) {
 	return e, nil
 }
 func (e *typeEnvironment) Import(p string) (_ *types.Package, importErr error) {
+	if e.frozen {
+		return e.frozenPackage(p)
+	}
 	defer func() {
 		if importErr != nil && e.importDepth == 0 {
 			e.pendingSourceChecks = nil
@@ -274,6 +315,12 @@ func (e *typeEnvironment) Import(p string) (_ *types.Package, importErr error) {
 	return pkg, nil
 }
 func (e *typeEnvironment) importPackage(p string) (_ *types.Package, importErr error) {
+	if e.frozen {
+		return e.frozenPackage(p)
+	}
+	if e.uses != nil {
+		defer e.enter(p)()
+	}
 	e.importDepth++
 	defer func() { e.importDepth-- }()
 	if err := e.importErrors[p]; err != nil {
@@ -328,7 +375,7 @@ func (e *typeEnvironment) importPackage(p string) (_ *types.Package, importErr e
 			if d.SourceName != "" || d.ScalarBase != nil || d.Shape.Type == values.ErrorType && d.NativeCodec == evm.NativeErrorCodec {
 				continue
 			}
-			if d.Name != "" && e.toGo[d.Shape.Type].Underlying() != nil {
+			if d.Name != "" && e.goOf(d.Shape.Type).Underlying() != nil {
 				continue
 			}
 			typ, err := e.goShape(d.Shape, pkg)
@@ -336,7 +383,7 @@ func (e *typeEnvironment) importPackage(p string) (_ *types.Package, importErr e
 				return nil, err
 			}
 			if d.Name != "" {
-				e.toGo[d.Shape.Type].(*types.Named).SetUnderlying(typ.Underlying())
+				e.goOf(d.Shape.Type).(*types.Named).SetUnderlying(typ.Underlying())
 			} else if err := e.bindNative(d.Shape.Type, typ); err != nil {
 				return nil, err
 			}
@@ -375,7 +422,7 @@ func (e *typeEnvironment) importPackage(p string) (_ *types.Package, importErr e
 		var bindSource func(evm.TypeDecl) error
 		var bindArgument func(*values.Shape, map[*values.Shape]bool) error
 		bindArgument = func(shape *values.Shape, seen map[*values.Shape]bool) error {
-			if shape == nil || seen[shape] || e.toGo[shape.Type] != nil {
+			if shape == nil || seen[shape] || e.goOf(shape.Type) != nil {
 				return nil
 			}
 			seen[shape] = true
@@ -482,7 +529,7 @@ func (e *typeEnvironment) importPackage(p string) (_ *types.Package, importErr e
 			if err != nil {
 				return nil, err
 			}
-			e.toGo[d.Shape.Type].(*types.Named).SetUnderlying(t.Underlying())
+			e.goOf(d.Shape.Type).(*types.Named).SetUnderlying(t.Underlying())
 		}
 		for _, d := range decl.Types {
 			if d.Name != "" || d.SourceName != "" {
@@ -497,6 +544,15 @@ func (e *typeEnvironment) importPackage(p string) (_ *types.Package, importErr e
 			}
 			if err := e.bindNative(d.Shape.Type, gt); err != nil {
 				return nil, err
+			}
+		}
+		// The first declaration of a receiver and name binds its source method.
+		methods := make(map[nativeMethodKey]*evm.ExternalMethod, len(decl.Methods))
+		for i := range decl.Methods {
+			m := &decl.Methods[i]
+			key := nativeMethodKey{m.Receiver, m.Name}
+			if methods[key] == nil {
+				methods[key] = m
 			}
 		}
 		for _, file := range e.standard[p].files {
@@ -520,12 +576,9 @@ func (e *typeEnvironment) importPackage(p string) (_ *types.Package, importErr e
 				if err != nil {
 					return nil, err
 				}
-				for _, m := range decl.Methods {
-					if m.Name == obj.Name() && m.Receiver == recv {
-						binding := m.Binding()
-						e.natives[obj] = nativeBinding{importKey{p, m.Name, recv}, &binding}
-						break
-					}
+				if m := methods[nativeMethodKey{recv, obj.Name()}]; m != nil {
+					binding := m.Binding()
+					e.natives[obj] = nativeBinding{importKey{p, m.Name, recv}, &binding}
 				}
 			}
 		}
@@ -641,7 +694,7 @@ func (e *typeEnvironment) importPackage(p string) (_ *types.Package, importErr e
 	}
 
 	for _, d := range decl.Types {
-		actual, err := e.shape(e.toGo[d.Shape.Type])
+		actual, err := e.shape(e.goOf(d.Shape.Type))
 		if err != nil {
 			return nil, err
 		}
@@ -695,7 +748,13 @@ func (e *typeEnvironment) goType(t *values.Type, pkg *types.Package) (types.Type
 			}
 		}
 	}
-	if gt := e.toGo[t]; gt != nil {
+	if gt := e.goOf(t); gt != nil {
+		if e.uses != nil {
+			// Without the binding this would declare or import the owner.
+			for _, owner := range []string{e.nativeTypes[t].pkg, e.recordOwners[t], e.sharedOwners[t]} {
+				e.use(owner)
+			}
+		}
 		if named, ok := gt.(*types.Named); ok && named.Underlying() == nil && e.nativeNeedsSource(t) {
 			owner := e.nativeTypes[t].pkg
 			if e.importing[owner] {
@@ -722,7 +781,7 @@ func (e *typeEnvironment) goType(t *values.Type, pkg *types.Package) (types.Type
 				if _, err := e.importPackage(path); err != nil {
 					return nil, err
 				}
-				if gt := e.toGo[t]; gt != nil {
+				if gt := e.goOf(t); gt != nil {
 					return gt, nil
 				}
 				return nil, fmt.Errorf("source type %s is not bound yet", t.Name())
@@ -733,7 +792,7 @@ func (e *typeEnvironment) goType(t *values.Type, pkg *types.Package) (types.Type
 		if _, err := e.declarePackage(owner); err != nil {
 			return nil, err
 		}
-		if gt := e.toGo[t]; gt != nil {
+		if gt := e.goOf(t); gt != nil {
 			return gt, nil
 		}
 		return nil, fmt.Errorf("unresolved record type %s", t.Name())
@@ -749,7 +808,7 @@ func (e *typeEnvironment) goType(t *values.Type, pkg *types.Package) (types.Type
 		if err != nil {
 			return nil, err
 		}
-		if gt := e.toGo[t]; gt != nil {
+		if gt := e.goOf(t); gt != nil {
 			return gt, nil
 		}
 		if e.resolving[t] {
@@ -779,9 +838,27 @@ func (e *typeEnvironment) goType(t *values.Type, pkg *types.Package) (types.Type
 	if !token.IsIdentifier(name) {
 		return nil, fmt.Errorf("invalid type name %s", name)
 	}
+	late := lateType{pkg, name}
+	if e.frozen {
+		// Declaring the type would write to a package shared by other compiles.
+		// Freezing resolved every type a declaration names, so only a name
+		// that is already taken reaches this point.
+		if pkg.Scope().Lookup(name) != nil || e.lateTypes[late] {
+			return nil, fmt.Errorf("duplicate type name %s", name)
+		}
+		return nil, fmt.Errorf("external type %s is not part of the prepared environment", t.Name())
+	}
 	obj := types.NewTypeName(token.NoPos, pkg, name, nil)
 	gt := types.NewNamed(obj, types.Typ[types.Int64], nil)
-	if pkg.Scope().Insert(obj) != nil {
+	if e.lateTypes != nil {
+		// A lazily built environment declares this type when lowering reaches
+		// it, after the source was checked, so the source cannot name it.
+		// Keep it out of the scope that every later source is checked against.
+		if pkg.Scope().Lookup(name) != nil || e.lateTypes[late] {
+			return nil, fmt.Errorf("duplicate type name %s", name)
+		}
+		e.lateTypes[late] = true
+	} else if pkg.Scope().Insert(obj) != nil {
 		return nil, fmt.Errorf("duplicate type name %s", name)
 	}
 	e.toGo[t] = gt
@@ -878,6 +955,18 @@ func (e *typeEnvironment) knownAliasTarget(t *values.Type) bool {
 
 // Record references need type identities, not the owner's source or methods.
 func (e *typeEnvironment) declarePackage(p string) (_ *types.Package, declarationErr error) {
+	if e.frozen {
+		if pkg := e.declared[p]; pkg != nil {
+			return pkg, nil
+		}
+		if _, ok := e.packages[p]; ok {
+			return e.frozenPackage(p)
+		}
+		return nil, fmt.Errorf("package %q is not exposed", p)
+	}
+	if e.uses != nil {
+		defer e.enter(p)()
+	}
 	if err := e.importErrors[p]; err != nil {
 		return nil, err
 	}
@@ -941,7 +1030,7 @@ func (e *typeEnvironment) declarePackage(p string) (_ *types.Package, declaratio
 		if !token.IsIdentifier(d.Name) || d.Name == "_" {
 			return nil, fmt.Errorf("invalid export name %q", d.Name)
 		}
-		base := e.toGo[d.ScalarBase]
+		base := e.goOf(d.ScalarBase)
 		if _, ok := base.(*types.Basic); !ok {
 			return nil, fmt.Errorf("invalid scalar base for %s", d.Name)
 		}
@@ -965,7 +1054,7 @@ func (e *typeEnvironment) declarePackage(p string) (_ *types.Package, declaratio
 			continue
 		}
 		if d.Name != "" {
-			named := e.toGo[d.Shape.Type].(*types.Named)
+			named := e.goOf(d.Shape.Type).(*types.Named)
 			if named.Underlying() != nil {
 				continue
 			}

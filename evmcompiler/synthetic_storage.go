@@ -18,7 +18,7 @@ func (e *typeEnvironment) requiresNativeStorage(t types.Type) bool {
 	t = types.Unalias(t)
 	switch u := t.Underlying().(type) {
 	case *types.Struct:
-		if vt, _ := e.fromGo.At(t).(*values.Type); e.nativeLayouts[vt] != nil {
+		if vt := e.typeOf(t); e.nativeLayout(vt) != nil {
 			return true
 		}
 		for i := 0; i < u.NumFields(); i++ {
@@ -27,7 +27,7 @@ func (e *typeEnvironment) requiresNativeStorage(t types.Type) bool {
 			}
 		}
 	case *types.Array:
-		if vt, _ := e.fromGo.At(t).(*values.Type); e.nativeLayouts[vt] != nil {
+		if vt := e.typeOf(t); e.nativeLayout(vt) != nil {
 			return true
 		}
 		return e.requiresNativeStorage(u.Elem())
@@ -39,7 +39,7 @@ func (e *typeEnvironment) physicalType(s *values.Shape) reflect.Type {
 	if s.Native != nil && s.Native.GoType != nil {
 		return s.Native.GoType
 	}
-	return e.syntheticTypes[s]
+	return e.syntheticType(s)
 }
 
 type nativeStorageShape struct {

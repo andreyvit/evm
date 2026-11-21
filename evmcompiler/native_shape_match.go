@@ -10,7 +10,7 @@ import (
 // Match structurally first: importing every candidate would pull unrelated
 // host packages into a script merely because they expose a map or slice.
 func (e *typeEnvironment) resolveDeclaredShape(t types.Type) error {
-	if e.fromGo.At(t) != nil {
+	if e.typeOf(t) != nil {
 		return nil
 	}
 	if _, named := t.(*types.Named); named {
@@ -31,7 +31,7 @@ func (e *typeEnvironment) resolveDeclaredShape(t types.Type) error {
 
 func (e *typeEnvironment) matchesDeclaredShape(t types.Type, s *values.Shape) bool {
 	t = types.Unalias(t)
-	if known := e.toGo[s.Type]; known != nil {
+	if known := e.goOf(s.Type); known != nil {
 		return types.Identical(t, known)
 	}
 	if d, ok := e.nativeTypes[s.Type]; ok && d.decl.Name != "" {

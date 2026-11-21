@@ -38,6 +38,17 @@ func (options Options) CompileFiles(entry string, sources map[string]string, pac
 }
 
 func (options Options) compileSources(entry string, sources map[string]string, packages ...evm.Package) (*Template, error) {
+	tmpl, err := options.compileOnce(entry, sources, packages)
+	if crossCheck != nil && options.Environment == nil {
+		crossCheck(options, entry, sources, packages, tmpl, err)
+	}
+	return tmpl, err
+}
+
+// crossCheck, when set, receives every package-list compile; see crosscheck.go.
+var crossCheck func(options Options, entry string, sources map[string]string, packages []evm.Package, tmpl *Template, err error)
+
+func (options Options) compileOnce(entry string, sources map[string]string, packages []evm.Package) (*Template, error) {
 	result, err := options.preprocessSources(entry, sources, packages...)
 	if err != nil {
 		return nil, err
@@ -50,14 +61,19 @@ func (options Options) preprocessSources(entry string, sources map[string]string
 	if options.Format > CSSFormat {
 		return nil, fmt.Errorf("invalid output format")
 	}
+	packages, environment, err := options.environment(packages)
+	if err != nil {
+		return nil, err
+	}
 	c := &compiler{
 		implicitTypes: options.ImplicitTypes,
-		files:         token.NewFileSet(),
 		mappings:      map[string][]evm.SourcePosition{}, originals: map[string]*token.File{},
-		outputMaps: map[string]*generatedMap{},
-		packages:   withBuiltinPackages(packages),
-		template:   &Template{sources: maps.Clone(sources), format: options.Format, GeneratedSources: map[string]string{}},
+		outputMaps:  map[string]*generatedMap{},
+		packages:    packages,
+		environment: environment,
+		template:    &Template{sources: maps.Clone(sources), format: options.Format, GeneratedSources: map[string]string{}},
 	}
+	c.files = c.newFileSet()
 	keys := slices.Sorted(maps.Keys(sources))
 	if len(keys) == 0 {
 		return nil, fmt.Errorf("a source file is required")
@@ -219,7 +235,7 @@ func _goxMark(id int, args ...any) {}
 		if round >= 64 {
 			return nil, fmt.Errorf("GoX type lowering did not converge")
 		}
-		c.pkg, c.info, err = evmcompiler.AnalyzeFiles(c.files, c.syntax, c.packages...)
+		c.pkg, c.info, err = c.analyze(c.files, c.syntax)
 		if c.info == nil {
 			return nil, err
 		}
@@ -268,7 +284,7 @@ func _goxMark(id int, args ...any) {}
 			break
 		}
 	}
-	c.pkg, c.info, err = evmcompiler.AnalyzeFiles(c.files, c.syntax, c.packages...)
+	c.pkg, c.info, err = c.analyze(c.files, c.syntax)
 	if c.info == nil {
 		return nil, err
 	}
@@ -326,7 +342,7 @@ func _goxMark(id int, args ...any) {}
 		c.template.GeneratedSource += output.String() + "\n"
 	}
 	// Final type checking belongs to preprocessing; SSA and bytecode do not.
-	loweredFiles := token.NewFileSet()
+	loweredFiles := c.newFileSet()
 	var lowered []*ast.File
 	for _, name := range slices.Sorted(maps.Keys(c.template.GeneratedSources)) {
 		source := withoutLineDirectives(c.template.GeneratedSources[name])
@@ -336,7 +352,7 @@ func _goxMark(id int, args ...any) {}
 		}
 		lowered = append(lowered, file)
 	}
-	if _, _, err := evmcompiler.AnalyzeFiles(loweredFiles, lowered, c.packages...); err != nil {
+	if _, _, err := c.analyze(loweredFiles, lowered); err != nil {
 		return nil, c.remapCompileError(err)
 	}
 	return &Preprocessed{GeneratedSources: c.template.GeneratedSources, compiler: c}, nil
@@ -349,7 +365,7 @@ func (p *Preprocessed) Compile() (_ *Template, err error) {
 	tmpl := *c.template
 	c.template = &tmpl
 	c.outputMaps = map[string]*generatedMap{}
-	module, err := evmcompiler.CompileFiles(c.template.GeneratedSources, c.packages...)
+	module, err := c.compileGenerated()
 	if err != nil {
 		return nil, c.remapCompileError(err)
 	}

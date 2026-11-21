@@ -45,17 +45,13 @@ type typedCompiler struct {
 	callSignatures    map[*values.Shape]uint32
 }
 
-func compileTyped(filename, source string, packages []evm.Package, options Options) (*evm.Module, error) {
-	return compileTypedFiles(map[string]string{filename: source}, packages, options)
-}
-
-func compileTypedFiles(sources map[string]string, packages []evm.Package, options Options) (*evm.Module, error) {
+func compileTypedFiles(sources map[string]string, environment *Environment, options Options) (*evm.Module, error) {
 	filenames := slices.Sorted(maps.Keys(sources))
 	if len(filenames) == 0 {
 		return nil, Diagnostics{{Message: "a source file is required"}}
 	}
 	filename := filenames[0]
-	c := &typedCompiler{dereferenceWrites: make(map[token.Pos]bool), addedLines: make(map[string]int), invokes: make(map[evm.Invoke]uint32), dynamic: make(map[*values.Shape]uint32), filename: filename, files: token.NewFileSet(), functions: make(map[*ssa.Function]uint32), globals: make(map[*ssa.Global]uint32), imports: make(map[importKey]uint32), words: make(map[uint64]uint32), strings: make(map[string]uint32), conversions: make(map[evm.Conversion]uint16), shapes: make(map[*values.Shape]uint16), refs: make(map[*ssa.Function]uint32), callSignatures: make(map[*values.Shape]uint32)}
+	c := &typedCompiler{dereferenceWrites: make(map[token.Pos]bool), addedLines: make(map[string]int), invokes: make(map[evm.Invoke]uint32), dynamic: make(map[*values.Shape]uint32), filename: filename, files: environment.NewFileSet(), functions: make(map[*ssa.Function]uint32), globals: make(map[*ssa.Global]uint32), imports: make(map[importKey]uint32), words: make(map[uint64]uint32), strings: make(map[string]uint32), conversions: make(map[evm.Conversion]uint16), shapes: make(map[*values.Shape]uint16), refs: make(map[*ssa.Function]uint32), callSignatures: make(map[*values.Shape]uint32)}
 	c.module.NoOptimization = options.NoOptimization
 	c.module.StrictCallWindows = true
 	total := 0
@@ -67,12 +63,11 @@ func compileTypedFiles(sources map[string]string, packages []evm.Package, option
 		return nil, c.errors
 	}
 	var err error
-	c.env, err = newTypeEnvironment(packages)
+	c.env, err = environment.universe(environment.records, c.files)
 	if err != nil {
 		c.fail(token.NoPos, "%v", err)
 		return nil, c.errors
 	}
-	c.env.files = c.files
 	c.module.Sources = maps.Clone(sources)
 	packageName := "plugin"
 	for _, filename := range filenames {
@@ -93,17 +88,15 @@ func compileTypedFiles(sources map[string]string, packages []evm.Package, option
 			source = "package " + packageName + "\n" + source
 			c.addedLines[filename] = 1
 		}
+		// The parser registers the file at the next free base.
+		base := token.Pos(c.files.Base())
 		file, err := parser.ParseFile(c.files, filename, source, parser.SkipObjectResolution)
 		if err != nil {
 			for _, e := range err.(scanner.ErrorList) {
 				var pos token.Pos
-				c.files.Iterate(func(f *token.File) bool {
-					if f.Name() == filename {
-						pos = f.Pos(e.Pos.Offset)
-						return false
-					}
-					return true
-				})
+				if f := c.files.File(base); f != nil {
+					pos = f.Pos(e.Pos.Offset)
+				}
 				c.fail(pos, "%s", e.Msg)
 			}
 			continue
@@ -144,12 +137,6 @@ func compileTypedFiles(sources map[string]string, packages []evm.Package, option
 		err := types.NewChecker(&config, c.files, pkg, info).Files(syntax)
 		return pkg, info, err
 	}
-	for _, p := range packages {
-		if len(p.Records) > 0 {
-			c.env.recordFacade = true
-			break
-		}
-	}
 	pkg, info, err := check()
 	rewritten := false
 	if len(c.env.recordOperations) > 0 {
@@ -167,8 +154,10 @@ func compileTypedFiles(sources map[string]string, packages []evm.Package, option
 		return nil, c.errors
 	}
 	c.checkRecordDerivedTypes(info)
-	for _, source := range c.env.standard {
-		c.checkRecordDerivedTypes(source.info)
+	if c.env.base == nil { // Freezing checked the host sources.
+		for _, source := range c.env.standard {
+			c.checkRecordDerivedTypes(source.info)
+		}
 	}
 	if len(c.errors) > 0 {
 		return nil, c.errors
@@ -177,19 +166,20 @@ func compileTypedFiles(sources map[string]string, packages []evm.Package, option
 		for _, file := range syntax {
 			rewriteRecordFields(file, info, c.env.recordFields)
 		}
-		c.env, err = newTypeEnvironment(packages)
+		c.env, err = environment.universe(false, c.files)
 		if err != nil {
 			return nil, err
 		}
-		c.env.files = c.files
 		pkg, info, err = check()
 		if err != nil {
 			return nil, c.errors
 		}
 	}
-	for _, pkg := range c.env.standard {
-		for _, file := range pkg.files {
-			c.recordDereferenceWrites(file)
+	if c.env.base == nil { // A frozen base recorded the writes in host sources.
+		for _, pkg := range c.env.standard {
+			for _, file := range pkg.files {
+				c.recordDereferenceWrites(file)
+			}
 		}
 	}
 	needsInit := false
@@ -237,8 +227,9 @@ func compileTypedFiles(sources map[string]string, packages []evm.Package, option
 		createPackage(p)
 	}
 	// Host signatures can reference source packages without a direct guest import.
-	for _, path := range slices.Sorted(maps.Keys(c.env.imported)) {
-		createPackage(c.env.imported[path])
+	used, usedSet := c.env.usedPackages(pkg)
+	for _, p := range used {
+		createPackage(p)
 	}
 	c.pkg = prog.CreatePackage(pkg, syntax, info, true)
 	c.pkg.Build()
@@ -281,11 +272,8 @@ func compileTypedFiles(sources map[string]string, packages []evm.Package, option
 	if len(c.errors) > 0 {
 		return nil, c.errors
 	}
-	for _, p := range packages {
-		if len(p.Records) > 0 {
-			c.registerJSONTypes(token.NoPos)
-			break
-		}
+	if environment.records {
+		c.registerJSONTypes(token.NoPos)
 	}
 	c.prepareDeferBuiltins(functions)
 	for _, t := range c.hostDynamic {
@@ -305,7 +293,7 @@ func compileTypedFiles(sources map[string]string, packages []evm.Package, option
 	if len(c.errors) > 0 {
 		return nil, c.errors
 	}
-	for _, s := range c.env.shapeOrder {
+	for s := range c.env.moduleShapes(usedSet) {
 		if _, ok := c.shapes[s]; !ok {
 			if len(c.module.Shapes) >= 65536 {
 				c.fail(token.NoPos, "too many storage shapes")
@@ -318,11 +306,7 @@ func compileTypedFiles(sources map[string]string, packages []evm.Package, option
 	if len(c.errors) > 0 {
 		return nil, c.errors
 	}
-	for _, pkg := range c.env.standard {
-		for i, file := range pkg.files {
-			c.module.Sources[c.files.PositionFor(file.Pos(), false).Filename] = pkg.sources[i].Text
-		}
-	}
+	c.env.addSourceTexts(c.module.Sources, used)
 	// A pointer into c would keep the type universe, SSA and syntax alive
 	// for as long as the caller holds the module.
 	module := c.module

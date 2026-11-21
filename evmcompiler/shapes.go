@@ -20,7 +20,7 @@ func (e *typeEnvironment) shape(t types.Type) (result *values.Shape, err error) 
 	if err := e.resolveDeclaredShape(t); err != nil {
 		return nil, err
 	}
-	if s, ok := e.shapes.At(t).(*values.Shape); ok {
+	if s := e.shapeOf(t); s != nil {
 		return s, nil
 	}
 	s := &values.Shape{Cells: 1, DisplayName: displayTypeName(t)}
@@ -36,7 +36,7 @@ func (e *typeEnvironment) shape(t types.Type) (result *values.Shape, err error) 
 			e.shapes.Delete(t)
 		}
 	}()
-	vt, _ := e.fromGo.At(t).(*values.Type)
+	vt := e.typeOf(t)
 	if d, ok := e.nativeTypes[vt]; ok && d.decl.Shape.CellStruct != nil {
 		*s = *d.decl.Shape
 		return s, nil
@@ -49,7 +49,7 @@ func (e *typeEnvironment) shape(t types.Type) (result *values.Shape, err error) 
 	if vt == values.TimeType {
 		s.Kind = values.TimestampKind
 		s.Type = vt
-		s.Native = e.nativeLayouts[vt]
+		s.Native = e.nativeLayout(vt)
 		return s, nil
 	}
 	if vt == nil {
@@ -118,8 +118,8 @@ func (e *typeEnvironment) shape(t types.Type) (result *values.Shape, err error) 
 		if _, err := e.shape(u.Elem()); err != nil {
 			return nil, err
 		}
-		elem, _ := e.fromGo.At(u.Elem()).(*values.Type)
-		if e.nativeLayouts[elem] != nil || e.requiresNativeStorage(u.Elem()) || e.containsModelRow(u.Elem()) || e.mayViewNative(u.Elem()) {
+		elem := e.typeOf(u.Elem())
+		if e.nativeLayout(elem) != nil || e.requiresNativeStorage(u.Elem()) || e.containsModelRow(u.Elem()) || e.mayViewNative(u.Elem()) {
 			repr = values.Pair
 		}
 		if vt != nil {
@@ -166,7 +166,7 @@ func (e *typeEnvironment) shape(t types.Type) (result *values.Shape, err error) 
 		e.fromGo.Set(t, vt)
 	}
 	s.Type = vt
-	s.Native = e.nativeLayouts[vt]
+	s.Native = e.nativeLayout(vt)
 	s.NativeAllocation = e.nativeAllocations[vt]
 	if named, ok := types.Unalias(t).(*types.Named); ok && s.Native == nil {
 		// A script-declared slice or map type converts freely to and from its
@@ -177,8 +177,8 @@ func (e *typeEnvironment) shape(t types.Type) (result *values.Shape, err error) 
 			if err := e.resolveDeclaredShape(under); err != nil {
 				return nil, err
 			}
-			underType, _ := e.fromGo.At(under).(*values.Type)
-			if layout := e.nativeLayouts[underType]; layout != nil {
+			underType := e.typeOf(under)
+			if layout := e.nativeLayout(underType); layout != nil {
 				s.Native = layout
 				e.nativeLayouts[vt] = layout
 			}
@@ -188,8 +188,8 @@ func (e *typeEnvironment) shape(t types.Type) (result *values.Shape, err error) 
 		if err := e.resolveDeclaredShape(types.NewSlice(array.Elem())); err != nil {
 			return nil, err
 		}
-		sliceType, _ := e.fromGo.At(types.NewSlice(array.Elem())).(*values.Type)
-		if layout := e.nativeLayouts[sliceType]; layout != nil && layout.Slice != nil {
+		sliceType := e.typeOf(types.NewSlice(array.Elem()))
+		if layout := e.nativeLayout(sliceType); layout != nil && layout.Slice != nil {
 			n := uint64(array.Len())
 			if n > math.MaxUint32 || (layout.Slice.ElementSize != 0 && n > uint64(^uint(0)>>1)/layout.Slice.ElementSize) {
 				return nil, fmt.Errorf("native array %s exceeds VM capacity", t)
@@ -385,7 +385,7 @@ func displayTypeName(t types.Type) string {
 func (e *typeEnvironment) containsModelRow(t types.Type) bool {
 	var seen elementChain
 	for seen.enter(t) {
-		if vt, _ := e.fromGo.At(t).(*values.Type); vt != nil && e.recordOwners[vt] != "" {
+		if vt := e.typeOf(t); vt != nil && e.recordOwners[vt] != "" {
 			return true
 		}
 		switch a := t.Underlying().(type) {

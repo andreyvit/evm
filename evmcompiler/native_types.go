@@ -22,6 +22,10 @@ type nativeType struct {
 	pkg  string
 	decl evm.TypeDecl
 }
+type nativeMethodKey struct {
+	receiver *values.Type
+	name     string
+}
 
 func (e *typeEnvironment) goSignature(sig evm.Signature, variadic bool, pkg *types.Package) (*types.Signature, error) {
 	params, err := e.goTuple(sig.Params, pkg)
@@ -61,7 +65,7 @@ func (e *typeEnvironment) goShape(s *values.Shape, pkg *types.Package) (types.Ty
 		if _, ok := e.nativeTypes[s.Type]; ok {
 			return e.goType(s.Type, pkg)
 		}
-		if t := e.toGo[s.Type]; t != nil {
+		if t := e.goOf(s.Type); t != nil {
 			return t, nil
 		}
 		for _, declaration := range e.packages {
@@ -234,12 +238,19 @@ func (e *typeEnvironment) goShape(s *values.Shape, pkg *types.Package) (types.Ty
 	return nil, fmt.Errorf("invalid native shape")
 }
 func (e *typeEnvironment) addNativeMethods(pkg *types.Package, decl *evm.Package, early bool) error {
+	// Many methods share a receiver; scan the declarations once per receiver.
+	owned := make(map[*values.Type]bool)
 	for i := range decl.Methods {
 		m := &decl.Methods[i]
 		if early && e.nativeNeedsSource(e.nativeReceiverBase(m.Receiver)) {
 			continue
 		}
-		if !decl.OwnsMethodReceiver(m.Receiver) {
+		owns, known := owned[m.Receiver]
+		if !known {
+			owns = decl.OwnsMethodReceiver(m.Receiver)
+			owned[m.Receiver] = owns
+		}
+		if !owns {
 			return fmt.Errorf("method receiver is not declared by package")
 		}
 		recv, err := e.goType(m.Receiver, pkg)
@@ -427,14 +438,14 @@ func (e *typeEnvironment) equalNativeLayout(a, b *values.Shape, seen map[[2]*val
 }
 
 func (e *typeEnvironment) bindNative(t *values.Type, gt types.Type) error {
-	if existing, ok := e.fromGo.At(gt).(*values.Type); ok && existing != t {
+	if existing := e.typeOf(gt); existing != nil && existing != t {
 		// An earlier interface import may have inferred this anonymous
 		// signature before a later package declares its native identity.
 		// Adopt that identity in the shared shape; never replace another
 		// explicitly declared native type.
 		_, declared := e.nativeTypes[existing]
 		if _, signature := gt.(*types.Signature); signature && !declared {
-			if shape, ok := e.shapes.At(gt).(*values.Shape); ok && shape.Type == existing {
+			if shape := e.shapeOf(gt); shape != nil && shape.Type == existing {
 				shape.Type = t
 			} else {
 				return fmt.Errorf("Go type %s has multiple native type identities: %s and %s", gt, existing.Name(), t.Name())
@@ -463,6 +474,11 @@ func (e *typeEnvironment) nativeReceiverBase(t *values.Type) *values.Type {
 func (e *typeEnvironment) nativeNeedsSource(t *values.Type) bool {
 	if result, ok := e.nativeSourceMemo[t]; ok {
 		return result
+	}
+	if e.base != nil {
+		if result, ok := e.base.nativeSourceMemo[t]; ok {
+			return result
+		}
 	}
 	seen := map[*values.Type]bool{}
 	var visit func(*values.Type) bool

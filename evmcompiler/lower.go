@@ -139,7 +139,7 @@ func (c *typedCompiler) lowerFunction(fn *ssa.Function) {
 	// Check source-level row writes before store fusion can erase the Store.
 	for _, block := range fn.Blocks {
 		for _, instruction := range block.Instrs {
-			if store, ok := instruction.(*ssa.Store); ok && c.dereferenceWrites[store.Pos()] && f.isReadRecord(f.regs[store.Addr][0].typ) {
+			if store, ok := instruction.(*ssa.Store); ok && c.dereferenceWrite(store.Pos()) && f.isReadRecord(f.regs[store.Addr][0].typ) {
 				c.fail(store.Pos(), "cannot replace a read-only model row through a pointer")
 			}
 		}

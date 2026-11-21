@@ -17,12 +17,14 @@ func Analyze(files *token.FileSet, file *ast.File, packages ...evm.Package) (*ty
 
 // AnalyzeFiles checks a package while preserving each file's import scope.
 func AnalyzeFiles(files *token.FileSet, syntax []*ast.File, packages ...evm.Package) (*types.Package, *types.Info, error) {
-	e, err := newTypeEnvironment(packages)
+	return analyzeFiles(files, syntax, throwaway(packages))
+}
+
+func analyzeFiles(files *token.FileSet, syntax []*ast.File, environment *Environment) (*types.Package, *types.Info, error) {
+	e, err := environment.universe(true, files)
 	if err != nil {
 		return nil, nil, err
 	}
-	e.files = files
-	e.recordFacade = true
 	e.guest = types.NewPackage("plugin", "")
 	info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}, Scopes: map[ast.Node]*types.Scope{}, Implicits: map[ast.Node]types.Object{}, Instances: map[*ast.Ident]types.Instance{}, FileVersions: map[*ast.File]string{}}
 	var diagnostics Diagnostics

@@ -545,9 +545,10 @@ func LinkWithHostData(m *Module, hostData any, packages ...Package) (*Program, e
 			return nil, fmt.Errorf("empty or duplicate package %q", pkg.Path)
 		}
 		paths[pkg.Path] = true
+		receivers := pkg.methodReceivers()
 		for i := range pkg.Methods {
 			m := &pkg.Methods[i]
-			if !pkg.OwnsMethodReceiver(m.Receiver) {
+			if !receivers.owns(m.Receiver) {
 				return nil, fmt.Errorf("method receiver is not declared by package %s", pkg.Path)
 			}
 			key := exportKey{pkg.Path, m.Name, m.Receiver}

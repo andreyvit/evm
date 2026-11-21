@@ -45,6 +45,7 @@ type compiler struct {
 	info            *types.Info
 	pkg             *types.Package
 	packages        []evm.Package
+	environment     *evmcompiler.Environment // nil when compiling against a package list
 	importable      map[string][]string
 	marks           []markup
 	template        *Template

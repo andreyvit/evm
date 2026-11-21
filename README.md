@@ -751,10 +751,17 @@ Details: [host contracts](_docs/embedding.md), [`evmbind`](evmbind/README.md),
 - Scripts are Go 1.23: generics, range over integers and functions.
 - `evmcompiler.Options{NoOptimization: true}.Compile(...)` keeps the code
   unoptimized for debugging.
+- `evmcompiler.NewEnvironment(packages...)` type-checks the packages once.
+  Its `Compile` and `CompileFiles` then check only the script, so a host that
+  compiles many scripts against the same large package set should build one
+  `Environment` and keep it. It never changes and is safe for concurrent use.
+  It fails if any package cannot be imported; the package-list functions fail
+  only a script that imports such a package. Both produce the same code.
 - `module.Disassemble()` prints bytecode. `evmasm.Assemble(source)` builds a
   module from assembly, for tests and diagnostics.
 - `evmcompiler.Analyze`, `AnalyzeFiles` and `SourceImporter` type-check with
-  `go/types` against host packages, for tools.
+  `go/types` against host packages, for tools. An `Environment` has `Analyze`
+  and `AnalyzeFiles` too; parse into a file set from its `NewFileSet`.
 - `evmcompiler.PackageSource(path, packages...)`, `PackagesSource` and
   `PackagePaths` print the declarations a script sees: documentation for a
   person or an agent writing a plugin.

@@ -68,7 +68,7 @@ func (e *typeEnvironment) collectNativeViewLeaves() {
 func (e *typeEnvironment) mayViewNative(t types.Type) bool {
 	var seen elementChain
 	for t = types.Unalias(t); seen.enter(t); t = types.Unalias(t) {
-		if v, _ := e.fromGo.At(t).(*values.Type); e.nativeViewLeaves[v] {
+		if v := e.typeOf(t); e.nativeViewLeaves[v] {
 			return true
 		}
 		switch a := t.Underlying().(type) {

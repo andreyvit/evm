@@ -129,3 +129,51 @@ func (p *Package) OwnsMethodReceiver(t *values.Type) bool {
 	}
 	return false
 }
+
+// methodReceivers answers OwnsMethodReceiver for every type of one package
+// after a single pass over its declarations.
+type methodReceivers struct {
+	owned    map[*values.Type]bool         // shared types and record pointers
+	concrete map[*values.Type]bool         // first named declaration: neither interface nor pointer
+	pointers map[*values.Type]*values.Type // last unnamed pointer declaration to its element
+}
+
+func (p *Package) methodReceivers() methodReceivers {
+	r := methodReceivers{owned: make(map[*values.Type]bool), concrete: make(map[*values.Type]bool), pointers: make(map[*values.Type]*values.Type)}
+	for _, shared := range p.SharedTypes {
+		r.owned[shared.Type] = true
+	}
+	for _, record := range p.Records {
+		if record != nil {
+			r.owned[record.Pointer] = true
+		}
+	}
+	for i := range p.Types {
+		d := &p.Types[i]
+		s := d.Shape
+		if s == nil {
+			continue
+		}
+		if d.Name != "" || d.SourceName != "" {
+			if _, seen := r.concrete[s.Type]; !seen {
+				r.concrete[s.Type] = s.Kind != values.InterfaceKind && s.Kind != values.PointerKind
+			}
+		} else if s.Kind == values.PointerKind && s.Elem != nil {
+			r.pointers[s.Type] = s.Elem.Type
+		}
+	}
+	return r
+}
+
+func (r methodReceivers) owns(t *values.Type) bool {
+	if r.owned[t] {
+		return true
+	}
+	if concrete, named := r.concrete[t]; named {
+		return concrete
+	}
+	if base, ok := r.pointers[t]; ok && base != nil {
+		return r.concrete[base]
+	}
+	return false
+}

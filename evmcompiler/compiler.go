@@ -46,8 +46,7 @@ type Options struct {
 // Compile emits Go SSA operations directly when NoOptimization is set.
 // Link honors the same choice for the lifetime of the resulting program.
 func (o Options) Compile(filename, source string, packages ...evm.Package) (m *evm.Module, err error) {
-	defer CatchInternalError(&err)
-	return compileTyped(filename, source, packages, o)
+	return o.CompileFiles(map[string]string{filename: source}, packages...)
 }
 
 // CompileFiles compiles one package from named source files. Files share
@@ -57,5 +56,12 @@ func CompileFiles(sources map[string]string, packages ...evm.Package) (*evm.Modu
 }
 func (o Options) CompileFiles(sources map[string]string, packages ...evm.Package) (m *evm.Module, err error) {
 	defer CatchInternalError(&err)
-	return compileTypedFiles(sources, packages, o)
+	m, err = compileTypedFiles(sources, throwaway(packages), o)
+	if crossCheck != nil {
+		crossCheck(sources, packages, o, m, err)
+	}
+	return m, err
 }
+
+// crossCheck, when set, receives every package-list compile; see crosscheck.go.
+var crossCheck func(sources map[string]string, packages []evm.Package, options Options, m *evm.Module, err error)

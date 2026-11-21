@@ -44,6 +44,9 @@ type Options struct {
 	ParseFrontmatter func([]byte) (any, error)
 	Format           Format
 	ImplicitTypes    []string
+	// Environment compiles against prepared packages instead of a package
+	// list. Functions that take packages must then receive none.
+	Environment *Environment
 }
 
 // Parameter describes an entry input in Render argument order.

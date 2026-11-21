@@ -122,6 +122,16 @@ func (e *typeEnvironment) importSource(path string, sources []evm.SourceFile, pk
 	}
 	e.imported[path] = pkg
 	e.standard[path] = &standardPackage{declarationsOnly: declarationsOnly, sources: slices.Clone(sources), files: files, info: info}
+	var functions map[string]*evm.ExternalFunction
+	if host := e.packages[path]; host != nil {
+		functions = make(map[string]*evm.ExternalFunction, len(host.Functions))
+		for i := range host.Functions {
+			f := &host.Functions[i]
+			if f.On == nil && functions[f.LinkName()] == nil {
+				functions[f.LinkName()] = f
+			}
+		}
+	}
 	for _, decl := range decls {
 		f, ok := decl.(*ast.FuncDecl)
 		if !ok || f.Body != nil {
@@ -130,13 +140,8 @@ func (e *typeEnvironment) importSource(path string, sources []evm.SourceFile, pk
 		obj := info.Defs[f.Name].(*types.Func)
 		// Defer VM type/layout construction until this leaf is reachable.
 		var native *evm.ExternalFunction
-		if host := e.packages[path]; host != nil && f.Recv == nil {
-			for i := range host.Functions {
-				if host.Functions[i].On == nil && host.Functions[i].LinkName() == obj.Name() {
-					native = &host.Functions[i]
-					break
-				}
-			}
+		if f.Recv == nil {
+			native = functions[obj.Name()]
 		}
 		e.natives[obj] = nativeBinding{importKey{pkg: path, name: obj.Name()}, native}
 	}

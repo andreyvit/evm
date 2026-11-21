@@ -22,8 +22,9 @@ generated calls are always direct, typed Go calls with no reflection.
 
 An `evm.ExternalFunction` has a name, a signature, and one of two call forms:
 
-- **`Call` (`func(*evm.Call) error`)** works for any signature. It reads inputs
-  with `c.Argument(i)` and writes outputs with `c.SetResult(i, value)`.
+- **`Call` (`func(*evm.VM) error`)** works
+  for any signature. It reads inputs with `vm.CallArgument(i)` and writes
+  outputs with `vm.SetCallResult(i, value)`.
 - **`Direct` (`evm.DirectBinding`)** works for small signatures. The VM passes
   operands straight from registers in a single instruction, avoiding an
   argument window.
@@ -85,7 +86,7 @@ which `evmbind` builds from the Go type.
 (either a package function or a closure). `evmbind.New` reads only the
 signature and referenced types from source and never executes a function body.
 The bound function receives only the declared arguments—no host receiver and no
-`*evm.Call`.
+`*evm.VM`.
 
 `evmbind.Generate` accepts the same options, and its generated wrappers call
 the registered function value with the same argument and result semantics as

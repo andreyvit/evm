@@ -6,23 +6,39 @@ bindings generated from Go source, see [`evmbind`](../evmbind/README.md); for
 hand-written declarations and Go-backed storage, see
 [binding declarations](bindings.md).
 
-## Sessions and environments
+## Programs, VM leases, and environments
 
-A linked `*evm.Program` is immutable and safe to share across goroutines. An
-`*evm.VM` is a single execution session that owns registers and package
-variables; it is neither concurrent nor reentrant, so use one VM per goroutine.
+A linked `*evm.Program` is immutable, holds its default execution limits, and
+is safe to share across goroutines. A `*evm.VM` is a single-goroutine execution
+lease over that program, borrowed from a shared pool:
 
-- Package initialization runs once, right before the first entry call. Later
-  calls reuse the session's package variables.
-- `vm.Reset()` clears session state so the next call initializes again.
-- Any execution failure invalidates the session until you call `vm.Reset()`.
-- Entry results are written only on success. The VM never rolls back host side
-  effects.
+```go
+vm := program.AcquireVM(ctx)
+defer vm.Release()
+```
 
-Compile and link programs during setup, and build schemas, models, and bindings
-there too—keep all of that out of your request loop. Reusing a VM together with
-its argument and result slices avoids per-call allocations once the VM's
-internal storage has grown.
+- `AcquireVM(ctx)` attaches the program and Go `ctx` and initializes a fresh
+  budget from the program's default limits. It runs no guest code.
+- `vm.Run(fn, slots)` is the single execution entry on an acquired VM. Each
+  outermost `vm.Run` (whether a guest function or a native root) uses the VM's
+  own registers directly, allocates fresh package globals and runs package
+  `init()` before entering `fn`, then clears globals, active scopes, and
+  register buffers on return—whether it succeeded or failed.
+- Synchronous re-entry from an active host binding (including a native root
+  that calls `vm.Run`) runs on the same `*evm.VM` and goroutine, sharing the
+  active globals, remaining budget, cancellation, and record scopes while
+  swapping in separate stable register/frame storage for the nested call.
+- `Release()` requires an idle VM; only the caller that acquired the VM
+  releases it. Release drops references to the program, context, globals,
+  records, callbacks, deadlines, and meters, and returns only cleared reusable
+  buffers to the pool.
+- Entry results are written only on success; failure leaves the caller's result
+  slots untouched. The VM never rolls back host side effects.
+
+Compile and link programs during setup, and build schemas, models, codecs, and
+resolved callables there too—keep all of that out of your request loop.
+Pooled VMs and stack-allocated `[N]values.Value` slot arrays avoid per-call
+allocations once buffers have grown.
 
 ### Compiling and linking many scripts
 
@@ -31,8 +47,10 @@ prepare the packages once:
 
 1. Build an `evmcompiler.NewEnvironment(declared...)` for compiling. Each
    subsequent compile type-checks only the script itself.
-2. Build a matching link environment with `env.NewLinkEnvironment(bound...)`.
-   Each link then copies only the tables that belong to its module.
+2. Build a matching link environment with `env.NewLinkEnvironment(bound...)` or
+   `evm.LinkOptions{DefaultLimits: &limits, Shapes: env.Shapes(), Methods: env.MethodTables()}.NewEnvironment(bound...)`.
+   Each link copies only the tables that belong to its module and inherits the
+   environment's default limits.
 
 Programs linked through that environment share the host bindings, the linked
 storage shapes of host types, and the method tables of host types whose methods
@@ -49,20 +67,205 @@ shapes its own module reaches—`Program.Shape` returns `nil` for the rest.
 Both environments are immutable and safe for concurrent use, provided the
 underlying packages do not change while they are active.
 
-### Passing arguments and results
+### Resolving functions and passing values
 
-Low-level calls pass and return [`values.Value`](../values/README.md) according
-to the entry signature. For ordinary Go values—including pointers to bound
-native structs—use `RunEntryNative`:
+Resolve required entry functions once after linking with
+`program.LookupFunction(name, want)`:
+
+- A non-nil `*evm.Signature` checks every parameter and result in order by
+  exact EVM type identity (`*values.Type` pointer equality) and reports the
+  symbol, actual signature, and expected signature on mismatch.
+- A `nil` signature accepts any signature. An empty `&evm.Signature{}` requires
+  exactly `func()`.
+- Every host-callable entry can be looked up, even one the script never takes
+  as a function value.
+- Validate a retained callable (for example, one registered by a script) with
+  `fn.CheckSignature(want)`.
+
+Pass arguments and receive results in one caller-owned `[]values.Value` slice:
+all arguments first, followed by one slot per result (pass `nil` for `func()`).
+Use a stack-allocated array sliced as `slots[:]` to avoid heap allocations.
+Each slot holds a 16-byte untyped `values.Value`, and the checked signature
+supplies the type of every slot. Because identical bits can represent different
+guest types and `vm.Run` trusts caller-supplied values, callers are responsible
+for packing each argument slot according to its declared parameter type (using
+the matching `values.*` constructor, `evmbind.Codec`, `schema.PackInterface`,
+or `vm.PackAggregate` / `vm.PackMap`) and unpacking each result slot
+accordingly.
+
+#### Live pointers and typed `nil`
+
+Use `evmbind.Codec[T](schema)` once during setup to resolve a bound Go type:
 
 ```go
-err := vm.RunEntryNative(ctx, "Bonus", []any{int64(1500)}, out, evm.Budget{})
+customerCodec := must(evmbind.Codec[*Customer](shopSchema))
+orderCodec := must(evmbind.Codec[*Order](shopSchema))
+onOrder := must(program.LookupFunction("OnOrder", &evm.Signature{
+    Params:  []*values.Type{customerCodec.Type(), orderCodec.Type(), values.TimeType},
+    Results: []*values.Type{values.StringType},
+}))
+
+vm := program.AcquireVM(ctx)
+defer vm.Release()
+
+// Live pointers keep their Go addresses. A typed nil (*Order)(nil) packs as
+// the zero values.Value{} and unpacks back to (*Order)(nil).
+slots := [4]values.Value{
+    customerCodec.Pack(ada),
+    orderCodec.Pack((*Order)(nil)),
+    values.NativeTime(now),
+}
+if err := vm.Run(onOrder, slots[:]); err != nil {
+    return "", err
+}
+return slots[3].AsString(), nil
 ```
 
-Each argument must match the exact Go type of its parameter (there are no
-implicit numeric conversions). Program-local interfaces and function references
-belong to one program; if they cross to another program, repack them through
-the destination program's APIs.
+For ordinary bound native struct pointers, `Pack` and `Unpack` preserve pointer
+identity without copying or reflection. On a non-pointer codec, `Pack` panics
+and `Unpack` returns an error—use `PackIn(vm, x)` and `UnpackIn(vm, v)` instead
+so conversions that allocate or cross length limits are metered against the
+active VM's budget.
+
+#### Interfaces and typed `nil` interfaces
+
+Use `schema.PackInterface(program, x)` and `schema.UnpackInterface(program, v)`
+to pass registered native pointer implementations across the Go boundary into an
+EVM interface parameter (such as `any` or a declared host interface):
+
+```go
+// Pass a live implementation or a typed nil (*MyContext)(nil).
+// Typed nils keep their concrete program type ID in R with P == nil;
+// only an untyped Go nil packs as the zero interface (R == 0, P == nil).
+arg, err := shopSchema.PackInterface(program, (*MyContext)(nil))
+if err != nil {
+    return err
+}
+slots := [2]values.Value{arg}
+if err := vm.Run(entry, slots[:]); err != nil {
+    return err
+}
+got, err := shopSchema.UnpackInterface(program, slots[1])
+```
+
+`program.PackInterface` and `program.UnpackInterface` operate on values that
+are already packed as `values.Value`. Interface type IDs are program-local;
+repack when crossing to another `*evm.Program`.
+
+Schemas follow their declared types and static-only policy: you cannot register
+arbitrary Go types at run time to pass them through `any`. Unregistered concrete
+types return an error from `PackInterface` or `PackIn`.
+
+#### Nested collections and guest storage
+
+For native-backed slices, maps, and structs bound by a schema, resolve a typed
+codec and use its metered `PackIn` / `UnpackIn` methods on an acquired VM:
+
+```go
+tagsCodec := must(evmbind.Codec[map[string][]string](shopSchema))
+tagsVal, err := tagsCodec.PackIn(vm, map[string][]string{
+    "ada": {"vip", "early"},
+})
+if err != nil {
+    return err
+}
+slots := [2]values.Value{tagsVal}
+if err := vm.Run(summarize, slots[:]); err != nil {
+    return err
+}
+out, err := tagsCodec.UnpackIn(vm, slots[1])
+```
+
+For guest-only structs, arrays, slices, and maps (types that live in EVM
+storage cells rather than native Go layouts), obtain the linked guest types from
+a resolved function signature (`fn.Signature()` and `program.Shape`), build
+values with `vm.PackAggregate` and `vm.PackMap`, and read guest results back
+with `vm.UnpackAggregate` and `vm.UnpackMap`:
+
+```go
+// Guest script:
+//   type Row struct { Tags map[string][]string; Counts [2]int }
+//   func Tags(r Row) Row { ... }
+tagsFn := must(program.LookupFunction("Tags", nil))
+sig := tagsFn.Signature()
+// Obtain linked guest shapes from the resolved signature.
+rowShape := program.Shape(sig.Params[0])
+tagsShape := rowShape.Fields[0].Shape   // map[string][]string
+countsShape := rowShape.Fields[1].Shape // [2]int
+
+// Each member or key/value must match its declared field, element, or key type.
+items, err := vm.PackAggregate(tagsShape.Elem.Type, values.String("vip"), values.String("early"))
+if err != nil {
+    return err
+}
+byUser, err := vm.PackMap(tagsShape.Type, values.String("ada"), items)
+if err != nil {
+    return err
+}
+counts, err := vm.PackAggregate(countsShape.Type, values.Int(0), values.Int(1))
+if err != nil {
+    return err
+}
+rowVal, err := vm.PackAggregate(rowShape.Type, byUser, counts)
+if err != nil {
+    return err
+}
+
+slots := [2]values.Value{rowVal}
+if err := vm.Run(tagsFn, slots[:]); err != nil {
+    return err
+}
+
+// Unpack the returned guest Row back into fields, map entries, and slice elements.
+fields, err := vm.UnpackAggregate(sig.Results[0], slots[1])
+if err != nil {
+    return err
+}
+entries, err := vm.UnpackMap(tagsShape.Type, fields[0])
+if err != nil {
+    return err
+}
+labels, err := vm.UnpackAggregate(tagsShape.Elem.Type, entries[1])
+```
+
+`PackAggregate` takes struct fields in declaration order or array/slice elements
+in index order; `PackMap` takes alternating key/value pairs. Both validate
+shapes, own borrowed leaves, charge allocations to the VM's budget, and reject
+native-backed shapes so host layouts stay on their bindings; callers are still
+responsible for supplying each field, element, key, and value in its declared
+EVM representation. `vm.UnpackAggregate(t, v)` returns fields or elements in the
+same order, and `vm.UnpackMap(t, v)` returns alternating keys and values, with
+nested values keeping their EVM representation and the returned slice charged to
+the active budget.
+
+#### Borrowed records
+
+Pass a read-only KVO record with `record.Value()` (no copy or decode), and pass
+an editable record through an `evm.WithRecords(ctx)` scope with
+`scope.EditRecord(model, edit)`:
+
+```go
+ctx, scope := evm.WithRecords(ctx)
+defer scope.Close()
+vm := program.AcquireVM(ctx)
+defer vm.Release()
+
+// Read-only borrowed record (valid while its DB transaction stays open).
+readSlots := [3]values.Value{record.Value(), values.NativeTime(now)}
+if err := vm.Run(describe, readSlots[:]); err != nil {
+    return err
+}
+
+// Editable record inside the transaction's record scope.
+edit := record.Edit()
+editSlots := [3]values.Value{scope.EditRecord(CustomerModel, edit), values.Int(250)}
+if err := vm.Run(redeem, editSlots[:]); err != nil {
+    return err
+}
+```
+
+See [Records in scripts](#records-in-scripts) below for flushing edits and
+ownership rules.
 
 ## Host packages
 
@@ -92,64 +295,136 @@ Only exports you supply can satisfy script imports. Both `Compile` and `Link`
 accept each import path once—use `evm.MergePackages` when several bindings
 contribute to the same path.
 
-A `*evm.Call` and its argument and result windows are borrowed only for the
-duration of that callback:
+A host binding (`func(*evm.VM) error`) borrows the executing VM and its current
+register window for the duration of that call:
 
-- Read all arguments before overwriting overlapping result slots.
-- Never retain the `*evm.Call` or its windows after returning.
-- Honor `c.Context` cancellation inside your host callback.
+- Read arguments with `vm.CallArgument(i)` and write results with
+  `vm.SetCallResult(i, v)`. Read all arguments before overwriting overlapping
+  result slots.
+- Never retain the borrowed `*evm.VM` or its `R`/`P` slices after returning,
+  and never call `vm.Release()` from inside a binding (only the owner that
+  called `AcquireVM` releases it).
+- Honor `vm.Context` cancellation inside your host callback.
+
+### Synchronous nested calls and interface dispatch
+
+Inside a host binding, call a guest callback synchronously on the same borrowed
+`*evm.VM` and goroutine with `vm.Run(cb, slots)`:
+
+```go
+// Inside a host binding, e.g. a database scan calling yield(record) bool:
+yield, err := vm.Program().Callable(vm.CallArgument(0))
+if err != nil {
+    return err
+}
+if err := yield.CheckSignature(yieldSig); err != nil {
+    return err
+}
+for cursor.Next() {
+    slots := [2]values.Value{cursor.Record().Value()}
+    if err := vm.Run(yield, slots[:]); err != nil {
+        return vm.CallbackError(err)
+    }
+    if !slots[1].AsBool() {
+        break
+    }
+}
+```
+
+`vm.Run` always runs on the same `*evm.VM`:
+
+- **Shared state and limits:** Nested calls share the active invocation's
+  package globals, remaining budget, cancellation context, coverage collector,
+  and active record scopes. Combined call depth and register counts charge the
+  shared limits.
+- **Stable register windows only on re-entry:** An outermost `vm.Run`—whether
+  its target is a guest function or a native root—uses the leased VM's own
+  registers directly. Only re-entry from an active native call (including a
+  native root that calls `vm.Run`) saves the outer host function, source
+  position, and `vm.R`/`vm.P` window slices and swaps in a separate pooled
+  register/frame buffer segment. Even if the nested callback grows its own
+  register banks, any `R`/`P` window already lent to the outer Go binding stays
+  valid. Outer state is restored on every exit, including errors, panics, and
+  budget exhaustion.
+- **Program check:** `vm.Run` rejects any callable whose target belongs to a
+  different `*evm.Program`.
+
+For dynamic interface dispatch on a guest receiver, resolve the method to a
+bound `evm.Callable` with `vm.LookupMethod` and invoke it with `vm.Run`:
+
+```go
+method, err := vm.LookupMethod(ifaceVal, "DBTx", dbTxSig)
+if err != nil {
+    return err
+}
+var slots [1]values.Value
+if err := vm.Run(method, slots[:]); err != nil {
+    return err
+}
+```
+
+`LookupMethod` validates the method name and signature against the concrete
+receiver type and binds that receiver into the returned `Callable`.
 
 ### Native function values
 
 To expose a Go closure at run time—for example, a returned iterator, a yield
 callback, or bound host state—cache `NewNativeFunctionType(signature)` during
-setup, then wrap the closure with `Call.NativeFunction(typ, closure)`.
+setup, then wrap the closure with `vm.NativeFunction(typ, closure)`.
 
-Guest calls, deferred calls, and `Call.RunCallbackArgs` all accept these
-values and share the current invocation's limits. Keep these rules in mind:
+Guest calls, deferred calls, and nested `vm.Run` calls all accept these values
+and share the current invocation's limits. Keep these rules in mind:
 
 - A native function value belongs to the program that created it; another
   program cannot call it.
 - Its captured host state can outlive the call that created it, so the host
   must enforce any borrowed transaction lifetime itself.
-- Never capture the creating `*evm.Call`.
+- Never capture the borrowed `*evm.VM` or its `R`/`P` windows.
 - A `nil` closure produces a `nil` function value.
 - Allocating the function holder is metered against the VM budget, while the
   closure body and its own allocations remain the host's responsibility.
 
-When passing a host callback *into* an initial `Run` call (such as a streaming
-row writer), use `Program.NativeFunction(typ, closure)` instead. The host owns
-that holder allocation, while execution still shares the VM's limits and
-propagates callback errors. Prefer `Call.NativeFunction` during execution so
+When passing a host callback *into* an initial `vm.Run` call (such as a
+streaming row writer), use `program.NativeFunction(typ, closure)` instead. The
+host owns that holder allocation, while execution still shares the VM's limits
+and propagates callback errors. Prefer `vm.NativeFunction` during execution so
 holder allocations stay metered.
 
-### Retained functions
+### Retained callables and delayed execution
 
-To keep a script callable past the call that produced it, retain it with
-`Program.FunctionValue(value)` and store the returned `*FunctionHandle`. You
-can invoke it later with `VM.RunFunction` or `VM.RunFunctionWithBudget`.
+A retained `evm.Callable` is a two-word value holding a shared linked target
+pointer (with program, function index, and signature) plus an optional capture
+or bound-receiver pointer. Retain a guest function argument with
+`program.Callable(value)` and check its contract at registration with
+`fn.CheckSignature(want)`.
 
-`*FunctionHandle` works for guest closures, bound methods, static native
+`Callable` covers plain guest functions, closures, bound methods, static native
 functions, and runtime native closures:
 
-- It keeps captures alive without copying them and rejects calls in any other
-  program.
-- The receiving VM supplies package variables and initialization, while mutable
-  captured state stays shared even across VMs or after a `Reset`.
-- Synchronize concurrent calls and validate any captured host resource
-  lifetimes yourself.
-- Signature inspection returns a defensive copy.
-
-If you only want public, non-capturing entry functions, use the stricter
-`NamedFunctionValue` API instead.
+- **Retained captures and program lifetime:** Copies share the same captures
+  and bound receiver without copying them, and keeping a `Callable` keeps its
+  owning `*evm.Program` alive (so a hot-reloaded version remains valid for
+  in-flight retained views). Calls on a VM from a different program fail with
+  `evm.ErrFunction`.
+- **Delayed execution (including GoX views):** To run a retained callable after
+  the registering call has returned, acquire a fresh VM lease from
+  `fn.Program().AcquireVM(ctx)` (with `defer vm.Release()`) and call
+  `vm.Run(fn, slots)`—or for a GoX renderer, call `goxProgram.RenderFunction`.
+  Each delayed run gets fresh package globals and its own budget while still
+  seeing its original receiver and captures.
+- **No blanket race-safety guarantee:** EVM does not synchronize concurrent
+  guest access to shared mutable captures or shared native Go pointers. If the
+  same closure or bound receiver can run concurrently on separate VMs, the host
+  must synchronize access or keep captures read-only.
+- **Signature inspection:** `fn.Signature()` returns a defensive copy.
 
 ### Native field codecs
 
 `TypeDecl.NativeCodec` provides contextual conversion for native struct fields
 whose Go representation differs from their VM type. Its `Decode` and `Encode`
-callbacks receive the current `*evm.Call` for program checks and allocation
-accounting; they must leave its argument and result window untouched and must
-not retain the call.
+callbacks receive the active `*evm.VM` for program checks and
+allocation accounting; they must leave its argument and result window untouched
+and must not retain the VM.
 
 Native field access, address loads and stores, and struct snapshots all go
 through these codecs. Linked programs copy codec declarations, and conflicting
@@ -173,24 +448,45 @@ not interpret them.
 
 ## Limits, errors, and trust
 
-`VM.Limits` sets session-wide limits, and `RunWithBudget` sets per-call limits
-(including initialization). Zero fields fall back to defaults or inherit the
-session limit.
+Default limits live on the linked `*evm.Program`, and the remaining allowance
+lives on each acquired `*evm.VM`:
 
-- **Time:** `Budget.Duration` and `ctx` bound elapsed time cooperatively;
-  native host calls must check cancellation and return on their own.
+- **Link-time defaults:** Pass `LinkOptions{DefaultLimits: &limits}` to `Link`
+  or `NewEnvironment` (linking copies the value before publishing the program).
+  Omitting `DefaultLimits` (`nil`) selects EVM's finite defaults: 1,000,000
+  steps, 1,000,000 allocations, 64 MiB allocation bytes, and 1 MiB output bytes.
+  Passing an explicit empty `&evm.Limits{}` disables those quotas while keeping
+  structural bounds (`Depth` 1,024, `RSlots` 1M, `PSlots` 1M) and context
+  cancellation.
+- **VM lease and overrides:** `AcquireVM(ctx)` starts a fresh allowance and
+  deadline from the program's default limits. Successive `vm.Run` calls and
+  synchronous nested callbacks on that VM spend the same allowance; parallel
+  VMs spend independently. Call `vm.SetBudget(limits)` while the VM is idle to
+  replace the remaining counters and start a fresh deadline (for a batch, or
+  between outermost runs to give each its own allowance). Passing `evm.Limits{}`
+  to `SetBudget` disables quotas while keeping structural bounds and
+  cancellation; `UnlimitedSteps: true` lifts only the step cap.
+- **Time:** `Limits.Duration` / `HardDuration` and `ctx` bound elapsed time
+  cooperatively from acquisition (or from `SetBudget`); native host calls must
+  check `vm.Context` and return on their own.
 - **VM meters:** Instruction, call-depth, register, allocation, and output
-  limits apply to VM execution. Allocation accounting is cumulative until
-  `vm.Reset()` and includes transient capacity—it is not live heap size.
+  limits apply to VM execution, including package `init()`. Allocation
+  accounting is cumulative over the budget's lifetime and includes transient
+  capacity—it is not live heap size. Work is charged on every exit including
+  failure, and an exhausted meter stays exhausted until `vm.SetBudget` or a
+  fresh `AcquireVM`.
 - **Host work:** Native APIs run outside the VM's meters; they are responsible
-  for their own CPU work and allocations unless they explicitly charge them.
+  for their own CPU work and allocations unless they explicitly charge them
+  with `vm.ChargeAllocation(bytes)`.
 
 Script panics and language errors can be caught by a direct deferred `recover()`
 inside the script. Uncaught errors retain source positions and unwrap to their
 underlying cause. Budget exhaustion, context cancellation, invalid-value
 errors, and native callback errors are fatal and skip script defers. Native Go
-panics inside hand-written callbacks propagate after VM cleanup. In all cases,
-the host owns transaction rollback and resource cleanup.
+panics inside hand-written callbacks propagate after VM cleanup. Every outermost
+`vm.Run` clears globals, active scopes, and execution buffers on exit and
+preserves caller result slots on failure; in all cases, the host owns
+transaction rollback and resource cleanup.
 
 > **Trust model:** Bytecode and native bindings are trusted inputs. `Link`
 > validates operands and layouts, but it cannot prove arbitrary pointers safe.
@@ -225,8 +521,8 @@ and `unicode/utf16`. Pass `evmstd.Packages()` alongside your host packages to
   `iter`, `maps`, `slices`, and `sort` compile from script source and are
   metered like ordinary script code.
 - Linking `evmstd` makes `[]string`, `[]byte`, `[]int`, and other slices used
-  by those packages native Go slices in the program, so you can pass them
-  directly through `RunEntryNative` and `RenderNative`.
+  by those packages native Go slices in the program, so host schemas and
+  `evmbind.Codec` / `RenderNative` share their backing storage directly.
 - Pass `evmstd.Imports()` to `evmbind.Options.Imports` so your host APIs share
   the exact same `time.Duration`, `*url.URL`, and other standard types.
 
@@ -258,7 +554,7 @@ the host still supplies lookup, scan, and save operations.
 ### Reading records
 
 A cursor or lookup wrapper returns a read-only record with
-`call.SetRecordResult(model, cursor.Record())`. Immutable records travel as
+`vm.SetRecordResult(model, cursor.Record())`. Immutable records travel as
 16-byte pairs—even through `any`—and read fields through shared representation
 metadata, with no read-record arena or expiry checks. Generated and reflected
 native records expose the same script API. To expose Go helpers like
@@ -273,7 +569,7 @@ the duration of the transaction:
 1. Register an editor for the script with `scope.EditRecord`.
 2. Recover and validate it in your save wrapper with `scope.MutableRecord`.
 3. Flush any pending materialized collections before saving using
-   `call.FlushRecord(editor)` or `call.FlushMutableRecord(value, model)`.
+   `vm.FlushRecord(editor)` or `vm.FlushMutableRecord(value, model)`.
 
 Saving and committing remain ordinary host operations.
 
@@ -283,8 +579,8 @@ Saving and committing remain ordinary host operations.
 record directly—no serialize-and-reparse round trip. It preserves 64-bit
 integer precision and invokes custom JSON or text marshalers at scalar leaves.
 
-On the host side, `Program.JSONValue` and `Call.JSONValue` convert a VM `any`
-into an owned Go tree whose numbers are `json.Number` (the `Call` form charges
+On the host side, `Program.JSONValue` and `VM.JSONValue` convert a VM `any`
+into an owned Go tree whose numbers are `json.Number` (the `VM` form charges
 the allocation budget). Their byte limit counts the equivalent escaped JSON
 output. `EncodeJSON` writes JSON bytes directly.
 

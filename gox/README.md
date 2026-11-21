@@ -722,7 +722,7 @@ asserts that the caller already trusts the markup (it does not sanitize it, and
 attribute contexts still apply contextual escaping).
 
 Inside EVM, `Content` and common `Optional[T]` specializations pack into a
-single VM cell without heap boxing; see
+single EVM value without heap boxing. See
 [compact value representations](_docs/compact-values.md).
 
 ## Ambient context
@@ -816,9 +816,10 @@ prepare them once:
 - `links := env.NewLinkEnvironment(packages...)` validates and binds host
   packages once, so `links.Link(tmpl)` and `links.LinkModule(module)` keep only
   what each template needs while sharing host shapes and native method tables.
-  (Use `gox.LinkOptions{Compilers: ...}.NewEnvironment(packages...)` if you
-  also have a separate `evmcompiler.Environment`, or
-  `gox.NewLinkEnvironment(packages...)` without a compile environment.)
+  (Use `gox.LinkOptions{DefaultLimits: &limits, Compilers: ...}.NewEnvironment(packages...)`
+  to configure program default limits or share a separate
+  `evmcompiler.Environment`, or `gox.NewLinkEnvironment(packages...)` without a
+  compile environment.)
 
 To expose a Go package from your app, bind it with
 [`evmbind.New`](../evmbind/README.md) and pass `schema.Package()` to `Compile`
@@ -834,10 +835,13 @@ and `schema.Bind(nil)` to `Link` (or the bound package to both).
 - **`program.Render` / `program.RenderFunc`** accept `values.Value` arguments,
   including KVO records and script structs. Inspect `Template.Parameters` for
   entry argument order.
-- A linked `*gox.Program` renders concurrently: each render gets an isolated VM
-  session and builder from a pool. `RenderOptions.Budget` and `ctx` limit
-  execution, and output is capped at 16 MiB by default (`MaxOutputBytes`
-  overrides it). Failed renders return an error and never emit partial output.
+- A linked `*gox.Program` renders concurrently: each render acquires a pooled
+  `*evm.VM` (`program.AcquireVM(ctx); defer vm.Release()`) and a pooled
+  builder, starting with fresh package globals and the program's default limits.
+  A non-empty `RenderOptions.Budget` overrides the VM's budget via
+  `vm.SetBudget`, `ctx` cancels execution, and output is capped at 16 MiB by
+  default (`MaxOutputBytes` overrides it). Failed renders return an error and
+  never emit partial output.
 
 ## Files and frontmatter
 
@@ -948,17 +952,21 @@ template.
 
 ### Calling guest renderers from Go
 
-- **Standalone render:** Retain a renderer returned by a script with
-  `program.EVM().FunctionValue(value)` and render it with
-  `program.RenderFunction(ctx, handle, args, options)`. The function must take
-  `*gox.Builder` first and return no values. Closures keep their captures while
-  each render resets session globals and builders.
+- **Standalone and delayed renders:** Retain a renderer returned by a script
+  with `program.EVM().Callable(value)` (or `*evm.FunctionOf[func(*gox.Builder)]`)
+  and render it with `program.RenderFunction(ctx, &fn, args, options)`. The
+  callable keeps its original receiver/captures and owning `*evm.Program` alive
+  across hot-reloaded versions. Each delayed render acquires a fresh VM lease
+  (`AcquireVM` / `Release`) when it starts, getting fresh package globals and
+  its own render budget while still seeing its captures. EVM does not
+  synchronize concurrent writes to shared mutable captures—keep view captures
+  immutable or synchronize access.
 - **Rendering inside a host call:** Use
-  `program.RenderFunctionInCall(call, handle, args, options)` inside a native
-  callback or `VM.RunNative`. Globals, captures, context, and budget stay
-  shared with the enclosing call (leave `options.Budget` zero), while nested
-  renders get their own builder. Use `Call.CallbackError` or
-  `Call.PanicCallback` in wrappers so guest panic recovery stays intact.
+  `program.RenderFunctionInCall(vm, &fn, args, options)` synchronously on the
+  borrowed `*evm.VM` inside a native callback. Globals, captures, context, and
+  remaining budget stay shared with the enclosing call (leave `options.Budget`
+  zero), while nested renders get their own builder. Use `vm.CallbackError` or
+  `vm.PanicCallback` in wrappers so guest panic recovery stays intact.
 - **Storing renderers in Go structs:** A native field of type
   `*evm.FunctionOf[func(*gox.Builder)]` holds a guest renderer closure or bound
   method that you can invoke with `Program.RenderFunction`.

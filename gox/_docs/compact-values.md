@@ -3,7 +3,7 @@
 Templates pass `gox.Content` and `gox.Optional[T]` through component calls
 constantly. Without special handling, every small struct copy would allocate a
 heap snapshot in VM storage. Instead, EVM packs value copies of `Content` and
-common `Optional[T]` specializations into a single 16-byte `values.Value` cell,
+common `Optional[T]` specializations into a single 16-byte `values.Value`,
 keeping non-escaping locals—including writes to their fields—entirely in
 registers.
 
@@ -12,30 +12,30 @@ still gets ordinary field-addressable storage.
 
 ## `Content`
 
-`gox.Content` fits in a single `values.Value` cell: a GC-visible string pointer
+`gox.Content` fits in one `values.Value`. It holds a GC-visible string pointer
 in `P` and a tagged word in `R`. Two process-wide `TypedPair` representations
 share the same logical type—one for plain text and one for trusted HTML—with
 the auxiliary `uint32` storing the full byte length (lengths above
 `math.MaxUint32` are rejected before conversion).
 
-- The zero cell represents empty plain text.
+- The zero EVM value represents empty plain text.
 - Equality and map hashing compare both the text and the trust flag, never byte
   addresses.
 - Packing, unpacking, and passing through `any` allocate no wrapper and copy no
   string bytes.
 - Ownership acquisition keeps the trust bit while applying standard string
-  ownership rules, and rendering decodes the cell and runs the normal
+  ownership rules, and rendering unpacks the value and runs the normal
   context-specific escaping filters.
 - `gox.Text` and `gox.TrustedHTML` have direct VM bindings, while native Go
   callers still see the ordinary struct `{Content string, TrustedHTML bool}`.
 
 ## `Optional[T]`
 
-GoX's source-defined `Optional[T]` uses a single cell whenever `T` is a `bool`,
+GoX's source-defined `Optional[T]` fits in one EVM value whenever `T` is a `bool`,
 integer, float, `string`, or registered compact struct such as `Content`:
 
-- A present, nonzero value uses `T`'s ordinary cell directly.
-- The zero cell represents missing (`Present == false`, zero `Value`).
+- A present, nonzero value uses the ordinary EVM representation of `T`.
+- The zero EVM value represents missing (`Present == false`, zero `Value`).
 - A descriptor-owned marker distinguishes a *present* zero value from a missing
   one, and additional markers preserve a nonzero `Value` with `Present == false`
   (for example, setting `Value` before setting `Present`).
@@ -63,7 +63,7 @@ spare bits in arbitrary types.
   EVM never has to import GoX.
 - Use `Shape.FieldValue` and `Shape.LogicalKind` to inspect logical values
   (`Shape.GetField` and `Shape.SetField` address flattened storage, not compact
-  cells). Native adapters constructing compact optionals call the descriptor's
+  values). Native adapters constructing compact optionals call the descriptor's
   `Pack` method.
 
 Tests cover contextual escaping, zero values, copy and field-pointer semantics,

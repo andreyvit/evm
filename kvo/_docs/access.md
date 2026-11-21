@@ -53,7 +53,8 @@ _ = copyOfElements
 A scalar reference holds only its 8-byte property code. For custom conversions
 and nested records, `PropRef[T]` is the shared descriptor:
 
-- `NewScalarProp` and `BindProp` take a `values.Codec[T]` for a custom scalar.
+- `NewScalarProp` and `BindProp` take a `values.Codec[T]` (with `Pack func(T) Value`
+  and `Unpack func(Value) T`) for a custom scalar.
 - `NewRecordProp` returns a child `Record` without decoding it.
 - `NewRecordListProp` returns a `RecordList` of `Record` values and needs no
   Go element type.
@@ -290,7 +291,7 @@ arbitrary struct).
 
 When the compiler proves that a script only reads a scalar or string list
 locally (via `range`, indexing, `len`, or `cap`), EVM leaves the list in the
-row and carries the same 16-byte list cell as `List[T]`. The VM keeps a
+row and carries the same 16-byte list value as `List[T]`. The VM keeps a
 reusable iterator workspace per indexing site and resolves the property once,
 so ranging is linear with zero per-record allocations. Single-consumer `len` or
 index reads fuse into one instruction.
@@ -298,7 +299,7 @@ index reads fuse into one instruction.
 If a list is modified, if a slice or string escapes, or if a call or write occurs
 while a borrowed element is live, the compiler materializes an ordinary slice
 and applies normal scope ownership copies. The VM validates the element type
-when accepting a cell. See [paired EVM and Go measurements](../../_docs/list-cells.md).
+when accepting a list value. See [paired EVM and Go measurements](../../_docs/list-cells.md).
 
 ## Decoding once
 

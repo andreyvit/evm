@@ -1,8 +1,8 @@
-# Shared KVO list cells
+# Shared KVO list values
 
 When the compiler proves that a script only reads a scalar or string list
 locally, EVM carries that list in the exact same 16-byte `kvo.ListCell` used by
-native Go's `kvo.List[T]`. A cell holds a GC-visible pointer, a representation
+native Go's `kvo.List[T]`. The value holds a GC-visible pointer, a representation
 ID, and an auxiliary length. Shared metadata describes the encoding and element
 type, so there is no per-list heap allocation.
 
@@ -41,7 +41,7 @@ compilations, and new representations are registered once on first use.
 
 Measured November 9, 2026 on Apple M5 Max, `macOS arm64`, Go 1.27.3, with one
 logical CPU. Baseline: EDB `18e9cf0` (the benchmark added right before
-implementation). Candidate: the shared-list-cell implementation accompanying
+implementation). Candidate: the shared list representation accompanying
 this report. Both binaries used identical benchmark source, toolchain, and
 hardware, run in six paired rounds alternating order with no overlapping builds
 or tests.
@@ -76,7 +76,7 @@ samples reported **0 bytes and 0 heap allocations**.
 These numbers measure the complete implementation including adjacent-consumer
 fusion. An earlier prototype added redundant representation validation and
 iterator setup and regressed several workloads, so it was discarded. Now
-validation runs only when a cell or cache generation changes, sequential reads
+validation runs only when a list value or cache generation changes, sequential reads
 reuse the iterator, and reverse traversal resets it from the cached view.
 
 ## Whole-scan and unrelated controls
@@ -137,7 +137,7 @@ go test -c -o /tmp/go-list.test ./kvo
 ```
 
 Compilation, registration, and owned copies are outside the zero-allocation
-claim. Separate tests verify empty and `nil` lists, incompatible cell types,
+claim. Separate tests verify empty and `nil` lists, incompatible list element types,
 multiple and nested lists, bounds checks, evaluation order, and materialization
 across invalidating calls.
 

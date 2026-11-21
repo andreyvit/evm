@@ -113,7 +113,7 @@ whenever a script keeps a record past its scope. Native Go code must call
 | `kvo/codec/row2` | Fast2 and Compact2 wire formats, views, writers, and editors. |
 | `kvo/codec/msgpack` | MessagePack views, copy-on-write edits, and struct encoder/decoder. |
 | `kvo/codec/fast1` | Original word-map encoding with its own views and edits. |
-| `values` | Shared runtime cells, types, shapes, and scalar conversions. |
+| `values` | Shared runtime values, types, shapes, and scalar conversions. |
 | `nativebind` | Reflected and generated Go struct field access. |
 
 ## Further reading

@@ -26,8 +26,6 @@ methods:
 <!-- excerpt: examples/evm-basic/_plugin/bonus.go -->
 ```go
 func OnOrder(c *shop.Customer, o *shop.Order, now time.Time) string {
-	ordersSeen++
-
 	points := o.Cents / 100 * shop.PointsPerDollar
 	if slices.ContainsFunc(o.Items, isGift) {
 		points *= 2
@@ -39,17 +37,23 @@ func OnOrder(c *shop.Customer, o *shop.Order, now time.Time) string {
 ```
 
 The host compiles that source against the packages it chooses to expose, links
-it once into an immutable program, and calls it with ordinary Go values:
+it once with default limits, resolves the entry point and typed codecs, and
+runs it on a pooled VM with live Go pointers:
 
 <!-- excerpt: examples/evm-basic/main.go -->
 ```go
 module := must(evmcompiler.Compile("bonus.go", pluginSource, packages...))
-program := must(evm.Link(module, packages...))
+limits := evm.Limits{Steps: 1_000_000, Duration: time.Second}
+program := must(evm.LinkOptions{DefaultLimits: &limits}.Link(module, packages...))
+customerCodec := must(evmbind.Codec[*Customer](shopSchema))
+orderCodec := must(evmbind.Codec[*Order](shopSchema))
+onOrder := must(program.LookupFunction("OnOrder", &evm.Signature{Params: []*values.Type{customerCodec.Type(), orderCodec.Type(), values.TimeType}, Results: []*values.Type{values.StringType}}))
 // ...
-vm := evm.New(program)
-budget := evm.Budget{Steps: 1_000_000, Duration: time.Second}
-// ...
-ensure(vm.RunEntryNative(context.Background(), "OnOrder", []any{ada, order, now}, result[:], budget))
+vm := program.AcquireVM(context.Background())
+defer vm.Release()
+slots := [4]values.Value{customerCodec.Pack(ada), orderCodec.Pack(order), values.NativeTime(now)}
+ensure(vm.Run(onOrder, slots[:]))
+fmt.Fprintln(out, slots[3].AsString())
 ```
 
 Whether you are running a plugin, rendering a GoX template, or working with KVO
@@ -62,9 +66,10 @@ records, the lifecycle is always the same five steps (walked through in
    source and turns its exports into a script-facing API.
 3. **Compile** plugin or template source against those packages; type mismatches
    and missing fields fail here, before anything runs.
-4. **Link** once into an immutable, concurrency-safe `*evm.Program`.
-5. **Run** the program on your live Go values, as many times as you need, under
-   strict per-call budgets.
+4. **Link** once into an immutable, concurrency-safe `*evm.Program` with default
+   limits, then resolve callables and typed codecs.
+5. **Acquire a VM and run** on your live Go values, as many times as you need,
+   under explicit execution budgets.
 
 Requires Go 1.27+.
 
@@ -151,7 +156,8 @@ five areas:
 - **Host-defined virtual packages:** Scripts can import only host-supplied
   packages plus EVM's curated standard library (no filesystem, network, or
   env). Host package variables (`Package.Values`) are read-only and
-  unaddressable, and script package globals live per `VM` session.
+  unaddressable. Script package globals start fresh and run `init()` on each
+  outermost `vm.Run`.
 - **KVO records & editors:** Model types (`*m.Customer`) expose local and
   qualified property selectors (`c.points_earned` / `c.customer_points_earned`)
   that are read-only; edits go through `*m.CustomerEdit` (with collection
@@ -189,13 +195,8 @@ import (
 	"time"
 )
 
-// Package variables live as long as the VM session that runs the plugin.
-var ordersSeen int
-
 // OnOrder awards points for an order and returns a line for the log.
 func OnOrder(c *shop.Customer, o *shop.Order, now time.Time) string {
-	ordersSeen++
-
 	points := o.Cents / 100 * shop.PointsPerDollar
 	if slices.ContainsFunc(o.Items, isGift) {
 		points *= 2
@@ -211,7 +212,7 @@ func OnOrder(c *shop.Customer, o *shop.Order, now time.Time) string {
 			break
 		}
 	}
-	return fmt.Sprintf("#%d %s: +%d points, %d total, %s", ordersSeen, o.ID, points, c.Points, c.Tier)
+	return fmt.Sprintf("%s: +%d points, %d total, %s", o.ID, points, c.Points, c.Tier)
 }
 
 func isGift(item shop.Item) bool { return strings.HasPrefix(item.SKU, "GIFT-") }
@@ -261,21 +262,20 @@ var pluginSource string
 // constant in shop.go becomes visible. Go cannot look functions or types
 // up by name, so the options supply the functions, plus the types that
 // no function, method or field leads to.
-shop := must(evmbind.New("shop", shopSource, evmbind.Options{
+shopSchema := must(evmbind.New("shop", shopSource, evmbind.Options{
 	Functions: map[string]any{"TierThreshold": TierThreshold},
 	Types:     []reflect.Type{reflect.TypeFor[Customer](), reflect.TypeFor[Order]()},
 }))
 // What a plugin can import: the host package and the standard packages.
-packages := append(evmstd.Packages(), shop.Bind(nil))
+packages := append(evmstd.Packages(), shopSchema.Bind(nil))
 
 // Compile and link once. A linked program is immutable and can be shared.
 module := must(evmcompiler.Compile("bonus.go", pluginSource, packages...))
-program := must(evm.Link(module, packages...))
-
-// A VM is one session: it owns the plugin's package variables. Each call
-// gets a budget, so a runaway plugin stops with an error.
-vm := evm.New(program)
-budget := evm.Budget{Steps: 1_000_000, Duration: time.Second}
+limits := evm.Limits{Steps: 1_000_000, Duration: time.Second}
+program := must(evm.LinkOptions{DefaultLimits: &limits}.Link(module, packages...))
+customerCodec := must(evmbind.Codec[*Customer](shopSchema))
+orderCodec := must(evmbind.Codec[*Order](shopSchema))
+onOrder := must(program.LookupFunction("OnOrder", &evm.Signature{Params: []*values.Type{customerCodec.Type(), orderCodec.Type(), values.TimeType}, Results: []*values.Type{values.StringType}}))
 
 ada := &Customer{Name: "Ada", Tier: "basic", Joined: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC)}
 now := time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC)
@@ -284,11 +284,13 @@ for _, order := range []*Order{
 	{ID: "A-2", Cents: 9900, Items: []Item{{SKU: "GIFT-CARD", Qty: 1}}},
 	{ID: "A-3", Cents: 1500, Items: []Item{{SKU: "LMP-3", Qty: 1}}},
 } {
-	// Arguments and results are ordinary Go values. The plugin works on
-	// the host's own *Customer, not on a copy.
-	var result [1]any
-	ensure(vm.RunEntryNative(context.Background(), "OnOrder", []any{ada, order, now}, result[:], budget))
-	fmt.Fprintln(out, result[0])
+	func() {
+		vm := program.AcquireVM(context.Background())
+		defer vm.Release()
+		slots := [4]values.Value{customerCodec.Pack(ada), orderCodec.Pack(order), values.NativeTime(now)}
+		ensure(vm.Run(onOrder, slots[:]))
+		fmt.Fprintln(out, slots[3].AsString())
+	}()
 }
 fmt.Fprintln(out, ada.Name, "has", ada.Points, "points after", ada.History)
 ```
@@ -297,9 +299,9 @@ fmt.Fprintln(out, ada.Name, "has", ada.Points, "points after", ada.History)
 
 <!-- excerpt: examples/evm-basic/main_test.go -->
 ```text
-#1 A-1: +470 points, 470 total, basic
-#2 A-2: +2030 points, 2500 total, gold
-#3 A-3: +200 points, 2700 total, gold
+A-1: +470 points, 470 total, basic
+A-2: +2030 points, 2500 total, gold
+A-3: +200 points, 2700 total, gold
 Ada has 2700 points after [order A-1 order A-2 order A-3]
 ```
 
@@ -307,22 +309,67 @@ What to notice in this example:
 
 - **Single source of truth:** `evmbind.New` reads `shop.go` directly
   (declarations, parameter names, and doc comments) without executing it, so
-  there is no separate IDL to keep in sync. `shop.Bind(nil)` pairs those
+  there is no separate IDL to keep in sync. `shopSchema.Bind(nil)` pairs those
   declarations with their runtime implementations.
-- **Safe compilation:** Compile errors return `evmcompiler.Diagnostics` with
-  file, line, and column; importing an unexposed package fails compilation.
-- **Programs vs. VMs:** A linked `*evm.Program` is immutable and shared across
-  goroutines. A `*evm.VM` is a single-goroutine session that owns package
-  variables—`ordersSeen` increments across the loop because the loop reuses
-  one VM. Call `vm.Reset()` to clear state, or compile and link a new program
-  to hot-swap plugin versions without disrupting in-flight sessions.
-- **Live Go values:** `RunEntryNative` checks exact Go argument types (pass
-  `int64(5)` for an `int64`). Because the plugin mutates `ada` in place through
-  `c.AddPoints` and `c.Tier = tier`, the host sees the updated struct
-  immediately.
-- **Clean failure boundaries:** Exceeding a budget stops the call and marks the
-  session unusable until `vm.Reset()`. (`must` and `ensure` are small panic
-  helpers at the bottom of [`main.go`](examples/evm-basic/main.go).)
+- **Safe compilation and checked lookup:** Compile errors return
+  `evmcompiler.Diagnostics` with file, line, and column; importing an unexposed
+  package fails compilation. `program.LookupFunction` resolves `OnOrder` once
+  after linking and checks every parameter and result type in order.
+- **Programs, pooled VMs, and fresh globals:** A linked `*evm.Program` is
+  immutable, holds default limits (`LinkOptions.DefaultLimits`), and is shared
+  across goroutines. Each caller leases a single-goroutine `*evm.VM` with
+  `program.AcquireVM(ctx)` and returns its cleared buffers to the shared pool
+  with `defer vm.Release()`. Every outermost `vm.Run` starts with fresh package
+  globals and runs package `init()`, then clears globals and buffers on exit—so
+  `ada.Points` and `ada.History` persist on the host `*Customer` rather than in
+  guest globals.
+- **Live Go pointers and stack slots:** `evmbind.Codec[*Customer](shopSchema)`
+  resolves the bound Go type once. `Pack` passes the live Go address (zero
+  copy, preserving pointer identity and typed `nil`), so `c.AddPoints` and
+  `c.Tier = tier` mutate `ada` in place. Arguments and results travel in one
+  stack-allocated `[4]values.Value` array—three arguments in slots `0..2`, one
+  result in slot `3` (written only on success). Because `values.Value` carries
+  no runtime type tag, callers must pack each argument slot according to its
+  parameter type in the checked signature. (`must` and `ensure` are small
+  panic helpers at the bottom of [`main.go`](examples/evm-basic/main.go).)
+
+To cover a batch of calls with one shared budget instead of one budget per
+order, acquire one VM, call `vm.SetBudget`, and reuse a stack-allocated slot
+array across the loop:
+
+```go
+match := must(program.LookupFunction("Match", &evm.Signature{
+	Params:  []*values.Type{values.Int64, values.Float64, values.BoolType, values.StringType},
+	Results: []*values.Type{values.Int64, values.BoolType},
+}))
+limits := evm.Limits{Steps: 50_000_000, Duration: 2 * time.Second}
+vm := program.AcquireVM(ctx)
+defer vm.Release()
+vm.SetBudget(limits)
+var slots [6]values.Value
+var total int64
+for _, row := range rows {
+	slots[0] = values.Int(row.Cents)
+	slots[1] = values.Float(row.Rate)
+	slots[2] = values.Bool(row.VIP)
+	slots[3] = values.String(row.Tag)
+	if err := vm.Run(match, slots[:]); err != nil {
+		return 0, err
+	}
+	if slots[5].AsBool() {
+		total += slots[4].AsInt()
+	}
+}
+```
+
+Both budget lifetimes follow the same rules: `AcquireVM(ctx)` starts from the
+program's default limits, successive `vm.Run` calls spend that allowance, and
+`vm.SetBudget(limits)` starts a fresh allowance and deadline while the VM is
+idle. Omitting `LinkOptions.DefaultLimits` (`nil`) selects EVM's finite
+defaults; an explicit empty `&evm.Limits{}` or `vm.SetBudget(evm.Limits{})`
+disables quotas while keeping structural bounds (`Depth`, `RSlots`, `PSlots`)
+and context cancellation. Each outermost `vm.Run` still gets fresh globals and
+runs `init()`.
 
 ### 2. GoX: render a typed HTML template
 
@@ -453,6 +500,7 @@ app := must(evmbind.New("app", appSource, evmbind.Options{
 	},
 }))
 return &Env{
+	Schema:   app,
 	Packages: []evm.Package{app.Bind(nil)},
 	Options: gox.Options{
 		// A component that declares a *app.Store parameter receives
@@ -474,17 +522,19 @@ env := NewEnv()
 // program is immutable and renders concurrently.
 tmpl := must(env.Options.CompileFiles("Page", Views, env.Packages...))
 page := must(tmpl.Link(env.Packages...))
+storeCodec := must(evmbind.Codec[*Store](env.Schema))
+userCodec := must(evmbind.Codec[*User](env.Schema))
+cartCodec := must(evmbind.Codec[*Cart](env.Schema))
 
 user := &User{Name: "Ada Lovelace", Email: "ada@example.com", Admin: true, Joined: time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC)}
 cart := &Cart{Coupon: "SPRING", Lines: []CartLine{
 	{Product: TheStore.Products[0], Qty: 2},
 	{Product: TheStore.Products[2], Qty: 1},
 }}
+args := [4]values.Value{storeCodec.Pack(TheStore), userCodec.Pack(user), cartCodec.Pack(cart)}
 for _, query := range []string{"", "lamp"} {
-	// Arguments are ordinary Go values, in the order of Page's
-	// parameters after the builder. Templates work on the host's own
-	// structs, not on copies.
-	html := must(page.RenderNative(context.Background(), []any{TheStore, user, cart, query}, gox.RenderOptions{Strict: true}))
+	args[3] = values.String(query)
+	html := must(page.Render(context.Background(), args[:], gox.RenderOptions{Strict: true}))
 	fmt.Fprintln(out, html)
 }
 ```
@@ -685,28 +735,31 @@ packages := append(evmstd.Packages(), models)
 
 // Compile and link once.
 module := must(evmcompiler.Compile("rules.go", rulesSource, packages...))
-program := must(evm.Link(module, packages...))
-vm := evm.New(program)
-budget := evm.Budget{Steps: 100_000, Duration: time.Second}
-
+limits := evm.Limits{Steps: 100_000, Duration: time.Second}
+program := must(evm.LinkOptions{DefaultLimits: &limits}.Link(module, packages...))
+describe := must(program.LookupFunction("Describe", &evm.Signature{Params: []*values.Type{models.Record(CustomerModel, false).Pointer, values.TimeType}, Results: []*values.Type{values.StringType}}))
+redeem := must(program.LookupFunction("Redeem", &evm.Signature{Params: []*values.Type{models.Record(CustomerModel, true).Pointer, values.Int64}, Results: []*values.Type{values.BoolType}}))
+ctx, scope := evm.WithRecords(context.Background())
+defer scope.Close()
+vm := program.AcquireVM(ctx)
+defer vm.Release()
 // The script reads the same records. Nothing is converted or copied.
 now := date(2025, 3, 1)
 for _, c := range records {
-	var result [1]any
-	ensure(vm.RunEntryNative(context.Background(), "Describe", []any{c, now}, result[:], budget))
-	fmt.Fprintln(out, result[0])
+	slots := [3]values.Value{c.Value(), values.NativeTime(now)}
+	ensure(vm.Run(describe, slots[:]))
+	fmt.Fprintln(out, slots[2].AsString())
 }
 
 // The script edits through the host's editors. They live in a record
 // scope, which a host opens for the length of a transaction.
-ctx, scope := evm.WithRecords(context.Background())
-defer scope.Close()
+
 for i, c := range records {
 	edit := c.Edit()
-	var result [1]any
-	ensure(vm.RunEntryNative(ctx, "Redeem", []any{scope.EditRecord(CustomerModel, edit), int64(250)}, result[:], budget))
+	slots := [3]values.Value{scope.EditRecord(CustomerModel, edit), values.Int(250)}
+	ensure(vm.Run(redeem, slots[:]))
 	records[i] = edit.Record()
-	fmt.Fprintf(out, "%s redeems 250: %v, balance %d\n", c.Get(Customer_Name), result[0], PointBalance(records[i]))
+	fmt.Fprintf(out, "%s redeems 250: %v, balance %d\n", c.Get(Customer_Name), slots[2].AsBool(), PointBalance(records[i]))
 }
 fmt.Fprintf(out, "Ada's struct: %d redeemed\n", ada.Redeemed)
 ```
@@ -791,29 +844,37 @@ Deep dives: [host contracts](_docs/embedding.md) ·
 
 #### Link and run
 
-- **Link once, share everywhere:** `evm.Link(module, packages...)` returns an
-  immutable `*evm.Program` (`evm.LinkWithHostData` attaches host metadata read
-  via `program.HostData()`).
-- **Shared link environments:** `evm.NewLinkEnvironment(packages...)` validates
-  and binds host packages once so linking many modules stays fast. Calling
-  `env.NewLinkEnvironment(packages...)` on an `evmcompiler.Environment` goes
-  further, sharing linked host shapes, bound native methods, and all-native
-  method tables across every program compiled from that environment (do not
-  mutate those shared tables).
-- **Sessions:** `evm.New(program)` creates one execution session. Package
-  initialization runs once before the first call, and package variables persist
-  until `vm.Reset()`. A VM is single-goroutine and non-reentrant (concurrent
-  calls return `evm.ErrReentry`), so use one VM per goroutine.
-- **Calling entries:**
-  - `vm.RunEntryNative(ctx, "Entry", []any{...}, results, budget)` passes and
-    returns ordinary Go values.
-  - `vm.Run` and `vm.RunWithBudget` use raw `values.Value` (`values.Int(5)`,
-    `result.AsInt()`).
-  - `vm.RunNative(ctx, func(c *evm.Call) error { ... }, budget)` runs host code
-    inside the session (`c.NativeArguments`, `c.RunEntry`, `c.NativeAny`).
-  - `program.EntrySignature("Entry")` inspects parameter and result types.
-- **Program isolation:** Interface values, function handles, and type IDs
-  belong to one linked program—repack them when crossing to another program.
+- **Link once, share everywhere:** `evm.Link(module, packages...)` or
+  `evm.LinkOptions{DefaultLimits: &limits}.Link(module, packages...)` returns
+  an immutable `*evm.Program` (`evm.LinkWithHostData` attaches host metadata
+  read via `program.HostData()`). `DefaultLimits` is copied at link time.
+- **Shared link environments:** `evm.NewLinkEnvironment(packages...)` or
+  `evm.LinkOptions{DefaultLimits: &limits}.NewEnvironment(packages...)`
+  validates and binds host packages once so linking many modules stays fast.
+  Calling `env.NewLinkEnvironment(packages...)` on an `evmcompiler.Environment`
+  shares linked host shapes, bound native methods, and all-native method tables
+  across every program compiled from that environment (do not mutate those
+  shared tables).
+- **Resolve functions once:** `program.LookupFunction(name, want)` resolves an
+  entry point to a two-word `evm.Callable` (shared target plus optional
+  captures). A non-nil `*evm.Signature` checks exact parameter and result type
+  identity in order; `nil` accepts any signature; `&evm.Signature{}` requires
+  `func()`. Validate retained callables with `fn.CheckSignature(want)`.
+- **Acquire a VM and run:** `vm := program.AcquireVM(ctx)` leases a pooled,
+  single-goroutine `*evm.VM` with a fresh budget from the program's default
+  limits; `defer vm.Release()` clears references and returns its buffers to the
+  shared pool. Execute with `vm.Run(fn, slots)` where `slots` holds arguments
+  followed by one slot per result (`nil` for `func()`). Each slot is an untyped
+  `values.Value`: callers must pack every argument slot with the constructor or
+  codec matching its parameter type in the checked signature. Each outermost
+  `vm.Run` starts with fresh package globals and runs package `init()`, clearing
+  globals and buffers on return. Results are written only on success.
+- **Dynamic interface dispatch:** `vm.LookupMethod(ifaceVal, name, sig)`
+  resolves a concrete interface method on its runtime receiver to a bound
+  `evm.Callable`, invoked with the same `vm.Run`.
+- **Program isolation:** Interface values, callables, and type IDs belong to
+  one linked program—foreign callables fail before execution, and values
+  crossing programs must be repacked.
 
 #### Host packages from source
 
@@ -823,7 +884,8 @@ Deep dives: [host contracts](_docs/embedding.md) ·
 - **Functions, receivers, and variables:**
   - `Options.Functions` binds package functions by Go value.
   - `Options.Host` binds them as methods on a host receiver (taking a leading
-    `*evm.Call`), supplied at link time via `schema.Bind(host)`.
+    `*evm.VM`), supplied at link time via
+    `schema.Bind(host)`.
   - `Options.Values` exposes read-only package variables.
 - **Shaping the API:** Use `Options.Types` for extra root types, `Options.Omit`
   to exclude symbols (`"Secret"`, `"User.Token"`), `Options.Only` or
@@ -834,11 +896,22 @@ Deep dives: [host contracts](_docs/embedding.md) ·
   `Options.Imports` (`evmstd.Imports()` supplies `time.Duration`, `*url.URL`,
   etc.). Bind concrete generic structs with `Options.Instances` and generic
   functions with `Options.GenericFunctions`.
-- **Interfaces & helpers:** Register concrete interface implementations with
-  `Options.Implementations` (`evmbind.Pointer[Tx]()`), pack/unpack them with
-  `schema.Interface` / `schema.NativeInterface`, wrap struct pointers for
-  `vm.Run` with `schema.NativePointer`, and look up VM types with `schema.Type`
-  / `schema.NativeType`.
+- **Typed codecs, interfaces & guest storage:**
+  - Resolve a bound Go type once with `evmbind.Codec[T](schema)`: `Type()`
+    supplies its `*values.Type` for `LookupFunction`, `Pack`/`Unpack` convert
+    ordinary bound native struct pointers without reflection or copying
+    (preserving pointer identity and typed `nil`), and `PackIn`/`UnpackIn` run
+    metered conversions on an active `*evm.VM` for slices, maps, structs, and
+    other bound types.
+  - Register concrete interface implementations with `Options.Implementations`
+    (`evmbind.Pointer[Tx]()`), and pack/unpack them across the Go boundary with
+    `schema.PackInterface(program, ptr)` / `schema.UnpackInterface(program, v)`
+    (preserving typed nils). `program.PackInterface` / `program.UnpackInterface`
+    wrap and unwrap already-packed EVM values.
+  - Build and inspect guest-only structs, arrays, slices, and maps with
+    `vm.PackAggregate` / `vm.UnpackAggregate` and `vm.PackMap` / `vm.UnpackMap`.
+  - Schemas enforce their declared types and static-only policy—there is no
+    runtime registration of arbitrary unregistered Go types through `any`.
 - **No source available?** `evmbind.Discover("app", evmbind.Discovery{...})`
   binds functions and reachable types purely by reflection (no parameter names
   or doc comments; add constants via `Discovery.Constants`). Combine multiple
@@ -868,63 +941,90 @@ Go wrappers into your host binary so calls and field accesses avoid reflection.
 - Build an `evm.Package` directly with `Types`, `Functions`, `Methods`,
   `Constants`, `Values`, and `Aliases` (`evm.TypeAlias`).
 - Implement `evm.ExternalFunction` / `ExternalMethod` with `Call`
-  (`func(*evm.Call) error`, using `c.Argument` and `c.SetResult`) or
-  `Direct` (`evm.DirectUnary` / `evm.DirectBinding`) for zero-window register
-  calls.
+  (`func(*evm.VM) error`, using
+  `vm.CallArgument` and `vm.SetCallResult`) or `Direct` (`evm.DirectUnary` /
+  `evm.DirectBinding`) for zero-window register calls.
 - Declare types from `values.Shape` (`values.NewStructShape`,
   `values.NewPointerShape`), add custom field conversions with
   `TypeDecl.NativeCodec`, expose package variables via `evm.ExternalValue`, and
   list interface entry types in `Package.EntryTypes`.
-- Never retain `*evm.Call` or its argument window after returning, and check
-  `c.Context` for cancellation inside long host calls.
+- Never retain the borrowed `*evm.VM` or its argument window after returning,
+  and check `vm.Context` for cancellation inside long host calls.
 
 #### Values across the boundary
 
-- **Direct & shared:** Scalars, strings, and named scalars convert directly.
-  Structs pass by value; pointers keep their Go address so host and script
-  share one object. Slices and maps of bound types keep their Go backing
-  storage. Variadic functions and methods follow Go semantics.
-- **`time.Time`:** One type on both sides. Go values keep their location and
-  monotonic reading; `values.Time(t)` (for `vm.Run`) stores a UTC instant.
-- **`any` and `error`:** `any` carries bound Go values with their types;
-  script-only values arrive in Go as `*evm.GuestValue` and round-trip intact.
-  `error` crosses both ways with its identity (script-defined errors need an
-  active VM or callback scope when Go calls `Error()`).
+- **Values vs. storage cells:** Every host-boundary value is a 16-byte
+  `values.Value` (`R uint64`, `P unsafe.Pointer`) whose type comes from the
+  signature or codec; callers are responsible for matching each argument slot
+  to its declared parameter type. A **slot** is an indexed position in the call
+  slice or register bank; a **storage cell** is an addressable `values.Value`
+  in VM backing storage (register-only scalars need no cell).
+- **Direct & shared:** Scalars, strings, and named scalars convert directly
+  (`values.Int`, `values.Float`, `values.Bool`, `values.String`). Bound structs
+  pass by value; pointers keep their Go address via `evmbind.Codec[*T]` so host
+  and script share one object. Slices and maps of bound types keep their Go
+  backing storage (`PackIn`/`UnpackIn`); guest-only aggregates use
+  `vm.PackAggregate` / `vm.UnpackAggregate` and `vm.PackMap` / `vm.UnpackMap`.
+- **`time.Time`:** One type on both sides. `values.NativeTime(t)` preserves
+  location and monotonic reading; `values.Time(t)` stores a UTC instant.
+- **`any` and `error`:** `any` carries registered native Go values with their
+  types (never arbitrary unregistered Go types); script-only values arrive in
+  Go as `*evm.GuestValue` and round-trip intact. `error` crosses both ways with
+  its identity (script-defined errors need an active VM or callback scope when
+  Go calls `Error()`).
 
 #### Functions and callbacks
 
-- **Accepting script functions in Go:** Use `*evm.FunctionOf[func(int) int]` to
-  accept closures, bound methods, or functions (Go sees `*evm.FunctionHandle`),
-  or `*evm.NamedFunctionOf[func(int) any]` for public, non-capturing functions
-  only (Go sees `*evm.NamedFunction`).
-- **Retaining & invoking later:** `program.FunctionValue` /
-  `NamedFunctionValue` retain script callables; invoke them with
-  `vm.RunFunction`, `RunFunctionWithBudget`, or `RunFunctionNative` (or resolve
-  public entries via `program.EntryFunction`).
-- **Calling back mid-call:** Inside a host function, use `c.RunCallback`,
-  `c.RunCallbackArgs`, and `c.RunInterfaceMethod` (wrap errors with
-  `c.CallbackError` or `c.PanicCallback` to keep guest `recover()` working).
+- **Accepting and validating callables:** Use `*evm.FunctionOf[func(int) int]`
+  (or `*evm.FunctionOf[any]` for host-checked registrations; both alias
+  `evm.Callable`) to accept named functions, closures, bound methods, or native
+  functions. Retain a function value with `program.Callable(v)` and verify
+  untyped registrations with `fn.CheckSignature(want)`. A retained `Callable`
+  keeps its receiver/captures and owning `*evm.Program` alive across runs.
+- **Calling back mid-call:** `vm.Run(cb, slots)` runs on the same `*evm.VM`
+  whether invoked at the top level (including a native root) or synchronously
+  from inside a host binding (sharing the goroutine, globals, remaining budget,
+  cancellation, and active record scopes). Top-level calls use the VM's own
+  registers directly; only re-entry from an active native call (including a
+  native root calling `vm.Run`) swaps in a separate pooled register/frame
+  segment so the outer binding's `R`/`P` windows stay stable even if the
+  callback grows registers, restoring outer state on errors, panics, and budget
+  failure. For interface methods, resolve with `vm.LookupMethod` and call
+  `vm.Run`. Wrap errors with `vm.CallbackError` or `vm.PanicCallback` to keep
+  guest `recover()` working.
+- **Later invocations & concurrency:** Invoke a retained `Callable` later by
+  acquiring a fresh VM from `fn.Program().AcquireVM(ctx)`. Captures stay shared
+  while package globals start fresh—EVM does not synchronize concurrent guest
+  writes to shared captures or native pointers, so callers must synchronize
+  concurrent access.
 - **Passing Go closures to scripts:** Cache `evm.NewNativeFunctionType(sig)`
-  and create script-callable closures with `c.NativeFunction` (during a call)
-  or `program.NativeFunction` (for `Run` inputs).
-- **Idle callbacks:** To invoke a script function stored in a Go struct field
-  while the VM is idle, run inside `vm.RunNative` or open
-  `vm.OpenCallbackScope(ctx, budget)` and `defer scope.Close()`.
+  and create script-callable closures with `vm.NativeFunction` (metered during
+  a call) or `program.NativeFunction` (for `Run` inputs).
 
 #### Limits and budgets
 
-- **Session & per-call caps:** `vm.Limits` sets session defaults (1M steps per
-  call, call depth 1,024, 1M allocations, 64 MiB per session). Pass `evm.Budget`
-  for per-call caps (including `init`); use `Budget.UnlimitedSteps` to lift the
-  step cap. Cancelling `ctx` stops execution.
+- **Program defaults & VM leases:** Set default limits at link time via
+  `LinkOptions.DefaultLimits` (copied before publishing the program). Omitting
+  `DefaultLimits` (`nil`) selects finite defaults (1M steps, 1M allocations,
+  64 MiB allocation bytes, 1 MiB output bytes, plus structural bounds: depth
+  1,024 and 1M R/P slots). An explicit empty `&evm.Limits{}` or
+  `vm.SetBudget(evm.Limits{})` disables quotas while keeping structural bounds
+  and context cancellation; `Limits.UnlimitedSteps` lifts only the step cap.
+- **Shared vs. fresh allowances:** `AcquireVM(ctx)` starts a fresh allowance
+  and deadline from the program's defaults; successive `vm.Run` calls and
+  synchronous nested callbacks share it. Call `vm.SetBudget(limits)` while the
+  VM is idle to start a fresh allowance and deadline (for a batch or between
+  outermost runs). Parallel VMs spend independently.
 - **Stretchable ceilings & narrowing:** Set `HardDuration`, `HardAllocations`,
-  or `HardAllocationBytes` if you want host calls (`c.IncreaseCPUBudget`,
-  `c.IncreaseMemBudget`) or scripts (`evmruntime.IncreaseCPUBudget`,
-  `IncreaseMemBudget`) to request extra headroom. Narrow limits for a sub-step
-  with `c.NarrowBudget` / `c.NarrowCPUBudget` until `scope.End(c)`.
-- **Accounting:** Allocation limits are cumulative until `vm.Reset()`, not live
-  heap size—reset long-lived sessions between units of work. Host functions run
-  outside VM meters unless they call `c.ChargeAllocation(bytes)`.
+  or `HardAllocationBytes` so host calls (`vm.IncreaseCPUBudget`,
+  `vm.IncreaseMemBudget`) or scripts (`evmruntime.IncreaseCPUBudget`,
+  `IncreaseMemBudget`) can request extra headroom. Narrow limits for a sub-step
+  with `vm.NarrowBudget` / `vm.NarrowCPUBudget` until `scope.End(vm)`.
+- **Accounting:** Work is charged on every exit including failure, and an
+  exhausted meter stays exhausted until `vm.SetBudget` or a fresh `AcquireVM`.
+  Allocation limits are cumulative over the budget's lifetime, not live heap
+  size. Host functions run outside VM meters unless they call
+  `vm.ChargeAllocation(bytes)`.
 - **Limit errors:** `evm.ErrSteps`, `ErrDepth`, `ErrRegisters`,
   `ErrAllocations`, `ErrAllocation`, `ErrOutput`, and `ctx.Err()` for timeouts
   and cancellation.
@@ -938,15 +1038,16 @@ Go wrappers into your host binary so calls and field accesses avoid reflection.
 - **Recovery vs. fatal:** Scripts catch their own panics and language errors
   with `defer`/`recover()`. Budget exhaustion, cancellation, invalid values,
   and native callback errors are fatal and skip script defers.
-- **Session state after failure:** Any failed run (including wrong Go argument
-  types in `RunEntryNative`) invalidates the VM (`evm.ErrInvalidState`) until
-  `vm.Reset()`; unknown entry names or wrong arities fail before the run and
-  leave the session intact. Results are written only on success, and host side
-  effects are never rolled back.
+- **VM state after failure:** Every outermost `vm.Run` cleans up its globals,
+  record scopes, and register buffers on exit—whether it succeeds or fails—and
+  preserves caller result slots on failure. Spent budget stays charged (an
+  exhausted meter stays exhausted until `vm.SetBudget` or a new `AcquireVM`),
+  and host side effects are never rolled back. Foreign callables and wrong slot
+  counts fail before entering guest code.
 - **Host panics & manual errors:** Panics inside `evmbind` functions become
   fatal VM errors with source positions; panics in hand-written `Call`
-  callbacks propagate after VM cleanup. Move errors manually with `c.SetError`,
-  `c.ErrorValue`, and `c.NativeError`.
+  callbacks propagate after VM cleanup. Move errors manually with `vm.SetError`,
+  `vm.ErrorValue`, and `vm.NativeError`.
 
 #### Standard packages and output
 
@@ -971,7 +1072,7 @@ Go wrappers into your host binary so calls and field accesses avoid reflection.
 #### JSON, ownership, shared source, and coverage
 
 - **JSON:** Convert script `any` to Go trees (`json.Number`) with
-  `program.JSONValue` / `c.JSONValue`, encode JSON bytes with `EncodeJSON` /
+  `program.JSONValue` / `vm.JSONValue`, encode JSON bytes with `EncodeJSON` /
   `EncodeJSONObject`, or call `record.ToJSON()` inside a script.
 - **Ownership of borrowed data:** The compiler automatically copies borrowed
   values (like transaction-scoped records) when they escape. Refine analysis
@@ -990,10 +1091,10 @@ Go wrappers into your host binary so calls and field accesses avoid reflection.
 
 #### Performance
 
-- Compile, link, and build bindings once during setup—never in the request
-  loop.
-- Reuse VMs and argument/result slices so warm calls allocate only what the
-  script itself allocates.
+- Compile, link, resolve callables/codecs, and build bindings once during
+  setup—never in the request loop.
+- Use pooled VMs (`AcquireVM`/`Release`) and stack-allocated slot arrays so
+  warm calls allocate only what the script itself allocates.
 - Generated bindings remove reflection from calls and field reads, not the
   cost of your host logic or row decoding—always measure the whole operation.
 - Reports: [EVM](_docs/benchmarks.md) · [bindings](_docs/bindings.md) ·
@@ -1061,11 +1162,13 @@ Full reference: the [GoX guide](gox/README.md) ·
 - **Compile, link, render:** `gox.Compile`, `CompileSources`, and
   `CompileFiles` (plus `gox.Options{ImplicitTypes, Format, ParseFrontmatter,
   AllowMissingPackage, Environment}` for HTML, text, or CSS). Link once to a
-  concurrent `*gox.Program` (or share host packages with
-  `gox.NewEnvironment` / `NewLinkEnvironment`), and render with
+  concurrent `*gox.Program` (or share host packages and `DefaultLimits` with
+  `gox.NewEnvironment` / `gox.LinkOptions.NewEnvironment`), and render with
   `RenderNative` / `RenderFuncNative` (Go values), `Render` / `RenderFunc`
   (`values.Value`), or `RenderFunction` / `RenderFunctionInCall` (script
-  callables). Output caps at 16 MiB by default; failed renders emit nothing.
+  callables; a delayed render acquires a fresh VM lease while retaining the
+  callable's captures). Output caps at 16 MiB by default; failed renders emit
+  nothing.
 - **Host integration & metadata:** Share GoX types via `gox.Schema()`,
   `TrustedContentSchema()`, and `AmbientSchema()`, store renderers in
   `*evm.FunctionOf[func(*gox.Builder)]`, inspect parameters (`ParametersFor`),
@@ -1145,12 +1248,12 @@ Deep dives: [KVO overview](kvo/README.md) ·
   local (`c.points_earned`) and qualified (`c.customer_points_earned`) field
   selectors, zero-slice `for _, tag := range c.tags` iteration, and
   `c.ToJSON()`.
-- **Passing & editing:** Pass `kvo.Record` or bound struct pointers to
-  `RunEntryNative` / `RenderNative` (`record.Value()` to `vm.Run`), or return
-  them from host functions via `call.SetRecordResult` / `RecordValue`
-  (`call.Record` reads them). Open a scope with `evm.WithRecords(ctx)` for
-  editors (`scope.EditRecord`, `scope.MutableRecord`, `call.SetEditRecordResult`,
-  and `call.FlushRecord` before saving).
+- **Passing & editing:** Pass read-only records as `record.Value()` to `vm.Run`
+  (or `kvo.Record` / bound struct pointers to `RenderNative`), and return them
+  from host functions via `vm.SetRecordResult` / `RecordValue` (`vm.Record`
+  reads them). Open a scope with `evm.WithRecords(ctx)` for editors
+  (`scope.EditRecord`, `scope.MutableRecord`, `vm.SetEditRecordResult`, and
+  `vm.FlushRecord` before saving).
 - **Methods & native storage:** Expose Go helpers as model methods with
   `evmbind.RecordMethod`, `RegisterMethods`, and `GenerateMethods`; pass model
   structs through host APIs with `evmbind.Options.Models` and `Mutable`; add
@@ -1186,7 +1289,7 @@ imports `kvo`; the other two codecs sit below because `kvo` imports them.
 
 | Guide | What it covers |
 | --- | --- |
-| [Embedding EVM](_docs/embedding.md) | Sessions, shared environments, budgets, errors, borrowing effects, shared source, and coverage |
+| [Embedding EVM](_docs/embedding.md) | Programs, VM leases, codecs, guest aggregates, synchronous callbacks, budgets, errors, borrowing effects, shared source, and coverage |
 | [`evmbind`](evmbind/README.md) | Binding Go packages from source, generated wrappers, reflection discovery, and explicit record methods |
 | [Hand-written bindings](_docs/bindings.md) | Manual `evm.Package` declarations, `DirectBinding`, Go-backed record storage, and binding benchmarks |
 | [Standard packages](evmstd/API.md) | Complete inventory of every standard library symbol exposed to scripts (and why omitted ones are excluded) |

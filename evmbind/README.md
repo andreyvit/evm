@@ -27,8 +27,8 @@ provides the Go values:
 
 - **`Options.Functions`** maps each exported package function to its Go value.
   Alternatively, you can implement package functions as methods on an
-  `Options.Host` type taking a leading `*evm.Call`, and supply the receiver
-  when calling `schema.Bind(host)`.
+  `Options.Host` type taking a leading `*evm.VM`, and
+  supply the receiver when calling `schema.Bind(host)`.
 - **`Options.Types`** registers native Go types that no bound function, method,
   or struct field reaches on its own (reachable types are discovered
   automatically by reflection). Register concrete context types with
@@ -47,9 +47,10 @@ kept), `Options.Methods` (methods per type), and `Options.Fields` or
 
 Compile scripts against `schema.Package()`, and link each module against
 `schema.Bind(receiver)` (or `schema.Bind(nil)` when there is no host receiver).
-You can create as many VM sessions from a linked program as needed. Remember
-that a **schema** owns nominal type identities, while a **program** owns the
-numeric dynamic type IDs used during execution.
+You can acquire concurrent VMs from a linked program with
+`program.AcquireVM(ctx)`. Remember that a **schema** owns nominal type
+identities, while a **program** owns the numeric dynamic type IDs used during
+execution.
 
 Store each schema in a host-level `sync.OnceValue`. Parsing, type checking,
 enum extraction, and native layout binding then happen once per binary, and
@@ -170,7 +171,7 @@ opt := evmbind.Options{
 ```
 
 Slot indices are zero-based and exclude the method receiver and any host-only
-`*evm.Call` (method keys use `Type.Method`). Pass the same `Mutable` options to
+`*evm.VM` (method keys use `Type.Method`). Pass the same `Mutable` options to
 `Generate`. Unknown names, out-of-range indices, or non-model / non-pointer
 slots fail schema construction. Each annotation applies only to that call site;
 ordinary model pointers and `any` results stay immutable by default.
@@ -312,21 +313,49 @@ ordinary call window rather than direct-call opcodes. Variadic native function
 
 ## Native values
 
+### Typed codecs (`evmbind.Codec[T]`)
+
+Resolve a bound Go type once during setup with `evmbind.Codec[T](schema)`:
+
+```go
+customerCodec, err := evmbind.Codec[*Customer](shopSchema)
+tagsCodec, err := evmbind.Codec[map[string][]string](shopSchema)
+```
+
+- `codec.Type()` returns the bound `*values.Type` for `program.LookupFunction`.
+- For ordinary bound native struct pointers, `codec.Pack(ptr)` and
+  `codec.Unpack(v)` convert without copying or reflection. They preserve the
+  live Go address and map a typed `nil` pointer to/from the zero `values.Value{}`.
+- For slices, maps, structs, and other bound types (or metered conversions in
+  general), call `codec.PackIn(vm, x)` and `codec.UnpackIn(vm, v)` so
+  allocations and bounds are checked against the active `*evm.VM` budget.
+  On a non-pointer codec, `Pack` panics and `Unpack` returns an error pointing
+  to `PackIn` / `UnpackIn`.
+- Codecs follow the schema's declared types and static-only policy: unsupported
+  or unregistered Go types fail at setup rather than registering at run time.
+  Because `values.Value` slots carry no runtime type tag, callers must match
+  each argument slot to its parameter type in the checked signature.
+
 ### Interfaces
 
-Pass a host interface value into a script with `schema.Interface(program, ptr)`.
-The concrete type must be registered and implement a declared interface. In the
-VM pair, `R` carries the program's nonzero type index and `P` holds the
-original GC-visible Go pointer (typed nils preserve their type index).
+Pass a host interface value across the Go boundary with
+`schema.PackInterface(program, ptr)` and recover it with
+`schema.UnpackInterface(program, v)`. The concrete type must be registered and
+implement a declared interface. In the EVM value, `R` carries the program's
+nonzero type index and `P` holds the original GC-visible Go pointer—a typed
+`nil` preserves its type index with `P == nil`, whereas untyped `nil` packs as
+the zero value. (`program.PackInterface` and `program.UnpackInterface` wrap and
+unwrap already-packed EVM values.)
 
 - Both generated and reflected paths expose only declared interface methods,
   and generated code dispatches through the native Go interface directly.
 - Context values passed back to native code must come from a registered host
   implementation; repack them for the destination program when crossing
   programs.
-- Use `PointerForCall` when a receiver needs the active `*evm.Call` (for
-  example, to open or close a budget scope): it may return a shallow receiver
-  copy for that call while leaving the original pointer in the guest interface.
+- Use `PointerForCall` when a receiver needs the active `*evm.VM`
+  (for example, to open or close a budget scope): it may return a shallow
+  receiver copy for that call while leaving the original pointer in the guest
+  interface.
 - Embedded host interfaces can be passed wherever a smaller method set is
   expected.
 
@@ -338,8 +367,9 @@ scalars:
 
 - Data structs cross by value. Host pointers keep their Go address so guest
   fields, aliases, escaped field addresses, and native methods all operate on
-  the same object. Pass a registered struct pointer as an entry argument with
-  `schema.NativePointer(ptr)` (the host must synchronize concurrent access).
+  the same object. Prefer `evmbind.Codec[*T](schema)` (`codec.Pack(ptr)`) for
+  entry arguments; `schema.NativePointer(ptr)` provides an untyped check when
+  the Go type is held as `any` (the host must synchronize concurrent access).
 - Guest allocations and package variables of registered data structs and
   scalars use native Go storage too. Other guest addresses backed by VM cells
   use the call-scoped temporary and copy-back boundary.
@@ -392,7 +422,7 @@ schema, err := evmbind.New("db", edb.TransactionBindingSource, evmbind.Options{
 In a selective schema, only bound functions enter the guest package, and the
 types they reference are pulled in recursively while function bodies are
 ignored. Binding validates argument and result types against the supplied Go
-function, calls it directly without a synthetic `*evm.Call` or host receiver,
+function, calls it directly without a synthetic `*evm.VM` or host receiver,
 and preserves native reference sharing on return.
 
 `Generate` uses the same options and selection, invoking the registered
@@ -407,63 +437,57 @@ host boundary.
 
 ### Typed function handles
 
-- **`*evm.FunctionOf[func(int) int]`** accepts closures, bound methods, and
-  native functions; Go sees `*evm.FunctionHandle`. Both generated and reflected
-  bindings accept and return these handles as script function values. Returned
-  handles must belong to the current program and match the declared signature
-  (`nil` round-trips as `nil`). Handle creation is allocation-metered, captures
-  keep their identity across calls, and the host invokes them with
-  `VM.RunFunction`, `RunFunctionWithBudget`, or `RunFunctionNative`.
-  - Struct fields may also use `FunctionOf`: reads, writes, address-taking, and
-    struct copies translate through the current program (foreign handles fail
-    before invocation), stores meter the retained handle, and Go keeps an
-    ordinary typed pointer field.
-- **`*evm.NamedFunctionOf[func(int) any]`** accepts only public, non-capturing
-  guest functions; Go sees `*evm.NamedFunction`. The type argument supplies the
-  guest signature so incompatible functions fail compilation, and both binding
-  paths resolve the handle without boxing it in `any` (`nil` gives `nil`).
+- **`*evm.FunctionOf[func(int) int]`** (type-aliased to `evm.Callable`) accepts
+  named guest functions, closures, bound methods, and native functions; Go sees
+  `*evm.Callable`. The type argument supplies the guest signature so
+  incompatible functions fail compilation, and both generated and reflected
+  bindings accept and return these callables as script function values without
+  boxing them in `any`. Returned callables must belong to the current program
+  and match the declared signature (`nil` round-trips as `nil`). Retaining a
+  closure keeps its captures and owning `*evm.Program` alive; invoke it with
+  `vm.Run(*fn, slots)` on an acquired `*evm.VM` (or synchronously on the active
+  `*evm.VM` inside a binding). If a host requires a named, non-capturing guest
+  function, check `fn.Name()` and `!fn.HasCaptures()`.
   - The signature may include nested function parameters and slices (such as
     `func(func([]string), func([]any))` for a header/row producer). Those
-    values stay in VM storage, so invoke the handle with program-owned native
+    values stay in VM storage, so invoke the callable with program-owned native
     callbacks.
+  - Struct fields may also use `FunctionOf`: reads, writes, address-taking, and
+    struct copies translate through the current program (foreign callables fail
+    before invocation), stores meter the retained callable, and Go keeps an
+    ordinary typed pointer field.
 
 ### Untyped (host-validated) handles
 
-Use these input-only forms when the host itself validates the signature at
-registration (for example, a GoX renderer whose data type is declared by the
-script). In both cases, scripts see an `any` parameter:
-
-- **`*evm.NamedFunctionOf[any]`** accepts only public, non-capturing guest
-  functions or untyped `nil`, returning `*evm.NamedFunction` (typed `nil`
-  functions and other values are rejected).
-- **`*evm.FunctionOf[any]`** also allows closures and bound methods, returning
-  `*evm.FunctionHandle`. Both untyped `nil` and typed `nil` functions yield a
-  `nil` handle, while non-functions fail at the call boundary. Inspect the
-  signature before invoking.
+Use **`*evm.FunctionOf[any]`** (input-only; scripts see an `any` parameter)
+when the host itself validates the signature at registration (for example, a
+GoX renderer whose data type is declared by the script). It accepts named guest
+functions, closures, bound methods, and native functions, returning
+`*evm.Callable`. Both untyped `nil` and typed `nil` functions yield a `nil`
+pointer, while non-functions fail at the call boundary. Validate the contract
+with `fn.CheckSignature(want)` (and inspect `fn.Signature()`, `fn.Name()`, or
+`fn.HasCaptures()`) before publishing or invoking.
 
 ### Native Go function types and callback scopes
 
 Ordinary Go function types can also appear in data fields and method
-signatures. Native calls and callbacks use the originating VM's globals,
-context, and budget, and must be serialized like any other use of that VM.
-Guest panics unwind native defers and remain recoverable by guest callers.
+signatures. Native calls and callbacks run synchronously on the active VM's
+goroutine with its globals, context, and remaining budget, and must be
+serialized like any other use of that VM (EVM provides no blanket guarantee of
+guest race safety on shared captures or native pointers). Guest panics unwind
+native defers and remain recoverable by guest callers.
 
-- `vm.RunFunctionNative(ctx, handle, args, results, budget)` converts ordinary
-  Go arguments and results within the supplied budget and VM state. Argument
-  types must match the registered signature exactly (no implicit numeric
-  conversions). Interface parameters accept `nil` or registered
-  implementations; interface results keep their concrete identity (guest-only
-  values return as `*evm.GuestValue`, and `nil` interfaces—including `nil`
-  errors—return `nil`).
-- **Idle callbacks:** Native function fields remember their originating VM. To
-  call them while that VM is idle, either run inside `vm.RunNative(ctx, call,
-  budget)` or open `vm.OpenCallbackScope(ctx, budget)` (which also enables
-  existing callbacks) and close it before reusing the VM for unrelated work.
-  Without an open scope, idle calls fail; `vm.Reset()` expires all exported
-  callbacks, and a failed idle callback invalidates the session until `Reset`.
-  Guest-defined `error` methods follow the same rules—keep the scope open and
-  the context valid while Go formats or inspects them. Native Go errors and
-  native-created functions are unaffected.
+- **Idle callbacks:** Native Go function fields remember their originating VM.
+  While that VM is idle, open `scope, err := vm.OpenCallbackScope()` if host
+  code needs to invoke those Go function wrappers outside a running guest call
+  (close `scope` when done). An open scope keeps exported adapters callable
+  even after `vm.Release()`, acquiring a fresh VM with the same program, Go
+  context, and default budget. Without an open scope, idle calls fail
+  (`ErrCallbackInactive`), and `vm.Release()` expires them
+  (`ErrCallbackExpired`). Guest-defined `error` methods follow the same
+  rules—keep an active call or open scope and a valid context while Go formats
+  or inspects them. Native Go errors and native-created functions are
+  unaffected.
 - **Identity without wrapper stacking:** Native callable values remember their
   original Go function value, and guest-created functions read back from native
   storage recover their program-owned handle (tracked weakly and cleaned up
@@ -491,7 +515,7 @@ wrapper).
 A generated pointer wrapper passes native addresses directly—only VM-cell
 arguments need a temporary and copy-back. Returned strings are charged once and
 keep their Go data pointer visible to the GC. In a hand-written direct binding
-that returns a KVO row, construct its typed pair with `Call.RecordValue`.
+that returns a KVO row, construct its typed pair with `VM.RecordValue`.
 Direct callbacks may return conversion or execution errors; expose fallible
 application operations through `Native`.
 

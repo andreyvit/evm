@@ -181,8 +181,8 @@ flowchart LR
         L --> P["Immutable Program (shared)"]
     end
     subgraph Run["Run per request"]
-        P --> V["VM session (registers + globals)"]
-        X["Budget + context + record scope"] --> V
+        P --> V["Pooled VM lease (registers + globals)"]
+        X["Context + budget + record scope"] --> V
     end
 ```
 
@@ -192,10 +192,13 @@ Look at how cleanly the responsibilities separate:
 - **Compiling** checks the script against that schema and produces a `Module`
   full of instructions and named imports.
 - **Binding** pairs the schema with a concrete Go receiver.
-- **Linking** resolves imports to bindings, validates every operand, and
-  produces an immutable `Program` you can share across goroutines.
-- A **VM** is one execution session over that program, with its own registers
-  and package variables.
+- **Linking** resolves imports to bindings, validates every operand, copies
+  default limits (`LinkOptions.DefaultLimits`), and produces an immutable
+  `Program` you can share across goroutines.
+- A **VM** is a reusable, single-goroutine execution lease acquired from a
+  shared pool (`program.AcquireVM(ctx)` / `defer vm.Release()`), with its own
+  register banks, call stack, budget meter, and fresh package variables per
+  outermost `Run`.
 
 KVO records follow the same split: the compiled module records the model and
 numeric property code, the linker validates them, and the running VM reads the
@@ -207,11 +210,12 @@ necessary step:
 | What changed | What you need to redo |
 | --- | --- |
 | A different `meter` receiver instance | Bind the new receiver and re-link the existing `Module`. |
-| Need isolated globals for another request | Create another `VM` from the same `Program`. |
+| Concurrent request on another goroutine | Acquire another `VM` from the same `Program` (`program.AcquireVM(ctx)`). |
 | Edited script source | Recompile and re-link against the existing schema. |
 | Changed host API declarations | Rebuild the schema, check wrappers, and recompile scripts. |
 
-In Go, the whole pipeline for a parameterless `Run` entry is ten lines:
+In Go, the whole pipeline for a parameterless `Run` entry resolves the function
+once and runs it on an acquired VM:
 
 ```go
 module, err := evmcompiler.Compile("main.go", source, schema.Package())
@@ -222,7 +226,13 @@ program, err := evm.Link(module, schema.Bind(host))
 if err != nil {
     return err
 }
-return evm.New(program).Run(ctx, "Run", nil, nil)
+run, err := program.LookupFunction("Run", &evm.Signature{})
+if err != nil {
+    return err
+}
+vm := program.AcquireVM(ctx)
+defer vm.Release()
+return vm.Run(run, nil)
 ```
 
 Notice what the trust boundary looks like here. The host decides which packages
@@ -244,8 +254,12 @@ A handful of terms recur throughout the rest of this book:
 | **Schema** | The script-facing declarations of one external package, built once by `evmbind` from Go source. |
 | **Binding** | The native Go code wired behind an external declaration. |
 | **Module** | Compiler output: bytecode instructions and operand tables, with imports still referenced by name. |
-| **Program** | Linked module: imports resolved to bindings and operands validated. Immutable and safe to share. |
-| **VM / session** | One live execution state over a program: register banks, call stack, and script package variables. |
+| **Program** | Linked module: imports resolved to bindings, operands validated, and default limits copied. Immutable and safe to share. |
+| **VM** | A reusable, single-goroutine execution object leased via `AcquireVM` / `Release`: register banks, call stack, budget meter, and fresh script package variables per outermost `Run`. |
+| **EVM value** | Data passed across the host API as a `values.Value`. The signature or operation supplies its type. |
+| **Slot** | An indexed position, such as argument slot 0 or register slot 3. A value is the data at that position. |
+| **EVM storage cell** | One addressable `values.Value` in VM backing storage (16 bytes on a 64-bit host). A cell can hold a scalar, part of a larger value, or VM bookkeeping. A register-only integer needs no cell. |
+| **Pack / unpack** | At the Go boundary, pack a Go value into an EVM value and unpack an EVM value into Go. Within EVM, packing into an interface adds the linked type identity. Unpacking the interface recovers the concrete value and type. |
 | **R, P, V** | A word register (`uint64`), a GC-visible pointer register (`unsafe.Pointer`), and the pair of both at the same index. |
 | **KVO / Record** | EVM's typed data-modeling layer (Chapter 3): one 16-byte handle (`kvo.Record`) that reads Go structs and encoded database rows through the same API. |
 
@@ -296,7 +310,7 @@ never a spare integer**, and **`R` must never be the sole reference to a Go
 object.**
 
 Splitting the banks also saves work on hot paths: integer and floating-point
-arithmetic touch only the `R` bank, never allocating a 16-byte cell or
+arithmetic touch only the `R` bank, never allocating a 16-byte storage cell or
 bothering the GC. Strings, slices, interfaces, and KVO records use both halves:
 
 | Script value | `R` (word) | `P` (GC-visible pointer) |
@@ -308,8 +322,8 @@ bothering the GC. Strings, slices, interfaces, and KVO records use both halves:
 | Pointer | Unused. | Address. |
 | Struct or array value | Unused. | Flattened snapshot (`nil` can represent all zeros). |
 | `complex64` | Real and imaginary `float32` bits packed together. | Unused. |
-| `complex128` | Unused. | Pointer to two `float64` cells. |
-| Function | Program's function-reference index + 1 (`0` = `nil`). | Closure capture environment, if any. |
+| `complex128` | Unused. | Pointer to two `float64` storage cells. |
+| Function (guest) | Program's function-reference index + 1 (`0` = `nil`). | Closure capture environment, if any. (A retained host `evm.Callable` is also 16 bytes on 64-bit hosts, holding a shared linked-target pointer with its owning `*Program` plus the capture pointer.) |
 | Interface | Payload, tag, or concrete type ID (see §2.5). | Scalar marker, backing pointer, or fallback box. |
 | KVO record / list | Typed-pair tag, representation ID, and auxiliary length. | Encoded or native payload. |
 
@@ -391,6 +405,12 @@ Row.Code     0                     cell 0: R for Code[0]
 Row.Name     2                     cell 2: R length, P bytes
 Total        3 cells               48 logical bytes on a 64-bit machine
 ```
+
+Here `Row` is one guest value with three cells of field data. When passed
+by value, its register representation points to a snapshot of those cells.
+The allocator reserves one extra cell so a trailing zero-sized field can have
+an address inside the allocation. That extra cell occupies a `values.Value`
+in Go memory even though it holds no field data.
 
 ```mermaid
 flowchart LR
@@ -682,7 +702,7 @@ every other VM value: `P` points at the payload, and `R` packs a tag, a
 representation ID, and an auxiliary byte length. That representation ID indexes
 shared metadata naming both the model and the physical layout, so every
 representation travels in one uniform carrier—returning a record via
-`call.SetRecordResult(model, record)` allocates nothing.
+`vm.SetRecordResult(model, record)` allocates nothing.
 
 When a script writes `c.profile.balance`, the compiler resolves both names to
 property codes and—if `c.profile` has no other use—fuses them into a single
@@ -725,7 +745,7 @@ property (see [kvo/_docs/access.md](../kvo/_docs/access.md)).
 Even lists inside a record can avoid allocating a Go slice. Whenever the
 compiler proves that a script only reads a scalar or string list locally
 (`for _, tag := range c.tags`, `len`, or indexing), the script carries KVO's
-16-byte list cell and reuses a VM iterator workspace—materializing an owned
+16-byte list value and reuses a VM iterator workspace—materializing an owned
 slice only if the list is mutated or escapes. That was a **measured trade-off**:
 list microbenchmarks improved 2–12% on range and 5–13% on `len` with zero
 allocations across 552 samples (while whole-database scans of 463K rows stayed
@@ -751,7 +771,7 @@ windows, and the instruction set itself.
 > - KVO separates logical schema (models + permanent numeric property codes) from physical storage (`Fast2`, `Compact2`, `MessagePack`, Go structs, decoded memory).
 > - A `kvo.Record` travels in the same 16-byte `(R, P)` pair as any VM value, enabling zero-decode, zero-allocation field reads.
 > - Immutable records borrow their bytes; the EVM compiler inserts `Own` copies automatically where records escape (Chapter 7), while mutable editors live in transaction scopes.
-> - Local read-only scalar/string lists iterate in place through 16-byte list cells without materializing Go slices.
+> - Local read-only scalar/string lists iterate in place through 16-byte list values without materializing Go slices.
 
 ## 4. Instruction set and calling convention
 
@@ -1044,7 +1064,7 @@ allocate and access VM heap cells via shape descriptors, and check pointers for
 | 51 | `alloc` | Pa ← address of fresh zeroed storage for Shapes[B]. B is the 16-bit shape index. C is unused and must be zero. |
 | 52 | `load` | Read through Pb into slot A using Shapes[C]. The shape chooses R, P or V. Snapshot an aggregate. |
 | 53 | `store` | Write through Pa from slot B using Shapes[C]. The shape chooses the source bank(s) and how many cells to copy. |
-| 55 | `global` | Pa ← address of session global BC. Read or mutate it with load/store. |
+| 55 | `global` | Pa ← address of per-run package global BC. Read or mutate it with load/store. |
 | 60 | `check.nil` | Raise a nil-pointer fault if Pa is nil. B = C = 0. |
 
 `alloc` charges for the shape before allocating its cells. `load` and `store`
@@ -1289,7 +1309,7 @@ The table omits the common `Extended` prefix from the kind names. Parentheses in
 | FieldStore | struct address, value → write one field by ordinal, through the native layout when the struct has one. |
 | Own | value → the same value with borrowed data copied (§3.3). |
 | RecordCopy | record pair → pointer to an owned one-cell struct holding the record. |
-| RecordList / RecordListLen / RecordListIndex | record pair → list cell, its length, or record pair, index → element, for a list property read in place (§3.4). |
+| RecordList / RecordListLen / RecordListIndex | record pair → list value, its length, or record pair, index → element, for a list property read in place (§3.4). |
 
 ### 4.9 Defers, panic, and recover
 
@@ -1802,14 +1822,15 @@ Notice what survived into bytecode and what vanished:
 - **`Next` disappeared completely.** Go's type checker folds `iota` constants
   before emission, so `balance += Next` becomes `add.imm.i64 r2 r1 2`—the
   literal `2` baked straight into the instruction.
-- **`balance` lives in per-session global storage.** `Visit` fetches its
+- **`balance` lives in per-run global storage.** `Visit` fetches its
   address with `global p0 gbl0`, loads it, adds `2`, and stores it back. Every
-  `*evm.VM` gets its own `gbl0` cell, so two sessions never share package state.
+  outermost `vm.Run` allocates fresh `gbl0` storage and clears it on exit, so
+  separate invocations never share package state.
 - **Synthetic package `init` guards one-time setup.** The compiler synthesizes
   `fun2 init`, which checks a hidden boolean guard (`gbl1`), stores `balance = 1`
-  (PC 7), and calls the user's `init#1` (PC 8) to add `4`. A fresh session runs
-  `init` once before the first entry call, so two calls to `Visit()` return `7`
-  and `9`.
+  (PC 7), and calls the user's `init#1` (PC 8) to add `4`. Each outermost
+  `vm.Run` runs `init` once before entering the function, so two calls to
+  `Visit()` within one run return `7` and `9`.
 
 Type definitions (`Points`) keep their nominal identity for methods and type
 assertions, while type aliases (`Total = Points`) vanish completely. Local
@@ -1919,9 +1940,9 @@ fun1 Components   R=9 P=1
 ```
 <!-- /bytecode -->
 
-Notice the contrast in register banks: `complex64` packs two `float32` values
-into a single 64-bit word (`r2`), whereas `complex128` needs two 64-bit cells
-and therefore lives behind a pointer (`p0`). Every operation except the final
+`complex64` packs two `float32` values into one 64-bit register (`r2`).
+For `complex128`, `p0` points to two EVM storage cells. Each holds one
+`float64` component in its R word. Every operation except the final
 `add.f64` goes through `extended`—keeping complex arithmetic and `min`/`max`
 out of the hot main switch.
 
@@ -3454,7 +3475,7 @@ differences to keep in mind.
 - **32-bit slice lengths and capacities:** Slice headers pack length and
   capacity into a single 64-bit `R` word, capping each at `uint32` elements.
 
-#### 2. Host-defined virtual packages and session globals
+#### 2. Host-defined virtual packages and per-run globals
 
 - **Closed import universe:** A script can import only packages explicitly
   supplied by the host plus EVM's built-in / `evmstd` standard library. There
@@ -3469,9 +3490,10 @@ differences to keep in mind.
   `db.Customers`) can be read and have methods called on them, but scripts
   cannot reassign them (`db.Customers = ...`) or take their address
   (`&db.Customers`).
-- **Session-scoped package variables:** Script `var` globals and `init()`
-  belong to one `*evm.VM` session—not the Go process—and reset whenever the
-  host calls `vm.Reset()`.
+- **Per-run package variables:** Script `var` globals and `init()` start fresh
+  on every outermost `vm.Run`—not once per process—and are cleared when that
+  outermost call returns. Synchronous nested callbacks inside the same `Run`
+  share those active globals.
 
 #### 3. Host-bound structs, generics, and boundary types
 
@@ -3511,7 +3533,7 @@ expressions, with five important differences:
   function).
 - **Zero-slice local list iteration:** Ranging over a local, read-only
   scalar/string list property (`for _, tag := range c.tags`) traverses KVO's
-  16-byte list cell in place without allocating a slice.
+  16-byte list value in place without allocating a slice.
 
 #### 5. Borrowing and automatic ownership copies
 
@@ -3540,12 +3562,18 @@ copies for borrowed host data (transaction-scoped KVO records and
   `ErrAllocation`, `ErrDepth`, `ErrOutput`), context cancellation, invalid
   values, and host callback errors are **fatal**—they abort immediately without
   running script `defer`s.
-- **Invalidated sessions and no rollback:** After any uncaught failure, the VM
-  returns `evm.ErrInvalidState` until `vm.Reset()`, and host side effects are
-  not rolled back.
-- **VM-bound closures and guest errors:** A script closure or script-defined
-  `error` returned to Go stays tied to its owning VM. Calling it while the VM
-  is idle requires `vm.RunNative` or `vm.OpenCallbackScope`.
+- **Cleanup on failure and no rollback:** After every outermost `vm.Run`
+  (whether it succeeds or fails), the VM clears package globals, active scopes,
+  and execution buffers, and leaves caller result slots untouched on failure.
+  Spent budget stays charged (an exhausted meter stays exhausted until
+  `vm.SetBudget` or a new `AcquireVM`), and host side effects are not rolled
+  back.
+- **Retained closures and guest errors:** A retained `evm.Callable` keeps its
+  receiver/captures and owning `*evm.Program` alive; delayed invocation
+  acquires a fresh VM from `fn.Program().AcquireVM(ctx)` (with fresh globals;
+  callers must synchronize concurrent access to shared mutable captures). A
+  script-defined `error` returned to Go needs an active call or
+  `vm.OpenCallbackScope` while Go calls `Error()`.
 
 > **Key takeaways — Chapter 6**
 > - Constants, `iota`, type aliases, and open generic templates vanish at compile time; only concrete, reachable code emits bytecode.
@@ -3611,13 +3639,13 @@ Let's unpack every piece of machinery that makes those 12 instructions work.
 
 ### 7.1 Host calls: register windows and direct bindings
 
-A hand-written host function sees a clean `*evm.Call` interface where argument
-`0` is always argument `0`, whether it occupies one register or a pair:
+A hand-written host function receives the executing `*evm.VM` where argument `0` is always argument `0`, whether it occupies
+one register or a pair:
 
 ```go
-func(c *evm.Call) error {
-    n := len(c.Argument(0).AsString()) + int(c.Argument(1).AsInt())
-    c.SetResult(0, values.Int(int64(n)))
+func(vm *evm.VM) error {
+    n := len(vm.CallArgument(0).AsString()) + int(vm.CallArgument(1).AsInt())
+    vm.SetCallResult(0, values.Int(int64(n)))
     return nil
 }
 ```
@@ -3652,22 +3680,21 @@ When the wrapper writes its `int` result into result slot 0, it overwrites
 `R0` (formerly the string length)—which is why wrappers always read all inputs
 before writing results.
 
-To avoid allocating on every host call, the VM reuses a single embedded
-`vm.call` struct and slices the exact outgoing register window with three-index
-slices (bounding both length and capacity):
+To avoid allocating on every host call, the VM hands the binding `*evm.VM`
+itself and slices the exact outgoing register window with three-index slices
+(bounding both length and capacity):
 
 ```go
 g := &vm.program.natives[index]
 rb, pb := cur.rb+f.RCount, cur.pb+f.PCount
 rn, pn := g.rSize, g.pSize
 // ... clear any result slots beyond the incoming arguments ...
-// Program and budget were set at run entry.
-vm.call.native, vm.call.Context, vm.call.Position = g, budget.ctx, position
-vm.call.output = vm.Output
-vm.call.R = vm.r[rb : rb+rn : rb+rn]
-vm.call.P = vm.p[pb : pb+pn : pb+pn]
-err = call(&vm.call) // the binding's Call function
-vm.call.R, vm.call.P = nil, nil
+vm.native, vm.Context, vm.Position = g, budget.ctx, position
+vm.R = vm.r[rb : rb+rn : rb+rn]
+vm.P = vm.p[pb : pb+pn : pb+pn]
+vm.usedR, vm.usedP = rb+rn, pb+pn
+err = call(vm) // the binding's Call function
+vm.R, vm.P = nil, nil
 if g.results.PCount < pn {
     clear(vm.p[pb+g.results.PCount : pb+pn])
 }
@@ -3675,7 +3702,8 @@ if g.results.PCount < pn {
 
 Right after `call` returns, the VM detaches the slices and clears any pointer
 slots outside the result prefix so incoming arguments are released to the GC.
-That is also why a wrapper must never retain `*evm.Call` or its register slices.
+That is also why a wrapper must never retain the borrowed `*evm.VM` or its
+register slices.
 
 #### Skipping the window for small calls
 
@@ -3763,13 +3791,13 @@ schema, err := evmbind.New("h", os.DirFS("internal/fixture"), evmbind.Options{
 Each option has one clear job:
 
 - **`Host`** names the Go receiver whose methods implement package functions
-  (each method takes a leading `*evm.Call`). From those signatures, `evmbind`
-  discovers reachable native data types automatically.
+  (each method takes a leading `*evm.VM`). From those
+  signatures, `evmbind` discovers reachable native data types automatically.
 - **`Types`** adds extra root types nothing else points to (`Observer`).
 - **`Implementations`** registers concrete Go types that may satisfy script
   interfaces (`*transaction` implementing `Context`). Use
   `Pointer[transaction]()` normally, or `PointerForCall` when a method needs
-  the active `*evm.Call` (for source positions or budget scopes) without
+  the active `*evm.VM` (for source positions or budget scopes) without
   changing the pointer held by the script.
 
 Two real-world Go patterns work seamlessly across this boundary:
@@ -3787,8 +3815,9 @@ observer.Observe(columns, row)
 ```
 
 2. **Synchronous callbacks back into scripts:** A host method like
-   `During(func())` can invoke a script closure mid-call via
-   `Call.RunCallback`:
+   `During(func())` invokes a script closure synchronously on the same borrowed
+   `*evm.VM` and goroutine with `vm.Run(cb, slots)` (and dynamic interface
+   dispatch resolves a bound callable first with `vm.LookupMethod`):
 
 ```go
 var n int
@@ -3798,9 +3827,19 @@ observer.During(func() {
 })
 ```
 
-The callback runs with its own register slices and frame stack (so the parent
-host call's argument window stays untouched) while sharing the VM's globals,
-captures, record scope, and remaining budget.
+`vm.Run` always runs on the same `*evm.VM`. An outermost call—including a
+native root—uses the leased VM's own registers directly. Separate stable
+register storage is needed only on re-entry from an active native call
+(`vm.inNativeCall`, including a native root that calls `vm.Run`):
+`vm.enterCallback` saves the outer binding state (`native`, `R`, `P`, `usedR`,
+`usedP`, `Position`, and the outer `executionBuffers`) and swaps in a separate
+pooled `executionBuffers` segment so any `vm.R` / `vm.P` window already lent to
+the outer Go binding stays valid even if the nested call grows its registers.
+The nested `vm.Run` shares the same globals, captures, record scope,
+cancellation context, and remaining budget (charging combined call depth and
+register counts), then `restore` returns the cleared segment to the pool and
+restores the outer binding window on every exit—including errors, panics, and
+budget failure.
 
 Under the hood, `evmbind.parse` type-checks the non-test `.go` files with
 `go/types`, walks exported declarations, and builds shapes—tracking VM cell
@@ -3813,30 +3852,46 @@ structs and functions bind per instantiation via `Options.Instances` and
 
 ### 7.3 Binding receivers and packing host interfaces
 
-Here is the full sequence that compiles, links, and runs our opening `Run`
-example (error checks omitted):
+Here is the full sequence that compiles, links, resolves, and runs our opening
+`Run` example (error checks omitted):
 
 ```go
 module, err := evmcompiler.Compile("credit.go", source, schema.Package())
 program, err := evm.Link(module, schema.Bind(&host{}))
+run, err := program.LookupFunction("Run", &evm.Signature{
+    Params:  []*values.Type{schema.Type("Context")},
+    Results: []*values.Type{values.IntType},
+})
 tx := new(transaction)
-arg, err := schema.Interface(program, tx)
-var result [1]values.Value
-err = evm.New(program).Run(ctx, "Run", []values.Value{arg}, result[:])
+arg, err := schema.PackInterface(program, tx)
+vm := program.AcquireVM(ctx)
+defer vm.Release()
+slots := [2]values.Value{arg}
+err = vm.Run(run, slots[:])
 ```
 
 Notice the two distinct lifetimes: the `host` receiver is fixed at `Link` time
 (changing it requires re-linking), whereas you can pass a fresh `transaction`
-to every `Run` call on the same `Program`. Interface packing happens *after*
-linking because the concrete type ID belongs to `program`:
+to every `vm.Run` call on the same `Program`. Interface packing with
+`schema.PackInterface` (and unpacking with `schema.UnpackInterface`) happens
+*after* linking because the concrete type ID belongs to `program`:
 
 ```go
 return values.Value{R: uint64(id), P: ptr}, nil
 ```
 
 A typed `nil` (`(*transaction)(nil)`) has a nonzero `R` and `nil` `P`, while an
-empty interface has both zero. Because `P` holds the real Go pointer, the script
-can call `Credit` without ever being able to touch `tx.balance`.
+untyped `nil` interface has both zero. Because `P` holds the real Go pointer,
+the script can call `Credit` without ever being able to touch `tx.balance`.
+Each slot in `slots` carries an untyped `values.Value`, so callers are
+responsible for packing every argument slot to match its parameter type in the
+checked signature (and unpacking result slots accordingly). For ordinary bound
+struct pointers (non-interface parameters), resolve a typed
+`evmbind.Codec[*Row](schema)` once and pack/unpack directly with `Pack`/`Unpack`
+(or `PackIn`/`UnpackIn` for metered conversions of slices, maps, and structs);
+for guest-only aggregates and maps, obtain the linked guest types from the
+resolved signature and use `vm.PackAggregate` / `vm.UnpackAggregate` and
+`vm.PackMap` / `vm.UnpackMap`.
 
 ### 7.4 Generated wrappers vs. reflection
 
@@ -3881,10 +3936,10 @@ func (t *transaction) Credit(n int) int {
 ```
 
 When PC 8 finishes, `t.balance` is `65535` in Go memory and outgoing `R7` holds
-`65535` in the VM; PCs 9–10 move it to `R0`. After `Run` returns, `tx.balance`
-and `result[0].AsInt()` agree—not through any magic synchronization, simply
-because mutating host state and returning a value are two separate, explicit
-steps.
+`65535` in the VM; PCs 9–10 move it to `R0`. After `vm.Run` returns,
+`tx.balance` and `slots[1].AsInt()` agree—not through any magic synchronization,
+simply because mutating host state and returning a value are two separate,
+explicit steps.
 
 ### 7.6 The virtual standard library
 
@@ -4051,7 +4106,7 @@ helpers are analyzed automatically.
 Now that scripts can talk to Go, we need to make sure they can never hang the
 host process or exhaust its memory. That is Chapter 8.
 
-## 8. Sessions, budgets, and failure handling
+## 8. VM leases, budgets, and failure handling
 
 Every embedded VM eventually meets an infinite loop:
 
@@ -4077,31 +4132,56 @@ returns `evm.ErrSteps`. Putting the fuel check right in the interpreter—rather
 than trusting the compiler to instrument every back edge—makes an unstoppable
 loop impossible.
 
-### 8.1 VM sessions and initialization
+### 8.1 VM leases, fresh globals, and budgets
 
-`evm.New(program)` wraps an immutable, shared `Program` in a single-goroutine,
-non-reentrant session:
+`program.AcquireVM(ctx)` leases a pooled, single-goroutine `*evm.VM` for an
+immutable, shared `*evm.Program`, and `defer vm.Release()` returns its cleared
+reusable buffers to the shared pool (dropping references to the program,
+context, globals, records, callbacks, deadlines, and meters):
 
-- On the first `Run`, the VM allocates session storage for package globals and
-  runs the package initializer (if any) before entering the requested function.
-- Subsequent successful calls on the same VM see those persisted globals; a
-  separate VM starts fresh.
-- Package initialization, the entry call, and all callees share one budget.
-
-You can tailor budgets per call—giving a background report a generous cap while
-keeping a transaction callback tight:
+- **Default limits on the program:** At link time, `LinkOptions.DefaultLimits`
+  supplies the program's default policy (copied before publishing). Omitting
+  `DefaultLimits` (`nil`) selects EVM's finite defaults (1,000,000 steps,
+  1,000,000 allocations, 64 MiB cumulative allocation bytes, 1 MiB output
+  bytes, plus structural bounds: call depth 1,024 and 1M R/P slots). Passing an
+  explicit empty `&evm.Limits{}` disables those quotas while keeping structural
+  bounds and context cancellation.
+- **One `Run`, fresh globals per outermost call:** `AcquireVM(ctx)` runs no
+  guest code; it attaches the program and `ctx` and initializes a fresh budget
+  and deadline from the program's default limits. Every outermost
+  `vm.Run(fn, slots)` allocates fresh package globals and runs package `init()`
+  before entering `fn`, then clears globals, active record scopes, and
+  execution buffers on exit (whether it succeeded or failed).
+- **Synchronous nested `Run`:** `vm.Run(cb, slots)` always runs on the same
+  `*evm.VM` and goroutine. An outermost call (including a native root) uses the
+  leased VM's own registers directly; only re-entry from an active native call
+  (including a native root calling `vm.Run`) swaps in a separate pooled
+  register/frame segment so the outer binding's `R`/`P` window stays stable,
+  while sharing the active globals, remaining budget, cancellation, and record
+  scopes.
+- **Shared vs. fresh budgets:** Successive outermost `vm.Run` calls on one
+  acquired VM spend the same allowance; concurrent VMs spend independently.
+  Call `vm.SetBudget(limits)` while the VM is idle to replace the remaining
+  counters and start a fresh deadline—once before a batch, or between outermost
+  runs to give each its own allowance:
 
 ```go
-err := vm.RunWithBudget(ctx, "Decide", args, results, evm.Budget{
+vm := program.AcquireVM(ctx)
+defer vm.Release()
+vm.SetBudget(evm.Limits{
     Steps: 10_000, Allocations: 128, AllocationBytes: 64 << 10,
 })
+err := vm.Run(decide, slots[:])
 ```
 
-Zero fields inherit defaults (1,000,000 steps per call; 1,000,000 logical
-allocations and 64 MiB cumulative reservations per session; plus call-depth,
-register-bank, and output caps). A per-call cap can only tighten—never expand—
-the session's remaining allowance, and allocation bytes track *cumulative
-reservations* rather than live Go heap size (GC never refunds the meter).
+In `SetBudget`, zero quota fields disable those quotas (while structural
+`Depth`, `RSlots`, and `PSlots` keep their finite defaults and `ctx`
+cancellation still applies); `UnlimitedSteps: true` lifts only the step cap.
+Package initialization, the entry call, and all nested callees share the active
+meter, and allocation bytes track *cumulative reservations* rather than live Go
+heap size (GC never refunds the meter). Work is charged on every exit including
+failure, so an exhausted meter stays exhausted until `vm.SetBudget` or a fresh
+`AcquireVM`.
 
 ### 8.2 Fuel checkpoints, deadlines, and allocation meters
 
@@ -4141,7 +4221,7 @@ context is non-cancellable).
 > while keeping the stop exact for any starting budget. Generating a separate
 > coverage interpreter (§8.4) was likewise a clear trade-off to guarantee zero
 > overhead when coverage is off. By contrast, cumulative allocation metering,
-> session invalidation (`ErrInvalidState`), and skipping script `defer`s on
+> clearing globals on every outermost exit, and skipping script `defer`s on
 > fatal traps were **reasonable defaults that worked fine**—cheap,
 > deterministic, and requiring no GC hooks.
 
@@ -4150,16 +4230,17 @@ A few subtle properties of the meters:
 - **One dispatch = one step**, whether it is a `jump`, a fused loop instruction,
   or a 4,096-cell copy. Native Go wrappers do not consume steps, though any
   results they allocate charge the allocation meter.
-- **Wall-clock deadlines:** `Budget{Duration: 50 * time.Millisecond}` installs
-  one context timer for the run, polled at the 256-step checkpoints, on entry
-  and return of external calls, inside long VM traversals (like hashing a huge
-  map key), and right before copying results out.
+- **Wall-clock deadlines:** `Limits{Duration: 50 * time.Millisecond}` installs
+  one context timer at acquisition (or on `SetBudget`), polled at the 256-step
+  checkpoints, on entry and return of external calls, inside long VM traversals
+  (like hashing a huge map key), and right before copying results out. A batch
+  deadline covers work between calls too.
 - **Narrowing inside a call:** A host function opening a database transaction
-  can call `section := c.NarrowBudget(100_000, 50*time.Millisecond)` and later
-  `section.End(c)` *before* committing. Nested sections inherit the tightest
+  can call `section := vm.NarrowBudget(100_000, 50*time.Millisecond)` and later
+  `section.End(vm)` *before* committing. Nested sections inherit the tightest
   floor and deadline (scoped step caps can overshoot by at most two 256-step
   polling intervals while the outer limit stays exact). Host I/O must still
-  honor `c.Context` cooperatively, and the host owns rollback if execution
+  honor `vm.Context` cooperatively, and the host owns rollback if execution
   aborts with a section open.
 - **Allocation metering:** Every VM-owned allocation (including register and
   frame buffer growth) passes through `charge` *before* reserving Go memory:
@@ -4202,15 +4283,17 @@ flowchart TD
     KIND -->|Yes: nil deref, bounds,<br/>div-by-zero, bad assertion| PANIC["beginPanic -> run script defers"]
     PANIC --> REC{"Deferred recover()?"}
     REC -->|Yes| RESUME["Resume caller frame"]
-    REC -->|No| INV["Return error to host<br/>VM -> ErrInvalidState until Reset()"]
+    REC -->|No| INV["Return error to host<br/>Clear globals/buffers; keep meter charged"]
     KIND -->|No: ErrSteps, ErrAllocation,<br/>ctx cancel, host error| TRAP["vm.trap -> skip all script defers"]
     TRAP --> INV
 ```
 
-Once execution starts, any uncaught failure leaves the VM in an invalid state
-until you call `vm.Reset()` (which clears globals, releases references, and
-renews session allocation allowances). Results are written only on success, and
-the VM never rolls back external side effects.
+When an outermost `vm.Run` exits—whether it succeeds or fails—the VM clears
+package globals, active record scopes, and execution buffers, and leaves the
+caller's result slots untouched on failure. Spent steps and allocations stay
+charged against the VM's budget (so an exhausted meter stays exhausted until
+`vm.SetBudget` or a fresh `AcquireVM`), and the VM never rolls back external
+side effects.
 
 ### 8.4 Zero-overhead execution coverage
 
@@ -4218,7 +4301,7 @@ When you ship per-account scripts—especially scripts authored or edited by AI
 agents—you want real line and branch coverage in tests without slowing down
 production execution.
 
-EVM provides a coverage collector that attaches to any session:
+EVM provides a coverage collector that attaches to any acquired VM:
 
 ```go
 cov := evm.NewCoverage(program)
@@ -4261,23 +4344,24 @@ the VM guarantees automatically and what remains the host's job:
 
 | Threat or bug | What EVM guarantees | What the host must still enforce |
 | --- | --- | --- |
-| **Infinite loop / CPU spin** | Hard stop at `Budget.Steps` (`ErrSteps`), polled in the interpreter loop itself; skips script `defer`s. | Set a reasonable `Budget.Steps` and `Budget.Duration` per call. |
-| **Memory bomb / runaway allocation** | Every VM-owned allocation charges `Limits.Allocations` and `Limits.AllocationBytes` *before* reserving Go memory (`ErrAllocation`). | Bound allocations made *inside* native host callbacks (they run outside VM meters unless they charge `c`). |
-| **Deep recursion** | Bounded by call-depth and register-bank limits (`ErrCallDepth`); no Go-level recursion. | Choose limits appropriate for your workload. |
+| **Infinite loop / CPU spin** | Hard stop at `Limits.Steps` (`ErrSteps`), polled in the interpreter loop itself; skips script `defer`s. | Set finite `LinkOptions.DefaultLimits` or `vm.SetBudget` (`Steps` and `Duration`). |
+| **Memory bomb / runaway allocation** | Every VM-owned allocation charges `Limits.Allocations` and `Limits.AllocationBytes` *before* reserving Go memory (`ErrAllocation`). | Bound allocations made *inside* native host callbacks (they run outside VM meters unless they charge `vm`). |
+| **Deep recursion** | Bounded by structural call-depth and register-bank limits (`ErrDepth`, `ErrRegisters`); no Go-level recursion. | Choose limits appropriate for your workload. |
 | **Nil deref, bounds error, div-by-zero, panic** | Caught safely as Go language errors; unwinds cleanly (or returns an error to Go with source positions) without crashing the host process. | Never panic uncaught from hand-written native callbacks (native Go panics propagate after VM cleanup). |
 | **Unauthorized file, network, or env access** | Scripts can only import packages you pass to `Compile`/`Link`; `evmstd` excludes all I/O, network, and OS APIs. | Audit the capabilities exposed by your own host packages. |
-| **Slow or blocked host I/O** | Polls `ctx` at 256-step checkpoints and around external calls. | Honor `c.Context` inside every native host callback and set timeouts on external I/O. |
+| **Slow or blocked host I/O** | Polls `ctx` at 256-step checkpoints and around external calls. | Honor `vm.Context` inside every native host callback and set timeouts on external I/O. |
 | **Escaping a borrowed DB record** | Compiler ownership analysis inserts budgeted `Own` copies before any borrowed value escapes its scope or survives invalidation. | Declare accurate `OwnershipEffects` (or `//evm:borrow-bytes`) on host APIs; `Link` checks consistency, not host implementation honesty. |
-| **Partial side effects on failure** | Uncaught errors invalidate the VM (`ErrInvalidState` until `Reset()`) and suppress entry results. | Roll back database transactions and release host resources on error—EVM never rolls back host state. |
+| **Partial side effects on failure** | Outermost `vm.Run` clears globals/buffers on exit, keeps spent budget charged, and leaves caller result slots untouched on failure. | Roll back database transactions and release host resources on error—EVM never rolls back host state. |
+| **Shared mutable captures / native pointers** | Each goroutine acquires its own `*evm.VM` with independent registers and per-run globals. | Synchronize concurrent guest writes to shared captures or native Go pointers—EVM makes no blanket guarantee of guest race safety. |
 | **Malicious hand-crafted bytecode** | `Link` validates indices, layouts, and control-flow edges, but cannot prove arbitrary raw pointer provenance. | **Always accept Go source** through `evmcompiler.Compile`; never accept untrusted pre-compiled `Module`s. |
 
 > **Key takeaways — Chapter 8**
-> - A `*evm.Program` is immutable and shared; a `*evm.VM` is a single-goroutine session that initializes globals once and persists them across calls until `vm.Reset()`.
-> - Fuel counts *down* and polls `ctx` on `remaining&255 == 0`, giving exact step limits with one context check every 256 dispatches; `NarrowBudget` lets host transactions tighten budgets temporarily.
-> - Allocation meters charge cumulative reservations *before* allocating Go memory.
-> - Language faults unwind through script `defer`/`recover`; budget, cancellation, and host errors trap immediately and invalidate the VM until `Reset()`.
+> - A `*evm.Program` is immutable, holds default limits (`LinkOptions.DefaultLimits`), and is shared across goroutines; `program.AcquireVM(ctx)` leases a pooled single-goroutine `*evm.VM` that runs fresh package globals and `init()` on every outermost `vm.Run` and returns cleared buffers on `Release()`.
+> - Fuel counts *down* and polls `ctx` on `remaining&255 == 0`, giving exact step limits with one context check every 256 dispatches; `vm.SetBudget` starts a fresh allowance while idle, and `NarrowBudget` lets host transactions tighten budgets temporarily.
+> - Allocation meters charge cumulative reservations *before* allocating Go memory; omitting `DefaultLimits` selects finite defaults, while an explicit empty `Limits{}` disables quotas while keeping structural bounds and cancellation.
+> - Language faults unwind through script `defer`/`recover`; budget, cancellation, and host errors trap immediately, clear globals/buffers on exit, and keep spent budget charged.
 > - Execution coverage selects a separate generated interpreter at call entry—zero overhead when disabled, with line/branch normalization across compiler optimizations.
-> - EVM is a capability and resource sandbox for Go *source*: the VM enforces API surface, step/memory budgets, and borrow safety, while the host owns transaction rollback and `ctx` cancellation inside native callbacks.
+> - EVM is a capability and resource sandbox for Go *source*: the VM enforces API surface, step/memory budgets, and borrow safety, while the host owns transaction rollback, `ctx` cancellation inside native callbacks, and synchronization of shared captures or native pointers.
 
 Now let's open the lid on `VM.execute` and watch the interpreter loop itself
 run instruction by instruction.
@@ -4303,14 +4387,14 @@ func SumThenDouble(x, y int) int {
 }
 ```
 
-The interpreter's hot state lives in just four fields of `VM`:
+The interpreter's hot state lives in `VM` and its embedded `executionBuffers`
+(which swaps as a unit during synchronous nested callbacks so outer host
+register windows stay stable):
 
 ```go
 type VM struct {
     program *Program         // linked code and operand tables
-    r       []uint64         // integer words and floating-point bits
-    p       []unsafe.Pointer // pointers visible to Go's garbage collector
-    stack   []frame          // suspended script callers
+    executionBuffers         // r, p, stack, defer/panic buffers (swapped on callback re-entry)
     // ...
 }
 ```
@@ -4859,9 +4943,9 @@ add.mul.f64 r27 r27 r35 r29
 
 ### 10.4 Memory layout and packed local slices
 
-By default, every VM value lives in a 16-byte `(R, P)` cell—convenient for
-generic code, wasteful for a `[]bool` of 5,000 prime-sieve flags (80 KiB
-instead of 5 KiB!).
+In a slice with the general EVM layout, each element occupies a 16-byte
+storage cell. A slice of 5,000 prime-sieve flags needs about 80 KB in that
+layout. A packed `[]bool` uses one byte per flag.
 
 For local arrays and slices, the compiler runs an alias analysis across
 reslices, `phi` inputs, `append`, and `copy`. Whenever the entire alias group
@@ -5024,7 +5108,8 @@ templates, or database callbacks), host-call overhead is the real bottleneck.
 EVM optimizes the boundary in three layers:
 
 1. **Overlapping register windows** eliminate argument-array allocation on
-   general calls (`call.host`), reusing one embedded `vm.call` struct.
+   general calls (`call.host`), slicing the outgoing `R`/`P` register window
+   directly onto `*evm.VM`.
 2. **Move-fusing (`call.host.rr` / `call.host.rp`)** collapses staging and
    result moves for unary calls into one dispatch.
 3. **Generated `DirectBinding` and `DirectUnary` register calls** bypass both
@@ -5060,7 +5145,7 @@ for c := rows.Next(); c != nil; c = rows.Next() {
   read arena or expiry checks.
 - **Direct indexing and batched writes:** On writes (`edit.revision = rev;
   edit.profile.balance = ...; tx.Put(c.id, edit)`), a `Fast2` editor copies the
-  borrowed row on the first scalar change and patches subsequent 8-byte cells
+  borrowed row on the first scalar change and patches subsequent 8-byte row fields
   in place (reusing writer scratch when a new property rebuilds the directory).
   A universal KV indexer reads the edited bytes directly without decoding a
   struct:
@@ -5334,21 +5419,23 @@ Every batch of static HTML costs one direct dispatch; every dynamic value costs
 one external call; and every loop, branch, and component call is the exact same
 bytecode from Chapters 5–10.
 
-### 11.5 Concurrent rendering and pooled sessions
+### 11.5 Concurrent rendering and pooled VMs
 
-`Link` pairs the linked `*evm.Program` with the rendering plan in a
-`*gox.Program`. Each concurrent render borrows a pooled session (a VM plus a
-`*gox.Builder` with reusable buffers), runs the entry function with the builder
-in argument 0, checks that every element closed cleanly, copies out the final
-string, resets the VM so package globals never leak between requests, and
-returns the session to the pool. Budgets, output caps, and nil-pointer guards
-all apply automatically. (See [gox/README.md](../gox/README.md) for the full
-template language.)
+`Link` pairs the linked `*evm.Program` with the rendering plan and pre-resolved
+renderer `evm.Callable`s in a `*gox.Program`. Each concurrent render leases a
+pooled `*evm.VM` (`program.AcquireVM(ctx); defer vm.Release()`) and a pooled
+`*gox.Builder`, runs the resolved renderer with the builder in argument 0,
+checks that every element closed cleanly, copies out the final string, and
+releases the VM (clearing globals and buffers so nothing leaks between
+requests). Delayed views retained as closures keep their captures and owning
+`*evm.Program` and acquire a fresh VM lease when they render. Budgets, output
+caps, and nil-pointer guards all apply automatically. (See
+[gox/README.md](../gox/README.md) for the full template language.)
 
 > **Key takeaways — Chapter 11**
 > - GoX adds zero HTML-aware opcodes to EVM: `gox.Preprocess` turns markup and components into ordinary Go calls against one host package (`gox`) plus a static rendering plan.
 > - Static markup collapses into batched `gox.Step` calls (direct register host calls), while contextual escaping filters are chosen once at preprocess time—no HTML parsing at run time.
-> - Components, props, and typed slots are ordinary Go functions and closures checked by `go/types`, and concurrent requests borrow pooled `(VM, gox.Builder)` sessions with full budget and reset guarantees.
+> - Components, props, and typed slots are ordinary Go functions and closures checked by `go/types`, and concurrent requests lease pooled VMs and `*gox.Builder` buffers with fresh globals and full budget guarantees.
 
 ## 12. Putting it all together
 
@@ -5401,12 +5488,15 @@ record scope:
    KVO schema. `evmbind.RegisterMethods` binds `PointBalance` with
    `BorrowOnly`. `evmcompiler.Compile` type-checks `rules.go` against `m` and
    `evmstd.Packages()` (`fmt`, `time`), lowers SSA to 64-bit register bytecode,
-   and `evm.Link` resolves every import and validates every operand once into
-   an immutable `*evm.Program`.
-2. **Zero-copy entry (Chapters 2, 3, 4):** `vm.RunEntryNative(ctx, "Describe",
-   []any{c, now}, result[:], budget)` places `c` straight into the entry
-   register window as a 16-byte `(R, P)` pair—whether `c` points to a Go struct
-   or an encoded database row—without decoding a single field.
+   `evm.LinkOptions{DefaultLimits: &limits}.Link` resolves every import and
+   validates every operand once into an immutable `*evm.Program`, and
+   `program.LookupFunction` resolves `Describe` and `Redeem` with checked
+   signatures.
+2. **Zero-copy entry (Chapters 2, 3, 4):** `vm := program.AcquireVM(ctx)`
+   leases a pooled VM, and `slots := [3]values.Value{c.Value(), values.NativeTime(now)};
+   vm.Run(describe, slots[:])` places `c` straight into the entry register
+   window as a 16-byte `(R, P)` pair—whether `c` points to a Go struct or an
+   encoded database row—without decoding a single field.
 3. **In-place reads and list iteration (Chapters 3, 4, 10):** `for _, tag :=
    range c.tags` lowers to `RecordList` / `RecordListLen` / `RecordListIndex`,
    walking the encoded tags in place without allocating a Go `[]string`. Field
@@ -5420,7 +5510,7 @@ record scope:
    opens `ctx, scope := evm.WithRecords(ctx)` and hands in
    `scope.EditRecord(CustomerModel, edit)`. `c.points_redeemed += points`
    mutates the Go struct directly for Ada, or builds a fresh encoded row for
-   Bob and Cyd—all while `VM.execute` counts down `Budget.Steps` and polls
+   Bob and Cyd—all while `VM.execute` counts down `Limits.Steps` and polls
    `ctx` every 256 instructions.
 
 If you want to run and experiment with complete host + script setups yourself,

@@ -10,6 +10,16 @@ type Value struct {
 }
 ```
 
+At the Go boundary, **pack** means to convert a Go value into an EVM value.
+**Unpack** means to convert it back to Go. `values.Codec[T]` pairs a Go `Type`
+with `Pack func(T) Value` (Go → EVM value) and `Unpack func(Value) T` (EVM
+value → Go); constructors such as `SignedCodec`, `UnsignedCodec`, `BoolCodec`,
+`Float32Codec`, `Float64Codec`, `StringCodec`, `BytesCodec`, and `TimeCodec`
+supply zero-allocation scalar codecs. A **slot** is a position holding a
+value. In the VM’s general storage layout, a **cell** is one addressable
+element of a `[]Value`. A flattened struct may occupy several cells. The
+shape supplies the type and describes what each cell holds.
+
 A `Value` does not carry its own type or presence bit—the operation that reads
 it supplies its `Type`, and presence is tracked separately. A `Type` defines
 nominal identity and how the value sits in registers (`Raw`, `Pointer`, or

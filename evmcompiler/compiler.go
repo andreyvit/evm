@@ -41,6 +41,10 @@ func Compile(filename, source string, packages ...evm.Package) (*evm.Module, err
 // Options controls optional EVM code generation. The zero value enables all passes.
 type Options struct {
 	NoOptimization bool
+	// LoweredStmtNesting raises MaxStmtNesting for Go that a frontend generated
+	// from source it has already checked with CheckLimits. It is the nesting
+	// that the frontend's lowering puts around the author's statements.
+	LoweredStmtNesting int
 }
 
 // Compile emits Go SSA operations directly when NoOptimization is set.

@@ -223,6 +223,11 @@ func (options Options) preprocessSources(entry string, sources map[string]string
 	if entry != "" && c.template.Entry == "" {
 		return nil, fmt.Errorf("renderer %q is missing", entry)
 	}
+	// The files still hold what the author wrote, so the limits are reported
+	// in the author's terms; lowered code is checked again with loweredGo.
+	if exceeded := evmcompiler.CheckLimits(c.syntax, c.packages...); len(exceeded) > 0 {
+		return nil, c.error(exceeded[0].Pos, exceeded[0].Message)
+	}
 	// Helpers occupy their own file, so normal Go imports remain file-local.
 	helper, err := parser.ParseFile(c.files, "_gox_helpers.go", "package "+c.syntax[0].Name.Name+`
 func _goxMark(id int, args ...any) {}
@@ -237,7 +242,7 @@ func _goxMark(id int, args ...any) {}
 		}
 		c.pkg, c.info, err = c.analyze(c.files, c.syntax)
 		if c.info == nil {
-			return nil, err
+			return nil, c.remapAnalysisError(err)
 		}
 		if round == 0 {
 			undefined := map[evm.SourcePosition]string{}
@@ -286,7 +291,7 @@ func _goxMark(id int, args ...any) {}
 	}
 	c.pkg, c.info, err = c.analyze(c.files, c.syntax)
 	if c.info == nil {
-		return nil, err
+		return nil, c.remapAnalysisError(err)
 	}
 	if err := c.validateAmbientDeclarations(); err != nil {
 		return nil, err
@@ -372,6 +377,32 @@ func (p *Preprocessed) Compile() (_ *Template, err error) {
 	c.remapModule(module)
 	c.template.Module = module
 	return c.template, nil
+}
+
+// loweredGo compiles what lowering produced. The author's statements are within
+// evmcompiler.MaxStmtNesting, and lowering wraps an output that can meet a nil
+// pointer in two blocks, a nil check, and one if per && or || inside another.
+// Eight levels cover five such operators, far more than templates use. Nothing
+// else is raised: a component with children is a function literal and counts
+// as one.
+var loweredGo = evmcompiler.Options{LoweredStmtNesting: 8}
+
+// remapAnalysisError moves diagnostics on a preprocessed file to the
+// author's positions.
+func (c *compiler) remapAnalysisError(err error) error {
+	ds, ok := err.(evmcompiler.Diagnostics)
+	if !ok {
+		return err
+	}
+	for i, d := range ds {
+		file := c.originals[d.Position.File]
+		if file == nil || d.Position.Line < 1 || d.Position.Line > file.LineCount() {
+			continue
+		}
+		offset := file.Offset(file.LineStart(d.Position.Line)) + d.Position.Column - 1
+		ds[i].Position = c.sourcePosition(token.Position{Filename: d.Position.File, Offset: offset, Line: d.Position.Line, Column: d.Position.Column})
+	}
+	return ds
 }
 
 // Mark calls while the original element and fragment boundaries still exist.

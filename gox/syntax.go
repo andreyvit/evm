@@ -20,6 +20,7 @@ type sourceSyntax struct {
 	marks             []markup
 	mapping           []int
 	prefix            int
+	lines             []int // offset of each line of source, once markOffset needs it
 }
 
 // CheckSyntax checks Go and markup syntax without resolving names or types.
@@ -69,23 +70,34 @@ func parseSource(filename, source string, allowMissingPackage bool) (*sourceSynt
 		s.prefix = len(prefix)
 		s.generated = prefix + s.generated
 	}
+	// original maps a position in the parsed text to the author's source.
+	original := func(p token.Position) token.Position {
+		offset := p.Offset - s.prefix
+		if s.mapping != nil && offset >= 0 && offset < len(s.mapping) {
+			offset = s.mapping[offset]
+		}
+		offset = min(max(0, offset), len(source))
+		prefix := source[:offset]
+		p.Line = strings.Count(prefix, "\n") + 1
+		p.Column = offset - strings.LastIndexByte(prefix, '\n')
+		p.Offset = offset
+		p.Filename = filename
+		return p
+	}
 	s.file, err = parser.ParseFile(s.files, filename, s.generated, parser.ParseComments)
 	if err != nil {
 		if list, ok := err.(scanner.ErrorList); ok {
 			for _, e := range list {
-				offset := e.Pos.Offset - s.prefix
-				if s.mapping != nil && offset >= 0 && offset < len(s.mapping) {
-					offset = s.mapping[offset]
-				}
-				offset = min(max(0, offset), len(source))
-				prefix := source[:offset]
-				e.Pos.Line = strings.Count(prefix, "\n") + 1
-				e.Pos.Column = offset - strings.LastIndexByte(prefix, '\n')
-				e.Pos.Offset = offset
-				e.Pos.Filename = filename
+				e.Pos = original(e.Pos)
 			}
 		}
 		return nil, err
+	}
+	// Formatting cost grows with nesting as compilation cost does, so syntax
+	// the compiler would reject for its depth is rejected here too.
+	if exceeded := evmcompiler.CheckLimits([]*ast.File{s.file}); len(exceeded) > 0 {
+		p := original(s.files.Position(exceeded[0].Pos))
+		return nil, fmt.Errorf("%s:%d:%d: %s", filename, p.Line, p.Column, exceeded[0].Message)
 	}
 	var stack []int
 	for id, m := range s.marks {
@@ -144,12 +156,16 @@ func (s *sourceSyntax) marker(n ast.Node) (int, bool) {
 }
 
 func (s *sourceSyntax) markOffset(id int) int {
-	m := s.marks[id]
-	offset := 0
-	for range m.pos.line - 1 {
-		offset += strings.IndexByte(s.source[offset:], '\n') + 1
+	if s.lines == nil {
+		s.lines = []int{0}
+		for i := 0; i < len(s.source); i++ {
+			if s.source[i] == '\n' {
+				s.lines = append(s.lines, i+1)
+			}
+		}
 	}
-	return offset + m.pos.column - 1
+	m := s.marks[id]
+	return s.lines[m.pos.line-1] + m.pos.column - 1
 }
 
 // Keep byte offsets while disabling directives during diagnostic-only analysis.

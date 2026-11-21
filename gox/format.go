@@ -36,10 +36,25 @@ func editSource(source string, edits []sourceEdit) string {
 		}
 		return b.end - a.end
 	})
-	for _, e := range edits {
-		source = source[:e.start] + e.text + source[e.end:]
+	// The order above applies edits back to front, each to the text the ones
+	// before it left. Edits that do not overlap give the same text in one pass
+	// front to back; rebuilding the source for each edit is quadratic.
+	var out strings.Builder
+	at := 0
+	for i := len(edits) - 1; i >= 0; i-- {
+		e := edits[i]
+		if e.start < at {
+			for _, e := range edits {
+				source = source[:e.start] + e.text + source[e.end:]
+			}
+			return source
+		}
+		out.WriteString(source[at:e.start])
+		out.WriteString(e.text)
+		at = e.end
 	}
-	return source
+	out.WriteString(source[at:])
+	return out.String()
 }
 
 // FormatSource formats GoX and organizes imports, adding the missing ones.
@@ -376,6 +391,14 @@ type sourceFormatter struct {
 	syntax *sourceSyntax
 	rows   []formatRow
 	pairs  map[int]int
+	tags   *preprocessor // rereads tags from the source; shared, since it copies the source
+}
+
+func (f *sourceFormatter) scanner() *preprocessor {
+	if f.tags == nil {
+		f.tags = &preprocessor{source: f.syntax.source, data: []byte(f.syntax.source)}
+	}
+	return f.tags
 }
 
 func (f *sourceFormatter) render(start, end, depth int) ([]formatRow, error) {
@@ -400,7 +423,7 @@ func (f *sourceFormatter) render(start, end, depth int) ([]formatRow, error) {
 				closing := f.rows[close]
 				closeMark := f.syntax.marks[closing.marker]
 				if m.name == "script" || m.name == "style" {
-					p := preprocessor{source: f.syntax.source, data: []byte(f.syntax.source)}
+					p := f.scanner()
 					_, _, bodyStart, err := p.tag(f.syntax.markOffset(r.marker))
 					if err != nil {
 						return nil, err
@@ -462,8 +485,7 @@ func compactLayout(line string) bool {
 func (f *sourceFormatter) tag(id int, indent, prefix string) (string, error) {
 	m := f.syntax.marks[id]
 	start := f.syntax.markOffset(id)
-	p := preprocessor{source: f.syntax.source, data: []byte(f.syntax.source)}
-	_, _, end, err := p.tag(start)
+	_, _, end, err := f.scanner().tag(start)
 	if err != nil {
 		return "", err
 	}

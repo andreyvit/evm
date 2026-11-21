@@ -89,6 +89,17 @@ func New(p *Program) *VM {
 	return vm
 }
 
+// AllocatedBytes reports the bytes charged to this VM's allocation limits
+// since New or Reset, including an invocation in progress. A host that starts
+// another VM inside a native call of this one reads it to bound them together.
+// Call it on the goroutine that runs the VM.
+func (vm *VM) AllocatedBytes() uint64 {
+	if vm.running {
+		return vm.allocated.bytes + vm.budget.allocated.bytes
+	}
+	return vm.allocated.bytes
+}
+
 // Budget applies to one RunWithBudget call, including first-use initialization.
 // Zero fields inherit VM defaults. Allocation limits also obey the remaining
 // session allowance configured by VM.Limits.

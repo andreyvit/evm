@@ -67,7 +67,16 @@ type preprocessor struct {
 	out              strings.Builder
 	marks            []markup
 	mapping          []int
+	lower            string // source with ASCII letters folded, once a raw body needs it
+	// position resumes from the last offset it resolved: markers arrive in
+	// source order, and counting lines from the start for each is quadratic.
+	lineAt, line, lineStart int
 }
+
+// MaxTagNesting bounds elements inside elements. The formatter indents one
+// level per element, so its output grows with the square of the depth, and a
+// component with children compiles to a function literal per level.
+const MaxTagNesting = 100
 
 func preprocess(filename, source string, base int) (string, []markup, []int, error) {
 	p := &preprocessor{filename: filename, source: source, data: []byte(source)}
@@ -117,7 +126,49 @@ func preprocess(filename, source string, base int) (string, []markup, []int, err
 		}
 	}
 
+	if id, ok := tooDeep(p.marks); ok {
+		pos := p.marks[id].pos
+		return "", nil, nil, fmt.Errorf("%s:%d:%d: tags nest more than %d levels", pos.file, pos.line, pos.column, MaxTagNesting)
+	}
 	return p.out.String(), p.marks, p.mapping, nil
+}
+
+// tooDeep finds the first opening tag nested more than MaxTagNesting levels.
+// It pairs tags the way parseSource does: a void tag opens a level only when
+// a closing tag names it, which is known once the whole file is read.
+func tooDeep(marks []markup) (int, bool) {
+	var stack []int
+	paired := make([]bool, len(marks))
+	for id, m := range marks {
+		switch m.kind {
+		case markupOpen:
+			if !m.selfClosing {
+				stack = append(stack, id)
+			}
+		case markupClose:
+			for len(stack) > 0 && marks[stack[len(stack)-1]].name != m.name && marks[stack[len(stack)-1]].void {
+				stack = stack[:len(stack)-1]
+			}
+			if len(stack) > 0 && marks[stack[len(stack)-1]].name == m.name {
+				paired[stack[len(stack)-1]], paired[id] = true, true
+				stack = stack[:len(stack)-1]
+			}
+		}
+	}
+	depth := 0
+	for id, m := range marks {
+		switch {
+		case m.kind == markupOpen && !m.selfClosing && (paired[id] || !m.void):
+			// An unclosed tag counts too; its own error comes later.
+			depth++
+			if depth > MaxTagNesting {
+				return id, true
+			}
+		case m.kind == markupClose && paired[id]:
+			depth--
+		}
+	}
+	return 0, false
 }
 func (p *preprocessor) copySource(end int) {
 	for p.i < end {
@@ -141,15 +192,28 @@ func endsStatement(t token.Token) bool {
 	return false
 }
 func (p *preprocessor) position(i int) evmPos {
-	prefix := p.source[:i]
-	line := strings.Count(prefix, "\n") + 1
-	return evmPos{p.filename, line, i - strings.LastIndexByte(prefix, '\n')}
+	if i < p.lineAt {
+		p.lineAt, p.line, p.lineStart = 0, 0, 0
+	}
+	between := p.source[p.lineAt:i]
+	if last := strings.LastIndexByte(between, '\n'); last >= 0 {
+		p.line += strings.Count(between, "\n")
+		p.lineStart = p.lineAt + last + 1
+	}
+	p.lineAt = i
+	return evmPos{p.filename, p.line + 1, i - p.lineStart + 1}
 }
 func (p *preprocessor) fail(i int, s string) error {
 	q := p.position(i)
 	return fmt.Errorf("%s:%d:%d: %s", q.file, q.line, q.column, s)
 }
 func (p *preprocessor) marker(m markup, args []string, base, origin int) {
+	p.markerAt(m, args, -1, base, origin)
+}
+
+// markerAt writes a marker whose single argument starts at argAt in the
+// source, or searches for each argument after origin when argAt is negative.
+func (p *preprocessor) markerAt(m markup, args []string, argAt, base, origin int) {
 	m.pos = p.position(origin)
 	id := base + len(p.marks)
 	p.marks = append(p.marks, m)
@@ -157,11 +221,15 @@ func (p *preprocessor) marker(m markup, args []string, base, origin int) {
 	search := origin
 	for _, arg := range args {
 		argOrigin := origin
-		for _, prefix := range []string{"{", "{="} {
-			if offset := strings.Index(p.source[search:], prefix+arg+"}"); offset >= 0 {
-				argOrigin = search + offset + len(prefix)
-				search = argOrigin + len(arg)
-				break
+		if argAt >= 0 {
+			argOrigin = argAt
+		} else {
+			for _, prefix := range []string{"{", "{="} {
+				if offset := strings.Index(p.source[search:], prefix+arg+"}"); offset >= 0 {
+					argOrigin = search + offset + len(prefix)
+					search = argOrigin + len(arg)
+					break
+				}
 			}
 		}
 		p.write(",(", argOrigin)
@@ -361,18 +429,26 @@ func nameByte(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == ':' || c == '.'
 }
 func (p *preprocessor) rawBody(tag string, base int) error {
-	// ASCII folding preserves byte offsets even for Unicode JS/CSS literals.
-	lowerBytes := []byte(p.source)
-	for i, ch := range lowerBytes {
-		if ch >= 'A' && ch <= 'Z' {
-			lowerBytes[i] = ch + ('a' - 'A')
+	if p.lower == "" {
+		// ASCII folding preserves byte offsets even for Unicode JS/CSS literals.
+		lowerBytes := []byte(p.source)
+		for i, ch := range lowerBytes {
+			if ch >= 'A' && ch <= 'Z' {
+				lowerBytes[i] = ch + ('a' - 'A')
+			}
 		}
+		p.lower = string(lowerBytes)
 	}
-	lower := string(lowerBytes)
+	lower := p.lower
 	for p.i < len(p.source) {
 		start := p.i
 		end := rawClose(lower, tag, start)
-		j := strings.Index(p.source[start:], "{=")
+		// An interpolation past the closing tag belongs to later markup.
+		body := p.source[start:]
+		if end >= 0 {
+			body = p.source[start:end]
+		}
+		j := strings.Index(body, "{=")
 		if j >= 0 {
 			j += start
 		}
@@ -391,7 +467,9 @@ func (p *preprocessor) rawBody(tag string, base int) error {
 		if err != nil {
 			return p.fail(j, err.Error())
 		}
-		p.marker(markup{kind: markupValue}, []string{strings.TrimPrefix(expr, "=")}, base, j)
+		// A search for the argument reads to the end of the file when the
+		// body holds no other {x}, which is quadratic over many interpolations.
+		p.markerAt(markup{kind: markupValue}, []string{strings.TrimPrefix(expr, "=")}, j+2, base, j)
 		p.i = next
 	}
 	return p.fail(p.i, "unclosed "+tag)

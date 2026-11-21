@@ -391,7 +391,7 @@ func TestEnvironmentConcurrentCompiles(t *testing.T) {
 						}
 						syntax = append(syntax, file)
 					}
-					if _, info, err := env.AnalyzeFiles(files, syntax); info == nil {
+					if _, info, err := env.AnalyzeFiles(files, syntax, evmcompiler.Options{}); info == nil {
 						failures <- fmt.Sprintf("%s: analyze: %v", c.name, err)
 					}
 				}
@@ -457,7 +457,7 @@ func Run() string { l := Local{}; return d.Describe(&l.E) + d.Describe(&d.Entry{
 		if err != nil {
 			t.Fatal(err)
 		}
-		pkg, info, err := env.Analyze(files, file)
+		pkg, info, err := env.Analyze(files, file, evmcompiler.Options{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -533,7 +533,7 @@ func TestEnvironmentIsUnchangedByCompiles(t *testing.T) {
 			}
 		}
 		if len(syntax) != 0 {
-			env.AnalyzeFiles(files, syntax)
+			env.AnalyzeFiles(files, syntax, evmcompiler.Options{})
 		}
 	}
 	if after := env.Fingerprint(); after != before {
@@ -592,7 +592,7 @@ func TestEnvironmentFileSet(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, info, err := env.Analyze(files, file)
+		_, info, err := env.Analyze(files, file, evmcompiler.Options{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -614,7 +614,7 @@ func TestEnvironmentFileSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := env.Analyze(foreign, file); err == nil || !strings.Contains(err.Error(), "NewFileSet") {
+	if _, _, err := env.Analyze(foreign, file, evmcompiler.Options{}); err == nil || !strings.Contains(err.Error(), "NewFileSet") {
 		t.Fatalf("foreign file set error = %v", err)
 	}
 	if _, _, err := evmcompiler.Analyze(foreign, file, f.packages...); err != nil {

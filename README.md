@@ -748,6 +748,14 @@ Details: [host contracts](_docs/embedding.md), [`evmbind`](evmbind/README.md),
   `Position` and a `Message`.
 - Source is limited to `evmcompiler.MaxSourceSize`, 1 MiB for all files of
   one compilation.
+- Nesting is limited, because compile cost grows faster than the source with
+  it: types 32 levels (`MaxTypeNesting`), one expression 500
+  (`MaxExprNesting`; `a+b+c` is two), statements inside a function 100
+  (`MaxStmtNesting`; an else-if chain counts each `if`), and function literals
+  32 (`MaxFuncNesting`). A constant string expression may reach 1 MiB
+  (`MaxConstStringSize`), estimated from literal lengths and `+` before the
+  type checker folds it. Past a limit, compilation returns a diagnostic at the
+  first level too deep.
 - Scripts are Go 1.23: generics, range over integers and functions.
 - `evmcompiler.Options{NoOptimization: true}.Compile(...)` keeps the code
   unoptimized for debugging.
@@ -762,6 +770,8 @@ Details: [host contracts](_docs/embedding.md), [`evmbind`](evmbind/README.md),
 - `evmcompiler.Analyze`, `AnalyzeFiles` and `SourceImporter` type-check with
   `go/types` against host packages, for tools. An `Environment` has `Analyze`
   and `AnalyzeFiles` too; parse into a file set from its `NewFileSet`.
+  `AnalyzeFiles` applies the limits; `evmcompiler.CheckLimits` applies them
+  alone and reports `token.Pos` positions.
 - `evmcompiler.PackageSource(path, packages...)`, `PackagesSource` and
   `PackagePaths` print the declarations a script sees: documentation for a
   person or an agent writing a plugin.
@@ -1184,6 +1194,9 @@ Details: the [GoX guide](gox/README.md).
   imports. `gox check` checks syntax. Install with `go install ./cmd/gox`.
 - `gox.FormatSource(filename, source, packages...)` and
   `gox.CheckSyntax(filename, source)` are the same as functions.
+- Tags nest up to `gox.MaxTagNesting`, 100 levels, and Go in a template has
+  the `evmcompiler` nesting limits. Checking, formatting and compiling all
+  report the first level too deep.
 - `gox.Preprocess`, `PreprocessSources` and `PreprocessFiles` lower markup to
   Go without compiling. `GeneratedSources` shows the result;
   `preprocessed.Compile()` finishes.

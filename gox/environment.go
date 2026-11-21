@@ -58,14 +58,14 @@ func (c *compiler) newFileSet() *token.FileSet {
 
 func (c *compiler) analyze(files *token.FileSet, syntax []*ast.File) (*types.Package, *types.Info, error) {
 	if c.environment != nil {
-		return c.environment.AnalyzeFiles(files, syntax)
+		return c.environment.AnalyzeFiles(files, syntax, loweredGo)
 	}
-	return evmcompiler.AnalyzeFiles(files, syntax, c.packages...)
+	return loweredGo.AnalyzeFiles(files, syntax, c.packages...)
 }
 
 func (c *compiler) compileGenerated() (*evm.Module, error) {
 	if c.environment != nil {
-		return c.environment.CompileFiles(c.template.GeneratedSources, evmcompiler.Options{})
+		return c.environment.CompileFiles(c.template.GeneratedSources, loweredGo)
 	}
-	return evmcompiler.CompileFiles(c.template.GeneratedSources, c.packages...)
+	return loweredGo.CompileFiles(c.template.GeneratedSources, c.packages...)
 }

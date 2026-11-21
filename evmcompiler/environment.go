@@ -95,16 +95,16 @@ func (env *Environment) CompileFiles(sources map[string]string, options Options)
 
 // Analyze checks a frontend's AST. See [Analyze]. The file must have been
 // parsed into a file set from NewFileSet.
-func (env *Environment) Analyze(files *token.FileSet, file *ast.File) (*types.Package, *types.Info, error) {
-	return env.AnalyzeFiles(files, []*ast.File{file})
+func (env *Environment) Analyze(files *token.FileSet, file *ast.File, options Options) (*types.Package, *types.Info, error) {
+	return env.AnalyzeFiles(files, []*ast.File{file}, options)
 }
 
 // AnalyzeFiles checks a package while preserving each file's import scope.
 // See [AnalyzeFiles]. The files must have been parsed into a file set from
 // NewFileSet.
-func (env *Environment) AnalyzeFiles(files *token.FileSet, syntax []*ast.File) (_ *types.Package, _ *types.Info, err error) {
+func (env *Environment) AnalyzeFiles(files *token.FileSet, syntax []*ast.File, options Options) (_ *types.Package, _ *types.Info, err error) {
 	defer CatchInternalError(&err)
-	return analyzeFiles(files, syntax, env)
+	return analyzeFiles(files, syntax, env, options)
 }
 
 // universe returns the type environment for one type check: an overlay on

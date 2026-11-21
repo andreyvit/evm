@@ -107,6 +107,7 @@ func compileTypedFiles(sources map[string]string, environment *Environment, opti
 		c.recordDereferenceWrites(file)
 		syntax = append(syntax, file)
 	}
+	c.checkLimits(syntax, environment.packages, options)
 	if len(c.errors) > 0 {
 		return nil, c.errors
 	}

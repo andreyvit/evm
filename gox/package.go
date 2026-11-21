@@ -45,7 +45,8 @@ func (options Options) compileSources(entry string, sources map[string]string, p
 	return result.Compile()
 }
 
-func (options Options) preprocessSources(entry string, sources map[string]string, packages ...evm.Package) (*Preprocessed, error) {
+func (options Options) preprocessSources(entry string, sources map[string]string, packages ...evm.Package) (_ *Preprocessed, err error) {
+	defer evmcompiler.CatchInternalError(&err)
 	if options.Format > CSSFormat {
 		return nil, fmt.Errorf("invalid output format")
 	}
@@ -342,7 +343,8 @@ func _goxMark(id int, args ...any) {}
 }
 
 // Compile validates the lowered Go and emits EVM bytecode, retaining the rendering plan.
-func (p *Preprocessed) Compile() (*Template, error) {
+func (p *Preprocessed) Compile() (_ *Template, err error) {
+	defer evmcompiler.CatchInternalError(&err)
 	c := *p.compiler
 	tmpl := *c.template
 	c.template = &tmpl

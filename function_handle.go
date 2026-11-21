@@ -72,6 +72,11 @@ func (p *Program) FunctionValue(v values.Value) (*FunctionHandle, error) {
 	return f, nil
 }
 
+// HasCaptures reports whether the callable carries cells shared by all of its
+// calls: closure captures or a bound receiver. A VM is no boundary for them,
+// so a host that runs such a handle from several goroutines serializes it.
+func (f *FunctionHandle) HasCaptures() bool { return f.index >= 0 && f.value.P != nil }
+
 // Program returns the linked program that owns the callable and its captures.
 // Hosts can use it to select program-specific execution metadata.
 func (f *FunctionHandle) Program() *Program { return f.program }

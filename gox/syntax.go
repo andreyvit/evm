@@ -29,7 +29,8 @@ func CheckSyntax(filename, source string) error {
 }
 
 // CheckSyntax validates host frontmatter and Go/markup syntax without type checking.
-func (o Options) CheckSyntax(filename, source string) error {
+func (o Options) CheckSyntax(filename, source string) (err error) {
+	defer evmcompiler.CatchInternalError(&err)
 	if path.Ext(filename) == ".gox" {
 		raw, _, err := SplitFrontmatter(filename, source)
 		if err != nil {
@@ -39,7 +40,7 @@ func (o Options) CheckSyntax(filename, source string) error {
 			return err
 		}
 	}
-	_, err := parseSource(filename, source, o.AllowMissingPackage)
+	_, err = parseSource(filename, source, o.AllowMissingPackage)
 	return err
 }
 

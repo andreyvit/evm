@@ -323,7 +323,10 @@ func compileTypedFiles(sources map[string]string, packages []evm.Package, option
 			c.module.Sources[c.files.PositionFor(file.Pos(), false).Filename] = pkg.sources[i].Text
 		}
 	}
-	return &c.module, nil
+	// A pointer into c would keep the type universe, SSA and syntax alive
+	// for as long as the caller holds the module.
+	module := c.module
+	return &module, nil
 }
 func (c *typedCompiler) position(pos token.Pos) evm.SourcePosition {
 	p := c.files.PositionFor(pos, false)

@@ -20,7 +20,7 @@ func (s *Shape) nativeSnapshot(v Value) unsafe.Pointer {
 	}
 	return s.Native.Compare.Zero
 }
-func (s *Shape) equalNative(ctx context.Context, a, b Value, ts *TypeTable) (equal bool, err error) {
+func (s *Shape) equalNative(ctx context.Context, a, b Value, ts *TypeTable, depth int) (equal bool, err error) {
 	if !s.Native.Compare.Comparable {
 		return false, &ComparisonError{Type: s.Type.Name()}
 	}
@@ -33,7 +33,7 @@ func (s *Shape) equalNative(ctx context.Context, a, b Value, ts *TypeTable) (equ
 		}
 		if step.Field >= 0 {
 			f := &s.Fields[step.Field]
-			equal, err := f.Shape.EqualContext(ctx, f.Shape.Stored(CellAt(a.P, f.Offset)), f.Shape.Stored(CellAt(b.P, f.Offset)), ts)
+			equal, err := f.Shape.equal(ctx, f.Shape.Stored(CellAt(a.P, f.Offset)), f.Shape.Stored(CellAt(b.P, f.Offset)), ts, depth)
 			if err != nil || !equal {
 				return equal, err
 			}
@@ -46,7 +46,7 @@ func (s *Shape) equalNative(ctx context.Context, a, b Value, ts *TypeTable) (equ
 	}
 	return true, nil
 }
-func (s *Shape) hashNative(ctx context.Context, v Value, ts *TypeTable) (hash uint64, err error) {
+func (s *Shape) hashNative(ctx context.Context, v Value, ts *TypeTable, depth int) (hash uint64, err error) {
 	if !s.Native.Compare.Comparable {
 		return 0, &ComparisonError{Type: s.Type.Name(), Hash: true}
 	}
@@ -61,7 +61,7 @@ func (s *Shape) hashNative(ctx context.Context, v Value, ts *TypeTable) (hash ui
 		var n uint64
 		if step.Field >= 0 {
 			f := &s.Fields[step.Field]
-			n, err = f.Shape.HashContext(ctx, f.Shape.Stored(CellAt(v.P, f.Offset)), ts)
+			n, err = f.Shape.hash(ctx, f.Shape.Stored(CellAt(v.P, f.Offset)), ts, depth)
 			if err != nil {
 				return 0, err
 			}

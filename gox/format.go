@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/andreyvit/evm"
+	"github.com/andreyvit/evm/evmcompiler"
 	"github.com/andreyvit/evm/evmstd"
 	"golang.org/x/tools/go/ast/astutil"
 	"golang.org/x/tools/imports"
@@ -51,7 +52,8 @@ func FormatSource(filename, source string, packages ...evm.Package) (string, err
 
 // FormatSource formats source, accepting a missing package clause only in legacy mode.
 // Frontmatter stays opaque even if Options supplies a parser.
-func (o Options) FormatSource(filename, source string, packages ...evm.Package) (string, error) {
+func (o Options) FormatSource(filename, source string, packages ...evm.Package) (_ string, err error) {
+	defer evmcompiler.CatchInternalError(&err)
 	var header string
 	if path.Ext(filename) == ".gox" {
 		_, body, err := SplitFrontmatter(filename, source)

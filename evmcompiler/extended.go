@@ -5,6 +5,7 @@ import (
 	"go/token"
 	"go/types"
 	"math"
+	"slices"
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/values"
@@ -278,5 +279,13 @@ func (f *lowerer) extendedCompare(dst, x, y vreg, t types.Type, op token.Token) 
 }
 
 func modelSliceShape(s *values.Shape) bool {
-	return s.Kind == values.SliceKind && (s.Elem.Kind == values.TypedPairKind || s.Elem.Native != nil && s.Elem.Native.Address != nil || modelSliceShape(s.Elem))
+	// The shape of type T []T is its own element.
+	var buf [8]*values.Shape
+	for seen := buf[:0]; s.Kind == values.SliceKind && !slices.Contains(seen, s); s = s.Elem {
+		if s.Elem.Kind == values.TypedPairKind || s.Elem.Native != nil && s.Elem.Native.Address != nil {
+			return true
+		}
+		seen = append(seen, s)
+	}
+	return false
 }

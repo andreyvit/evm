@@ -2,13 +2,15 @@ package evmcompiler
 
 import (
 	"fmt"
-	"github.com/andreyvit/evm"
-	"github.com/andreyvit/evm/nativebind"
 	"go/types"
 	"math"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/andreyvit/evm"
+	"github.com/andreyvit/evm/nativebind"
 
 	"github.com/andreyvit/evm/values"
 )
@@ -381,14 +383,37 @@ func displayTypeName(t types.Type) string {
 // Addresses of model slots may point into cells or a host backing array,
 // independently of which host declarations this compilation imports.
 func (e *typeEnvironment) containsModelRow(t types.Type) bool {
-	if vt, _ := e.fromGo.At(t).(*values.Type); vt != nil && e.recordOwners[vt] != "" {
-		return true
-	}
-	switch a := t.Underlying().(type) {
-	case *types.Array:
-		return e.containsModelRow(a.Elem())
-	case *types.Slice:
-		return e.containsModelRow(a.Elem())
+	var seen elementChain
+	for seen.enter(t) {
+		if vt, _ := e.fromGo.At(t).(*values.Type); vt != nil && e.recordOwners[vt] != "" {
+			return true
+		}
+		switch a := t.Underlying().(type) {
+		case *types.Array:
+			t = a.Elem()
+		case *types.Slice:
+			t = a.Elem()
+		default:
+			return false
+		}
 	}
 	return false
+}
+
+// elementChain stops a walk through element types when it returns to a type
+// it has left, as in type T []T, or type A []B with type B []A.
+type elementChain struct {
+	buf  [8]types.Type
+	seen []types.Type
+}
+
+func (c *elementChain) enter(t types.Type) bool {
+	if c.seen == nil {
+		c.seen = c.buf[:0]
+	}
+	if slices.Contains(c.seen, t) {
+		return false
+	}
+	c.seen = append(c.seen, t)
+	return true
 }

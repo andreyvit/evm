@@ -2,6 +2,7 @@ package values
 
 import (
 	"context"
+	"errors"
 	"hash/maphash"
 	"math"
 	"reflect"
@@ -151,9 +152,17 @@ func (s *Shape) Equal(a, b Value, ts *TypeTable) (bool, error) {
 
 // EqualContext allows cancellation during traversal of compound values.
 func (s *Shape) EqualContext(ctx context.Context, a, b Value, ts *TypeTable) (bool, error) {
+	return s.equal(ctx, a, b, ts, 0)
+}
+
+// maxComparisonDepth bounds interface values nested inside one another.
+// Each level recurses on the Go stack, and a stack overflow is fatal.
+const maxComparisonDepth = 10_000
+
+func (s *Shape) equal(ctx context.Context, a, b Value, ts *TypeTable, depth int) (bool, error) {
 	if s.CellStruct != nil {
 		for i, f := range s.Fields {
-			equal, err := f.Shape.EqualContext(ctx, s.CellStruct.Get(a, i), s.CellStruct.Get(b, i), ts)
+			equal, err := f.Shape.equal(ctx, s.CellStruct.Get(a, i), s.CellStruct.Get(b, i), ts, depth)
 			if err != nil || !equal {
 				return equal, err
 			}
@@ -183,7 +192,10 @@ func (s *Shape) EqualContext(ctx context.Context, a, b Value, ts *TypeTable) (bo
 		if !ts.Comparable(aID) {
 			return false, &ComparisonError{Type: shape.Type.Name()}
 		}
-		return shape.EqualContext(ctx, x, y, ts)
+		if depth >= maxComparisonDepth {
+			return false, &ComparisonError{Type: shape.Type.Name(), cause: ErrComparisonDepth}
+		}
+		return shape.equal(ctx, x, y, ts, depth+1)
 	case NativeValueKind:
 		return nativeEqual(a, b)
 	case TimestampKind:
@@ -205,7 +217,7 @@ func (s *Shape) EqualContext(ctx context.Context, a, b Value, ts *TypeTable) (bo
 		return s.PointerLike && ar != nil && br != nil && ar.Type == br.Type && ar.NativePointerType != nil && ar.NativePointerType == br.NativePointerType && a.P == b.P, nil
 	case StructKind:
 		if s.nativeComparison() != nil {
-			return s.equalNative(ctx, a, b, ts)
+			return s.equalNative(ctx, a, b, ts, depth)
 		}
 
 		for i := range s.Fields {
@@ -216,7 +228,7 @@ func (s *Shape) EqualContext(ctx context.Context, a, b Value, ts *TypeTable) (bo
 			}
 			f := &s.Fields[i]
 			if f.Name != "_" {
-				eq, err := f.Shape.EqualContext(ctx, f.Shape.Stored(CellAt(a.P, f.Offset)), f.Shape.Stored(CellAt(b.P, f.Offset)), ts)
+				eq, err := f.Shape.equal(ctx, f.Shape.Stored(CellAt(a.P, f.Offset)), f.Shape.Stored(CellAt(b.P, f.Offset)), ts, depth)
 				if err != nil || !eq {
 					return eq, err
 				}
@@ -233,7 +245,7 @@ func (s *Shape) EqualContext(ctx context.Context, a, b Value, ts *TypeTable) (bo
 					return false, err
 				}
 			}
-			eq, err := s.Elem.EqualContext(ctx, s.Elem.Stored(CellAt(a.P, i*s.Elem.Cells)), s.Elem.Stored(CellAt(b.P, i*s.Elem.Cells)), ts)
+			eq, err := s.Elem.equal(ctx, s.Elem.Stored(CellAt(a.P, i*s.Elem.Cells)), s.Elem.Stored(CellAt(b.P, i*s.Elem.Cells)), ts, depth)
 			if err != nil || !eq {
 				return eq, err
 			}
@@ -259,10 +271,14 @@ func (s *Shape) Hash(v Value, ts *TypeTable) (uint64, error) {
 
 // HashContext allows cancellation during traversal of compound values.
 func (s *Shape) HashContext(ctx context.Context, v Value, ts *TypeTable) (uint64, error) {
+	return s.hash(ctx, v, ts, 0)
+}
+
+func (s *Shape) hash(ctx context.Context, v Value, ts *TypeTable, depth int) (uint64, error) {
 	if s.CellStruct != nil {
 		var h uint64
 		for i, f := range s.Fields {
-			n, err := f.Shape.HashContext(ctx, s.CellStruct.Get(v, i), ts)
+			n, err := f.Shape.hash(ctx, s.CellStruct.Get(v, i), ts, depth)
 			if err != nil {
 				return 0, err
 			}
@@ -288,7 +304,10 @@ func (s *Shape) HashContext(ctx context.Context, v Value, ts *TypeTable) (uint64
 		if !ts.Comparable(id) {
 			return 0, &ComparisonError{Type: shape.Type.Name(), Hash: true}
 		}
-		n, err := shape.HashContext(ctx, x, ts)
+		if depth >= maxComparisonDepth {
+			return 0, &ComparisonError{Type: shape.Type.Name(), Hash: true, cause: ErrComparisonDepth}
+		}
+		n, err := shape.hash(ctx, x, ts, depth+1)
 		return hashMix(id, n), err
 	case StringKind:
 		text := v.AsString()
@@ -323,7 +342,7 @@ func (s *Shape) HashContext(ctx context.Context, v Value, ts *TypeTable) (uint64
 		return hashMix(v.R, uint64(uintptr(v.P))), nil
 	case StructKind:
 		if s.nativeComparison() != nil {
-			return s.hashNative(ctx, v, ts)
+			return s.hashNative(ctx, v, ts, depth)
 		}
 
 		for i := range s.Fields {
@@ -334,7 +353,7 @@ func (s *Shape) HashContext(ctx context.Context, v Value, ts *TypeTable) (uint64
 			}
 			f := &s.Fields[i]
 			if f.Name != "_" {
-				n, err := f.Shape.HashContext(ctx, f.Shape.Stored(CellAt(v.P, f.Offset)), ts)
+				n, err := f.Shape.hash(ctx, f.Shape.Stored(CellAt(v.P, f.Offset)), ts, depth)
 				if err != nil {
 					return 0, err
 				}
@@ -352,7 +371,7 @@ func (s *Shape) HashContext(ctx context.Context, v Value, ts *TypeTable) (uint64
 					return 0, err
 				}
 			}
-			n, err := s.Elem.HashContext(ctx, s.Elem.Stored(CellAt(v.P, i*s.Elem.Cells)), ts)
+			n, err := s.Elem.hash(ctx, s.Elem.Stored(CellAt(v.P, i*s.Elem.Cells)), ts, depth)
 			if err != nil {
 				return 0, err
 			}
@@ -474,11 +493,16 @@ func floatHash(bits uint8, v Value) uint64 {
 
 // ComparisonError is a Go language panic condition, distinct from corrupt
 // interface storage. EVM may recover it; invalid type indexes stay fatal.
+// ErrComparisonDepth reports a value nested too deeply to compare or hash.
+var ErrComparisonDepth = errors.New("value is nested too deeply to compare")
+
 type ComparisonError struct {
 	cause error
 	Type  string
 	Hash  bool
 }
+
+func (e *ComparisonError) Unwrap() error { return e.cause }
 
 func (e *ComparisonError) Error() string {
 	if e.cause != nil {

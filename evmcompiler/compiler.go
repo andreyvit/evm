@@ -45,7 +45,8 @@ type Options struct {
 
 // Compile emits Go SSA operations directly when NoOptimization is set.
 // Link honors the same choice for the lifetime of the resulting program.
-func (o Options) Compile(filename, source string, packages ...evm.Package) (*evm.Module, error) {
+func (o Options) Compile(filename, source string, packages ...evm.Package) (m *evm.Module, err error) {
+	defer CatchInternalError(&err)
 	return compileTyped(filename, source, packages, o)
 }
 
@@ -54,6 +55,7 @@ func (o Options) Compile(filename, source string, packages ...evm.Package) (*evm
 func CompileFiles(sources map[string]string, packages ...evm.Package) (*evm.Module, error) {
 	return Options{}.CompileFiles(sources, packages...)
 }
-func (o Options) CompileFiles(sources map[string]string, packages ...evm.Package) (*evm.Module, error) {
+func (o Options) CompileFiles(sources map[string]string, packages ...evm.Package) (m *evm.Module, err error) {
+	defer CatchInternalError(&err)
 	return compileTypedFiles(sources, packages, o)
 }

@@ -66,15 +66,19 @@ func (e *typeEnvironment) collectNativeViewLeaves() {
 }
 
 func (e *typeEnvironment) mayViewNative(t types.Type) bool {
-	t = types.Unalias(t)
-	if v, _ := e.fromGo.At(t).(*values.Type); e.nativeViewLeaves[v] {
-		return true
-	}
-	switch t := t.Underlying().(type) {
-	case *types.Slice:
-		return e.mayViewNative(t.Elem())
-	case *types.Array:
-		return e.mayViewNative(t.Elem())
+	var seen elementChain
+	for t = types.Unalias(t); seen.enter(t); t = types.Unalias(t) {
+		if v, _ := e.fromGo.At(t).(*values.Type); e.nativeViewLeaves[v] {
+			return true
+		}
+		switch a := t.Underlying().(type) {
+		case *types.Slice:
+			t = a.Elem()
+		case *types.Array:
+			t = a.Elem()
+		default:
+			return false
+		}
 	}
 	return false
 }

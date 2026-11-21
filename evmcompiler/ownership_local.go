@@ -11,11 +11,16 @@ import (
 // first pass, any possible scope invalidation disables the optimization. This
 // deliberately favors insertion-time leaf copies over runtime container walks.
 func (f *lowerer) localBorrowContainers() map[ssa.Value][]ssa.Value {
+	return f.localBorrowContainersIf(func(call *ssa.CallCommon) bool { return f.ownershipSafeCall(call, false) })
+}
+
+// localBorrowContainersIf takes the test for a call that ends no scope.
+func (f *lowerer) localBorrowContainersIf(safe func(call *ssa.CallCommon) bool) map[ssa.Value][]ssa.Value {
 	for _, block := range f.fn.Blocks {
 		for _, ins := range block.Instrs {
 			switch i := ins.(type) {
 			case *ssa.Call:
-				if !f.ownershipSafeCall(&i.Call, false, make(map[*ssa.Function]bool)) {
+				if !safe(&i.Call) {
 					return nil
 				}
 			case *ssa.Defer, *ssa.RunDefers, *ssa.Panic, *ssa.Go:

@@ -827,7 +827,7 @@ The typed package then enters `golang.org/x/tools/go/ssa`. The compiler supplies
 
 ```go
 prog := ssa.NewProgram(c.files,
-    ssa.InstantiateGenerics|ssa.SanityCheckFunctions|ssa.GlobalDebug)
+    ssa.InstantiateGenerics|ssa.GlobalDebug|ssaChecks)
 // ... create the imported packages ...
 c.pkg = prog.CreatePackage(pkg, syntax, info, true)
 c.pkg.Build()
@@ -835,7 +835,7 @@ c.pkg.Build()
 functions := c.discoverFunctions(prog, allDecls, info, needsInit)
 ```
 
-For `Arithmetic`, SSA records the two parameters and the typed result of a binary add. In a loop there are also basic blocks, control-flow edges and phi inputs. For a closure there is a separate function and a list of free variables. The lowerer reads these SSA instructions.
+`ssaChecks` is empty outside builds tagged `evmcrosscheck`, where it makes the builder check each function it builds; the check costs more than the build. For `Arithmetic`, SSA records the two parameters and the typed result of a binary add. In a loop there are also basic blocks, control-flow edges and phi inputs. For a closure there is a separate function and a list of free variables. The lowerer reads these SSA instructions.
 
 ### 5.3 Turn SSA values into slots
 

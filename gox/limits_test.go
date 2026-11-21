@@ -71,6 +71,7 @@ func TestGoLimitsInTemplates(t *testing.T) {
 		"attribute":         {limitsHeader + "<p\n\tclass={" + strings.Repeat("(", 501) + "\"a\"" + strings.Repeat(")", 501) + "}></p>\n}\n", "page.gox:7:507: expression nests more than 500 levels"},
 		"function literals": {limitsHeader + markup + strings.Repeat("func() {", 33) + strings.Repeat("}()", 33) + "\n}\n", "page.gox:10:269: function literals nest more than 32 levels"},
 		"constant":          {limitsHeader + markup + "const a = \"" + strings.Repeat("x", 600000) + "\"\n<p>a + a</p>\n}\n", "page.gox:11:4: constant string may exceed 1048576 bytes"},
+		"branches":          {limitsHeader + markup + strings.Repeat("if true {\n<p>\"x\"</p>\n}\n", 4200) + "}\n", "page.gox:5:6: function is too large: its branches and local variables multiply past the compile budget"},
 	} {
 		if got := limitErrors(t, c.source); got != c.want {
 			t.Errorf("%s: got %.200s, want %s", name, got, c.want)

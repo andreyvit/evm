@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 
 	"github.com/andreyvit/evm"
+	"golang.org/x/tools/go/ssa"
 )
 
 // With the evmcrosscheck build tag, every package-list compile is repeated
@@ -19,7 +20,12 @@ import (
 //
 // A mismatch panics. EVM_CROSSCHECK_LOG names a file that receives one line
 // per compile whose environment cannot be prepared.
-func init() { crossCheck = compareWithPrepared }
+//
+// The tag also makes the SSA builder check each function it builds.
+func init() {
+	crossCheck = compareWithPrepared
+	ssaChecks = ssa.SanityCheckFunctions
+}
 
 var crossChecks, crossCheckSkips atomic.Int64
 

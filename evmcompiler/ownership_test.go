@@ -259,3 +259,49 @@ func TypedNil()bool {var r *db.Row;var x any=r;return x!=nil && x.(*db.Row)==nil
 		}
 	}
 }
+
+// A type is first given a shape where a borrow first reaches a value of it,
+// and a module lists the shapes its code does not name in the order they were
+// made. The planner follows borrows from value to value; it must still reach
+// the types in the order of the sweeps over the function that it replaced.
+// Here the borrow read at the end of the loop reaches v2 in the first sweep,
+// v1 in the second and v0 in the third, and each sweep meets the T conversion
+// before the U one.
+func TestBorrowedTypesAreShapedInSweepOrder(t *testing.T) {
+	pkg, _, _ := ownershipFixture()
+	const source = `import "borrow"
+type T0 string
+type U0 string
+type T1 string
+type U1 string
+type T2 string
+type U2 string
+func F(n int) int {
+	var v0, v1, v2 string
+	t := 0
+	for i := 0; i < n; i++ {
+		x0, x1, x2 := T0(v0), T1(v1), T2(v2)
+		y2, y1, y0 := U2(v2), U1(v1), U0(v0)
+		t += len(x0) + len(x1) + len(x2) + len(y0) + len(y1) + len(y2)
+		v0 = v1
+		v1 = v2
+		v2 = borrow.Read()
+	}
+	return t
+}`
+	for _, debug := range []bool{false, true} {
+		m, err := (evmcompiler.Options{NoOptimization: debug}).Compile("borrow.go", source, pkg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var order []string
+		for _, s := range m.Shapes {
+			if name, ok := strings.CutPrefix(s.Type.Name(), "plugin."); ok {
+				order = append(order, name)
+			}
+		}
+		if got, want := strings.Join(order, " "), "T2 U2 T1 U1 T0 U0"; got != want {
+			t.Errorf("debug %v: shapes in order %s, want %s", debug, got, want)
+		}
+	}
+}

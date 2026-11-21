@@ -3,6 +3,7 @@ package evmcompiler
 import (
 	"go/token"
 	"go/types"
+	"sort"
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/values"
@@ -75,7 +76,16 @@ func (f *lowerer) fuseLoopBackedge(latch, header *ssa.BasicBlock) bool {
 	f.unroll(header, body, latch, test, add, entry, pc)
 	// The entry test and fused back edge evaluate the same source condition.
 	if pc < len(f.code.Code) && (f.code.Code[pc].Op() == evm.OpLoopLtI64 || f.code.Code[pc].Op() == evm.OpLoopLeI64 || f.code.Code[pc].Op() == evm.OpLoopAddLtI64 || f.code.Code[pc].Op() == evm.OpLoopAddLeI64) {
-		for _, patch := range f.branches {
+		// Branch patches are in code order: start at the header's, where a
+		// scan from the first patch would make many loops cost their square.
+		first := 0
+		if !f.unorderedBranches {
+			first = sort.Search(len(f.branches), func(i int) bool { return f.branches[i].pc >= f.labels[header.Index] })
+		}
+		for _, patch := range f.branches[first:] {
+			if patch.pc >= entry && !f.unorderedBranches {
+				break
+			}
 			if patch.pc < f.labels[header.Index] || patch.pc >= entry {
 				continue
 			}
@@ -114,7 +124,7 @@ func (f *lowerer) jumpIf(i *ssa.If, branch evm.Opcode, target int) {
 			if branch == evm.OpJz {
 				op = evm.OpJNotNil
 			}
-			f.branches = append(f.branches, branchPatch{pc, target})
+			f.patch(pc, target)
 			f.code.Code[pc] = evm.WithBC(op, f.regs[value][0].slot, 0)
 			return
 		}

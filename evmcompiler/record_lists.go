@@ -3,6 +3,7 @@ package evmcompiler
 import (
 	"go/token"
 	"go/types"
+	"slices"
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/kvo"
@@ -14,7 +15,33 @@ import (
 // an ABI. Unproven uses keep normal materialized slice semantics.
 func (f *lowerer) findRecordLists() map[ssa.Value]recordProperty {
 	result := make(map[ssa.Value]recordProperty)
-	live := ownershipLiveness(f.fn)
+	// The positions, by block, of the instructions that may write or end a
+	// scope. They are found once, when a list first gets as far as needing them.
+	live := newLiveness(f.fn)
+	var writes [][]int32
+	findWrites := func() {
+		writes = make([][]int32, len(f.fn.Blocks))
+		for _, b := range f.fn.Blocks {
+			for j, i := range b.Instrs {
+				unsafe := false
+				switch x := i.(type) {
+				case *ssa.Call:
+					if _, p, ok := f.recordRef(x); ok {
+						unsafe = p.owner.Mutable
+					} else if builtin, ok := x.Call.Value.(*ssa.Builtin); ok {
+						unsafe = builtin.Name() != "len" && builtin.Name() != "cap"
+					} else {
+						unsafe = true
+					}
+				case *ssa.Store, *ssa.MapUpdate, *ssa.Defer, *ssa.RunDefers, *ssa.Go:
+					unsafe = true
+				}
+				if unsafe {
+					writes[b.Index] = append(writes[b.Index], int32(j))
+				}
+			}
+		}
+	}
 	for _, block := range f.fn.Blocks {
 		for _, ins := range block.Instrs {
 			load, ok := ins.(*ssa.UnOp)
@@ -93,29 +120,24 @@ func (f *lowerer) findRecordLists() map[ssa.Value]recordProperty {
 			}
 			// Reject any possible mutation or scope boundary while the list or a
 			// borrowed element is live. Loop liveness excludes the next acquisition.
-			for _, b := range f.fn.Blocks {
-				for _, i := range b.Instrs {
-					unsafe := false
-					switch x := i.(type) {
-					case *ssa.Call:
-						if _, p, ok := f.recordRef(x); ok {
-							unsafe = p.owner.Mutable
-						} else if builtin, ok := x.Call.Value.(*ssa.Builtin); ok {
-							unsafe = builtin.Name() != "len" && builtin.Name() != "cap"
-						} else {
-							unsafe = true
-						}
-					case *ssa.Store, *ssa.MapUpdate, *ssa.Defer, *ssa.RunDefers, *ssa.Go:
-						unsafe = true
+			// Each value looks at the blocks it is live in, not at the function.
+			if writes == nil {
+				findWrites()
+			}
+			for _, v := range uses {
+				r := live.rangeOf(v)
+				r.eachBlock(func(b int32) {
+					at := writes[b]
+					if !valid || len(at) == 0 {
+						return
 					}
-					if unsafe {
-						for _, v := range uses {
-							if live[i][v] {
-								valid = false
-							}
+					r.eachSpan(b, func(lo, hi int32) bool {
+						if i, _ := slices.BinarySearch(at, lo); i < len(at) && at[i] <= hi {
+							valid = false
 						}
-					}
-				}
+						return valid
+					})
+				})
 			}
 			if valid {
 				result[load] = prop

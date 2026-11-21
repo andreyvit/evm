@@ -43,7 +43,18 @@ type typedCompiler struct {
 	refs              map[*ssa.Function]uint32
 	invokes           map[evm.Invoke]uint32
 	callSignatures    map[*values.Shape]uint32
+	safeCalls         map[safeCall]bool
+	budget            int  // what the guest's functions leave of MaxBranchWeight
+	overBudget        bool // reported
 }
+
+// ssaChecks are builder modes added to every compile. The SSA builder can
+// check its own output, which costs more than building it: per function, the
+// square of its blocks for dominators derived a second time, the square of
+// the uses of one value, and the cube of the edges into a join whose
+// variables all take phis. A long function then compiles for seconds. The
+// evmcrosscheck build tag turns the check on for the test suites.
+var ssaChecks ssa.BuilderMode
 
 func compileTypedFiles(sources map[string]string, environment *Environment, options Options) (*evm.Module, error) {
 	filenames := slices.Sorted(maps.Keys(sources))
@@ -207,7 +218,7 @@ func compileTypedFiles(sources map[string]string, environment *Environment, opti
 			return nil, c.errors
 		}
 	}
-	prog := ssa.NewProgram(c.files, ssa.InstantiateGenerics|ssa.SanityCheckFunctions|ssa.GlobalDebug)
+	prog := ssa.NewProgram(c.files, ssa.InstantiateGenerics|ssa.GlobalDebug|ssaChecks)
 	var createPackage func(*types.Package)
 	created := make(map[*types.Package]bool)
 	createPackage = func(p *types.Package) {

@@ -20,6 +20,8 @@ type exprKey struct {
 }
 
 func (c *typedCompiler) simplifyScalars(fn *ssa.Function) {
+	var edits scalarEdits
+	defer edits.flush()
 	var literals map[literalKey]ssa.Value
 	canonical := func(v ssa.Value) ssa.Value {
 		k, ok := v.(*ssa.Const)
@@ -57,7 +59,7 @@ func (c *typedCompiler) simplifyScalars(fn *ssa.Function) {
 				// An earlier successful read checked the bounds. Keep that read and
 				// remove the redundant load along with its single-use address.
 				addr, ok := i.X.(*ssa.IndexAddr)
-				if !ok || i.Op != token.MUL || len(keep) == 0 || keep[len(keep)-1] != addr || len(*addr.Referrers()) != 1 {
+				if !ok || i.Op != token.MUL || len(keep) == 0 || keep[len(keep)-1] != addr || len(edits.referrers(addr)) != 1 {
 					break
 				}
 				if _, ok := addr.X.Type().Underlying().(*types.Slice); !ok {
@@ -69,7 +71,7 @@ func (c *typedCompiler) simplifyScalars(fn *ssa.Function) {
 				k := [2]ssa.Value{addr.X, canonical(addr.Index)}
 				if replacement = reads[k]; replacement != nil {
 					keep = keep[:len(keep)-1]
-					forgetInputs(addr)
+					edits.forget(addr)
 				} else {
 					if reads == nil {
 						reads = make(map[[2]ssa.Value]ssa.Value)
@@ -108,17 +110,38 @@ func (c *typedCompiler) simplifyScalars(fn *ssa.Function) {
 				keep = append(keep, ins)
 				continue
 			}
-			replaceScalar(ins.(ssa.Value), replacement, ins)
+			edits.replace(ins.(ssa.Value), replacement, ins)
 		}
 		clear(b.Instrs[len(keep):])
 		b.Instrs = keep
 	}
 }
 
-func replaceScalar(v, replacement ssa.Value, ins ssa.Instruction) {
-	var buf [4]*ssa.Value
-	for _, use := range *v.Referrers() {
-		for _, operand := range use.Operands(buf[:0]) {
+// scalarEdits removes instructions from a function and keeps the referrer
+// lists of their operands right. Taking each removed instruction out of each
+// list as it goes costs the square of a list: a thousand folded uses of one
+// parameter, or a thousand values replaced under one phi. The lists are
+// instead cleaned when next read, and at the end.
+type scalarEdits struct {
+	removed  map[ssa.Instruction]bool
+	stale    map[ssa.Value]bool // values whose referrers may still list a removed instruction
+	operands []*ssa.Value
+}
+
+// referrers returns the instructions that use v and are still in the function.
+func (e *scalarEdits) referrers(v ssa.Value) []ssa.Instruction {
+	refs := v.Referrers()
+	if e.stale[v] {
+		delete(e.stale, v)
+		*refs = slices.DeleteFunc(*refs, func(use ssa.Instruction) bool { return e.removed[use] })
+	}
+	return *refs
+}
+
+func (e *scalarEdits) replace(v, replacement ssa.Value, ins ssa.Instruction) {
+	for _, use := range e.referrers(v) {
+		e.operands = use.Operands(e.operands[:0])
+		for _, operand := range e.operands {
 			if *operand == v {
 				*operand = replacement
 				if refs := replacement.Referrers(); refs != nil {
@@ -128,15 +151,27 @@ func replaceScalar(v, replacement ssa.Value, ins ssa.Instruction) {
 		}
 	}
 	*v.Referrers() = nil
-	forgetInputs(ins)
+	e.forget(ins)
 }
 
-func forgetInputs(ins ssa.Instruction) {
-	var buf [4]*ssa.Value
-	for _, operand := range ins.Operands(buf[:0]) {
+// forget takes ins, which has left the function, out of the referrers of its operands.
+func (e *scalarEdits) forget(ins ssa.Instruction) {
+	if e.removed == nil {
+		e.removed = make(map[ssa.Instruction]bool)
+		e.stale = make(map[ssa.Value]bool)
+	}
+	e.removed[ins] = true
+	e.operands = ins.Operands(e.operands[:0])
+	for _, operand := range e.operands {
 		if refs := (*operand).Referrers(); refs != nil {
-			*refs = slices.DeleteFunc(*refs, func(use ssa.Instruction) bool { return use == ins })
+			e.stale[*operand] = true
 		}
+	}
+}
+
+func (e *scalarEdits) flush() {
+	for v := range e.stale {
+		e.referrers(v)
 	}
 }
 

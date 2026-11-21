@@ -34,6 +34,16 @@ const (
 	// MaxConstStringSize bounds a constant string expression: the checker folds
 	// a+a at compile time, so a few short lines can build gigabytes.
 	MaxConstStringSize = 1 << 20
+	// MaxBranchWeight bounds the functions of a package taken together, by
+	// the costs of the SSA form that grow with the square of a function: a
+	// quarter of the square of its basic blocks, its blocks times its local
+	// variables, twice the square of the edges into each join, and 64 for each
+	// phi operand. A function reaches it alone with about 4,000 if statements
+	// in a row, a switch of 2,300 cases, or a switch of 500 cases that each
+	// assign a variable of their own. A copy that keeps a borrowed value past
+	// its scope counts 256: a function can need one for each borrowed value
+	// at each branch that ends a scope.
+	MaxBranchWeight = 16 << 20
 )
 
 // maxLimitErrors keeps a file with one mistake per line from flooding the caller.
@@ -50,32 +60,39 @@ type LimitError struct {
 // author wrote, to report positions there before lowering changes the syntax.
 // Packages supply the sizes of imported string constants.
 func CheckLimits(syntax []*ast.File, packages ...evm.Package) []LimitError {
-	return checkLimits(syntax, packages, 0)
+	errors, _ := checkLimits(syntax, packages, 0)
+	return errors
 }
 
 func (c *typedCompiler) checkLimits(syntax []*ast.File, packages []evm.Package, options Options) {
 	if len(c.errors) > 0 {
 		return // A file failed to parse; its errors are the ones to show.
 	}
-	for _, e := range checkLimits(syntax, packages, options.LoweredStmtNesting) {
+	errors, weight := checkLimits(syntax, packages, options.LoweredStmtNesting)
+	for _, e := range errors {
 		c.fail(e.Pos, "%s", e.Message)
 	}
+	c.budget = MaxBranchWeight - weight
 }
 
 // checkLimits walks each file once for nesting and once more for constant
 // sizes. The first walk does not enter a node past a cap and the second runs
 // only on files the first accepted, so their own stack and time stay bounded
-// on any input the parser accepts.
-func checkLimits(syntax []*ast.File, packages []evm.Package, loweredStmtNesting int) []LimitError {
+// on any input the parser accepts. It also returns the weight of the
+// functions, as MaxBranchWeight counts it.
+func checkLimits(syntax []*ast.File, packages []evm.Package, loweredStmtNesting int) ([]LimitError, int) {
 	n := nestingChecker{maxStmt: MaxStmtNesting + loweredStmtNesting}
 	for _, file := range syntax {
 		n.check(file)
 	}
+	n.sizes.finish()
+	n.tooHeavy()
+	weight := n.sizes.weight
 	if len(n.errors) > 0 {
-		return n.errors
+		return n.errors, weight
 	}
 	if !n.additions {
-		return nil
+		return nil, weight
 	}
 	// Any imported constant is first taken as the largest one. Sizes by name
 	// need the host's sources parsed, so only source that fails this test
@@ -84,9 +101,9 @@ func checkLimits(syntax []*ast.File, packages []evm.Package, loweredStmtNesting 
 	coarse := imports.largestConst()
 	errors := newConstSizes(n.consts, imports.dot, func(string) int { return coarse }).check(syntax)
 	if len(errors) == 0 || coarse == 0 {
-		return errors
+		return errors, weight
 	}
-	return newConstSizes(n.consts, imports.dot, imports.constSizes(coarse)).check(syntax)
+	return newConstSizes(n.consts, imports.dot, imports.constSizes(coarse)).check(syntax), weight
 }
 
 type nestingKind uint8
@@ -115,6 +132,8 @@ type nestingChecker struct {
 	expr      int
 	stmt      int
 	fn        int
+	sizes     funcSizes
+	heavy     bool
 }
 
 func (c *nestingChecker) fail(pos token.Pos, format string, args ...any) {
@@ -142,6 +161,8 @@ func (c *nestingChecker) check(file *ast.File) {
 			if top.kinds&nestsBody != 0 {
 				c.typ, c.expr = top.typ, top.expr
 			}
+			c.sizes.leave(top.node)
+			c.tooHeavy()
 			return true
 		}
 		if len(c.errors) >= maxLimitErrors {
@@ -204,9 +225,27 @@ func (c *nestingChecker) check(file *ast.File) {
 			frame.typ, frame.expr = c.typ, c.expr
 			c.typ, c.expr = 0, 0
 		}
+		c.sizes.enter(n, parent)
 		c.stack = append(c.stack, frame)
 		return true
 	})
+}
+
+// tooHeavy reports, once, the function that takes the package past
+// MaxBranchWeight.
+func (c *nestingChecker) tooHeavy() {
+	if c.sizes.weight <= MaxBranchWeight || c.heavy || len(c.errors) >= maxLimitErrors {
+		return
+	}
+	c.heavy = true
+	switch last := &c.sizes.last; {
+	case last.weight() <= MaxBranchWeight:
+		c.fail(last.pos, "functions are too large together: their branches and local variables multiply past the compile budget")
+	case last.names == nil:
+		c.fail(last.pos, "package variables are too large: the branches of their initializers multiply past the compile budget")
+	default:
+		c.fail(last.pos, "function is too large: its branches and local variables multiply past the compile budget")
+	}
 }
 
 // nestingKinds says which depths a node adds a level to.

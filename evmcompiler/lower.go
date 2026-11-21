@@ -55,6 +55,7 @@ type lowerer struct {
 	invariant               map[ssa.Instruction]bool
 	outgoing                []outgoingPatch
 	branches                []branchPatch
+	unorderedBranches       bool // a patch was recorded behind an earlier one; never seen
 	labels                  map[int]int
 	edges                   []flowEdge
 	result                  evm.Layout
@@ -96,6 +97,9 @@ func (c *typedCompiler) lowerFunction(fn *ssa.Function) {
 		f.code.Captures = append(f.code.Captures, evm.CaptureSlot{Type: t, Slot: r.slot})
 	}
 	f.ownership = f.planOwnership()
+	if checkOwnership != nil {
+		checkOwnership(f)
+	}
 	for _, b := range fn.Blocks {
 		for _, i := range b.Instrs {
 			if call, ok := i.(*ssa.Call); ok && f.optimizing() && len(f.ownership.before[i]) == 0 && len(f.ownership.after[i]) == 0 {
@@ -152,6 +156,9 @@ func (c *typedCompiler) lowerFunction(fn *ssa.Function) {
 		f.cellLocals = f.findCellLocals()
 		f.packed = f.findPackedSlices()
 		f.recordLists = f.findRecordLists()
+		if checkRecordLists != nil {
+			checkRecordLists(f)
+		}
 		f.planInvariantBounds()
 	}
 	for _, fn := range f.functionValues {
@@ -598,8 +605,16 @@ func (f *lowerer) loadConstant(c *ssa.Const, r vreg) {
 	f.emit(evm.WithBC(evm.OpConst, r.slot, f.c.word(x)))
 }
 func (f *lowerer) jump(op evm.Opcode, reg uint16, target int) {
-	f.branches = append(f.branches, branchPatch{len(f.code.Code), target})
+	f.patch(len(f.code.Code), target)
 	f.emit(evm.WithBC(op, reg, 0))
+}
+
+// patch records a branch to resolve once every label is known.
+func (f *lowerer) patch(pc, target int) {
+	if n := len(f.branches); n > 0 && f.branches[n-1].pc > pc {
+		f.unorderedBranches = true
+	}
+	f.branches = append(f.branches, branchPatch{pc, target})
 }
 func (f *lowerer) edge(from, to *ssa.BasicBlock) int {
 	if len(to.Instrs) == 0 {

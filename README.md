@@ -756,6 +756,14 @@ Details: [host contracts](_docs/embedding.md), [`evmbind`](evmbind/README.md),
   (`MaxConstStringSize`), estimated from literal lengths and `+` before the
   type checker folds it. Past a limit, compilation returns a diagnostic at the
   first level too deep.
+- Branching is limited too, for a package as a whole (`MaxBranchWeight`):
+  some costs of a function grow with the square of its branches, and with its
+  branches times its local variables. One function may hold about 4,000
+  `if` statements in a row, a `switch` of 2,300 cases, or a `switch` of 450
+  cases that each assign a variable of their own; functions add up. The
+  diagnostic is at the function that goes past the limit. Splitting a
+  function into several lowers the total; a package that is past the limit
+  as a whole has to be split.
 - Scripts are Go 1.23: generics, range over integers and functions.
 - `evmcompiler.Options{NoOptimization: true}.Compile(...)` keeps the code
   unoptimized for debugging.

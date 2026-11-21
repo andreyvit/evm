@@ -1113,7 +1113,8 @@ Every operation rejects source nested past the limits, with a position: tags
 inside tags up to `MaxTagNesting`, 100 levels, and Go as `evmcompiler` limits
 it, with types 32 levels deep, one expression 500, statements 100 and function
 literals 32. A component with children compiles to a function literal, so
-nested components count towards the 32.
+nested components count towards the 32. `evmcompiler.MaxBranchWeight` also
+limits how much the functions of a package branch, taken together.
 
 A generic CLI does not know an application's packages. Full preprocessing
 belongs in the application or tooling that supplies that environment. `gox
@@ -1169,6 +1170,7 @@ func Card(b *gox.Builder, name string) {
 | A missing argument is not inherited | Only implicit parameters are inherited. Check for `//gox:arg name implicit` or an `ImplicitTypes` entry, then the name, scope and type of the caller's variable |
 | A component is unknown | Use its exact case-sensitive Go name and make its package available |
 | `tags nest more than 100 levels`, `statements nest more than 100 levels` | Move the inner part into a function of its own and call it |
+| `function is too large`, `functions are too large together` | A function with thousands of branches, or hundreds of branches that each change many variables. Split it into functions, or the package into packages |
 | `undefined: x (add import "...")` | The file names package `x` without importing it. Add the import, or run `gox fmt` / `FormatSource` |
 | `cannot output a value of type int` | Text takes strings and trusted content. Convert it (`strconv.Itoa(n)`, `fmt.Sprint(v)`) or pipe it through a function (`price \| app.FormatMoney`) |
 | `cannot use a value of type ... as an attribute value` | A whole attribute value is a string, a bool or an integer. Convert the value or call a function |

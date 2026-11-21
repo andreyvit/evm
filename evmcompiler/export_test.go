@@ -44,3 +44,17 @@ func (env *Environment) Fingerprint() string {
 	}
 	return b.String()
 }
+
+// SSAChecks reports whether the SSA builder checks its own output in this
+// build, which costs far more than building.
+func SSAChecks() bool { return ssaChecks != 0 }
+
+// WithoutReference runs f without comparing each function it compiles with
+// the analyses that were replaced (see ownership_reference_test.go), for
+// sources those would take minutes on.
+func WithoutReference(f func()) {
+	ownership, lists := checkOwnership, checkRecordLists
+	checkOwnership, checkRecordLists = nil, nil
+	defer func() { checkOwnership, checkRecordLists = ownership, lists }()
+	f()
+}

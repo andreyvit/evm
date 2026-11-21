@@ -31,7 +31,7 @@ func analyzeFiles(files *token.FileSet, syntax []*ast.File, environment *Environ
 	if err != nil {
 		return nil, nil, err
 	}
-	if exceeded := checkLimits(syntax, environment.packages, options.LoweredStmtNesting); len(exceeded) > 0 {
+	if exceeded, _ := checkLimits(syntax, environment.packages, options.LoweredStmtNesting); len(exceeded) > 0 {
 		diagnostics := make(Diagnostics, len(exceeded))
 		for i, x := range exceeded {
 			p := files.Position(x.Pos)

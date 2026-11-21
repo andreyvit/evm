@@ -2,77 +2,216 @@
 
 *How EVM compiles Go scripts and runs them inside a Go application.*
 
-This book follows a Go script from source text to a result in a register. It
-is for contributors, for hosts tuning a hot path, and for anyone curious how a
-small VM for a statically typed language is put together. It explains the
-machine. To embed EVM in an application, start with the
-[README](../README.md) and the [host contracts](embedding.md).
+This book follows a Go script from plain source text all the way down to bits
+in a register. It is written for contributors working on the VM, for host
+authors tuning a hot path, and for anyone curious how a small, fast virtual
+machine for a statically typed language fits together. If you just want to
+embed EVM in an application, start with the [README](../README.md) and the
+[host contracts](embedding.md) first—then come back here when you want to see
+what happens under the hood.
 
-Chapters 1–3 give the model: who supplies what, how a value is stored, how a
-call passes arguments. Chapter 4 is a reference to return to. Chapters 5 and 6
-follow the compiler, 7–9 the host boundary and the evaluator, and 10 the
-optimizer, with measurements. Chapter 11 shows GoX templates on the same
-machine. Each chapter can be read alone once the first three are familiar.
+### How to read this book
 
-Every bytecode listing under a Go example is compiled from that example when
-the book is rebuilt, and each example runs against a check. The appendix says
-how.
+**Chapters 1–4** lay down the foundations: why EVM exists, how every Go value
+and KVO record sits in memory, how compiled modules and overlapping register
+windows work, and the instruction set itself. Browse the module, calling-convention,
+and layout overview in Chapter 4 first and skim the opcode tables—you can always
+flip back when a specific opcode catches your eye.
 
-1. **The design.** The host application defines an external API. EVM compiles and runs scripts against it.
-2. **Values, types, shapes, and KVO.** A type identifies a value. A shape describes its storage.
-3. **The program image and the calling convention.** Each function owns its code and uses two register banks.
-4. **Instruction set.** Each opcode entry gives the encoding, operands and effect.
-5. **From Go source to a linked program.** Follow an addition through type checking, register assignment and instruction selection.
-6. **Go, construct by construct.** Compare each Go example with the bytecode it produces.
-7. **How Go enters the machine.** Follow a script that reads a row and passes its value to an external method.
-8. **Running and stopping.** See when initialization runs and how limits, cancellation and script panics affect a session.
-9. **Inside the evaluator.** Trace a call and return through the two frames that share its arguments.
-10. **What makes a script fast.** Follow a packed read, a recursive call, a numeric loop and a transaction write. Compare EVM with Go and Lua interpreters and with LuaJIT.
-11. **Templates on the same machine.** See what GoX markup becomes before the compiler reads it.
+**Chapters 5–6** follow the compiler from `go/types` and SSA down to bytecode,
+then walk through Go construct by construct beside live disassembly listings
+(plus a complete catalog of how EVM Go differs from standard Go).
 
-**Appendix.** The author’s brief explains how to revise and check the book.
+**Chapters 7–9** cover the runtime boundary and execution engine: native host
+bindings, automatic borrow/ownership analysis, budgets and cancellation,
+execution coverage, and stepping inside the evaluator loop.
 
-### Words used throughout
+**Chapters 10–12** finish with the performance story—what actually made EVM
+fast, what failed, and how it compares to Lua, LuaJIT, and other Go
+interpreters—followed by GoX (typed HTML templates compiled to the exact same
+VM) and a short end-to-end walkthrough tying every chapter together on a real
+runnable example.
 
-| Word | Meaning |
-|---|---|
-| Host | The Go application that embeds EVM. |
-| Script | Go source the host compiles at run time. The README calls it a plugin when it extends an application; a GoX template is a script too. |
-| External | Declared to scripts, implemented by the host in native Go: an external function, method, type or package. |
-| Schema | The declarations of one external package, built once by `evmbind` from the package's Go source. |
-| Binding | The native Go code behind an external declaration. |
-| Module | What the compiler produces: instructions and the tables they index. Imports are still names. |
-| Program | A linked module: imports resolved to bindings, operands checked. Immutable and shared. |
-| VM, session | One execution state over a program: registers, a frame stack and the script's package variables. |
-| R, P, V | A word register, a pointer register, and the pair of both at one index. |
+Once Chapters 1–4 click, you can jump into any later chapter on its own. Every
+bytecode listing beneath a Go example is compiled, linked, and executed against
+an assertion whenever the book is rebuilt (see the Appendix). Throughout the
+book, **Why this way?** sidebars call out the engineering history behind notable
+choices—distinguishing **clear trade-offs** (measured or weighed against real
+alternatives), **reasonable defaults** (clean choices that worked and were never
+challenged), and things **not yet done**.
 
-## 1. The design
+## 1. Architecture and goals
 
-A script calls `meter.Take("abc", 4)`. To compile it, EVM needs the declaration `func Take(string, int) int`. To run it, EVM also needs the Go function that implements `Take`. The host application supplies both. It can bind the same compiled script to a different meter without compiling the script again.
+### 1.1 Why embed a Go VM?
+
+Three real-world pressures push a Go application toward running Go code inside
+itself:
+
+1. **Customize per account with code instead of configuration.** When you try
+   to customize multi-tenant business logic through configuration, your engine
+   rapidly grows complex internals where dozens of edge cases—95% of them
+   irrelevant to any single account—interact in subtle, fragile ways. Writing
+   and validating straightforward code for *one* account's exact rules is far
+   simpler than building one generic engine that covers every conceivable case.
+   That unlocks deeper customization, dramatically better AI-generated code,
+   and a tiny blast radius (a bug affects one account, not every account)—and
+   together those make lights-out, no-human-required parts of the codebase
+   genuinely practical.
+2. **Staged rollouts through per-account versioning.** Even for your own
+   built-in logic, running different compiled versions for different accounts
+   gives you clean, fine-grained rollouts without tangling the host binary in
+   long-lived feature flags.
+3. **Code that changes faster than the server binary.** HTML templates,
+   emails, reports, and ad-hoc data queries can be edited, type-checked, and
+   swapped at run time without rebuilding or restarting the server.
+
+You have a few classic ways to embed dynamic behavior in a Go server, and each
+comes with a painful trade-off:
+
+- **Subprocesses or RPC plugins** isolate crashes, but force you to serialize
+  every struct across a process boundary and pay IPC latency on every call.
+- **Go's `plugin` package** runs native code, but cannot unload modules, cannot
+  enforce CPU or memory budgets, and breaks on the slightest toolchain or
+  dependency mismatch.
+- **Embedding Lua or JavaScript** gives you fast scripting, but forces your
+  team (and your users) into a second language, a second type system, and a
+  bridge layer that marshals data back and forth.
+
+EVM takes a different bet: **run a safe, sequential subset of Go itself, inside
+the host Go process, directly on the host's own memory.** Six goals shape every
+design decision you will see in this book:
+
+1. **Real Go on real host data.** A plugin is ordinary Go that calls
+   `c.AddPoints(...)` on your host's actual `*Customer` pointer and reads your
+   real slices and maps. Memory and garbage collection are shared with the
+   host—nothing is serialized at the boundary.
+2. **Checked before a single instruction runs.** Scripts are type-checked
+   against your exposed Go packages at compile time. A typo in a field name or
+   a wrong argument type fails compilation before any code executes.
+3. **Explicit capability control.** A script can import only the packages the
+   host hands to the compiler. There are no goroutines, no channels, no
+   `unsafe`, and no filesystem, network, or environment access unless the host
+   explicitly exposes it.
+4. **Hard, deterministic budgets.** A runaway loop or giant allocation stops
+   cleanly. Every invocation runs inside limits on instruction steps,
+   allocations, wall-clock duration, call depth, and output bytes.
+5. **Fast enough for the request path.** Bytecode operates on unboxed 64-bit
+   words in split register banks, small host calls run straight from registers
+   through generated Go wrappers (zero reflection), and warm calls allocate
+   nothing beyond what the script itself allocates.
+6. **One VM for scripts, templates, and stored records.** Business rules,
+   GoX HTML templates (Chapter 11), and KVO record scans (Chapter 3) all compile to
+   and run on the exact same VM.
+
+Keep one boundary clear from the start: **EVM is a capability and budget
+sandbox, not an OS process isolation boundary.** Always accept Go source and
+compile it yourself—never accept raw uploaded bytecode—and remember that any
+native Go function you expose runs inside your own process.
+
+> **Why this way? (Clear trade-off — why not `plugin`, Yaegi, or Lua?)**
+> Go's standard `plugin` package cannot unload code, breaks across Go and
+> dependency versions, and offers no step or memory budgets. AST-walking Go
+> interpreters like Yaegi are 5–15× slower and lack zero-decode data access and
+> borrow analysis. Embedded Lua is fast, but forces teams—and AI agents—to
+> maintain a second dynamic language with a second type system instead of
+> writing ordinary, statically checked Go.
+
+### 1.2 The overall approach
+
+Before diving into data structures and opcodes, it helps to see the five
+architectural choices that hold EVM together:
+
+1. **Stand on Go's own compiler frontend.** Rather than writing a custom Go
+   parser or reimplementing Go's type inference, generics, and method-set rules
+   by hand, EVM feeds script source through Go's standard `go/parser`,
+   `go/types`, and `golang.org/x/tools/go/ssa`. That guarantees real Go
+   semantics while letting EVM focus its code on lowering SSA, optimizing
+   bytecode, and enforcing limits.
+2. **A split-bank register VM, not a stack VM.** Every instruction is a fixed
+   64-bit word operating on frame-local registers split into two Go slices:
+   `vm.r` (`[]uint64`) for unboxed integers, floats, and lengths, and `vm.p`
+   (`[]unsafe.Pointer`) for GC-visible pointers. Keeping pointers in their own
+   bank means Go's garbage collector traces live VM registers natively without
+   boxing scalars or tagging every word.
+3. **Shared host memory with zero serialization.** Host pointers, slices, maps,
+   and encoded database rows (Chapter 3) cross directly into VM registers.
+   Scripts mutate your host's real structs and read stored data in place, and
+   generated Go wrappers (Chapter 7) let hot host calls skip reflection
+   altogether.
+4. **Validate once at link time, run unchecked in the hot loop.** `evm.Link`
+   resolves host bindings, freezes type layouts, and verifies every register
+   index, table index, and branch target up front. Because every instruction is
+   already proven valid before execution begins, the evaluator's inner loop
+   never wastes cycles re-checking instruction operands on every dispatch.
+5. **Deterministic budgets baked into the evaluator.** A local countdown fuel
+   counter polls cancellation every 256 dispatches and stops infinite loops
+   precisely; allocation reservations cap memory before Go allocates it; and
+   budget or cancellation errors trap fatally without running script `defer`s.
+
+### 1.3 Compile, bind, link, run: separating declarations from implementations
+
+With those goals in mind, suppose a script calls `meter.Take("abc", 4)`. What
+does EVM actually need to know?
+
+At **compile time**, it only needs the signature `func Take(string, int) int`.
+It never needs a live meter object, and it never runs a line of host code—the
+signature alone is enough to reject `meter.Take(4, "abc")` with a type error.
+At **run time**, EVM needs the Go function implementing `Take`.
+
+Keeping those two phases apart is the central architectural split in EVM. You
+can compile a script once against a package's declarations and later link that
+same compiled module against different host receivers—say, a production meter
+and a test stub—without recompiling the script.
 
 ```mermaid
-flowchart TD
-    G[Script Go source] --> C[Go checker and SSA lowerer]
-    S[External declarations and KVO models] --> C
-    C --> M[Module: instructions, imports, descriptors]
-    S --> H[Packages with host bindings]
-    M --> L[Link: resolve calls and validate operands]
-    H --> L
-    L --> P[Shared program]
-    P --> V[VM: registers and globals]
-    X[Run: budget, context and optional record scope] --> V
+flowchart LR
+    subgraph Setup["Build once during setup"]
+        S["External schemas & KVO models"]
+        H["Bound host packages"]
+        S --> H
+    end
+    subgraph Compile["Compile per script"]
+        G["Script Go source"] --> C["go/parser + go/types + go/ssa"]
+        S --> C
+        C --> M["Module (bytecode + named imports)"]
+    end
+    subgraph Link["Link once per receiver"]
+        M --> L["Link (resolve + validate)"]
+        H --> L
+        L --> P["Immutable Program (shared)"]
+    end
+    subgraph Run["Run per request"]
+        P --> V["VM session (registers + globals)"]
+        X["Budget + context + record scope"] --> V
+    end
 ```
 
-The schema holds the external API declarations. Compiling against that schema produces a module containing instructions and imports. Binding selects the Go receiver that implements the package functions. Linking resolves the imports and produces a program. Each VM that runs that program has its own registers and globals. A KVO property read uses a different part of that same contract: the module records the model and numeric property code, the linker checks them, and the running VM reads the row through the record’s access metadata.
+Look at how cleanly the responsibilities separate:
 
-| Change | Work that follows |
-|---|---|
-| Different meter instance | Bind its receiver and link the existing module. |
-| Same program, independent globals | Create another VM from that program. |
-| New script source | Compile and link again using the existing schema. |
-| Changed external declarations | Build a schema, verify the wrappers, and recompile against the new type identities. |
+- A **schema** holds the external API declarations.
+- **Compiling** checks the script against that schema and produces a `Module`
+  full of instructions and named imports.
+- **Binding** pairs the schema with a concrete Go receiver.
+- **Linking** resolves imports to bindings, validates every operand, and
+  produces an immutable `Program` you can share across goroutines.
+- A **VM** is one execution session over that program, with its own registers
+  and package variables.
 
-For a script entry named `Run` with no arguments or results, the application compiles the source, links the external API and starts a VM:
+KVO records follow the same split: the compiled module records the model and
+numeric property code, the linker validates them, and the running VM reads the
+row through shared access metadata.
+
+This separation pays off whenever something changes—you only redo the minimum
+necessary step:
+
+| What changed | What you need to redo |
+| --- | --- |
+| A different `meter` receiver instance | Bind the new receiver and re-link the existing `Module`. |
+| Need isolated globals for another request | Create another `VM` from the same `Program`. |
+| Edited script source | Recompile and re-link against the existing schema. |
+| Changed host API declarations | Rebuild the schema, check wrappers, and recompile scripts. |
+
+In Go, the whole pipeline for a parameterless `Run` entry is ten lines:
 
 ```go
 module, err := evmcompiler.Compile("main.go", source, schema.Package())
@@ -86,15 +225,48 @@ if err != nil {
 return evm.New(program).Run(ctx, "Run", nil, nil)
 ```
 
-The compiler can reject `meter.Take(4, "abc")` from the signature alone. It never has to construct a meter or run its Go code.
+Notice what the trust boundary looks like here. The host decides which packages
+a script may import by choosing what to hand the compiler. The linker verifies
+table indices, frame sizes, and type layouts, trusting the typed compiler to
+emit valid pointer operations. External functions run as ordinary native Go
+inside the host process—Chapter 8 explains how budgets and cancellation behave
+across that boundary.
 
-The host application chooses which packages a script can import when it passes the source to the compiler. The linker checks table indices, type layouts and frame sizes. It relies on the compiler to emit pointer operations with the correct types. An external function runs as native Go code in the host process. Chapter 8 describes how cancellation works during that call.
+### 1.4 Vocabulary
 
-## 2. Values, types, shapes, and KVO
+A handful of terms recur throughout the rest of this book:
 
-### 2.1 What is in a value?
+| Term | Meaning |
+| --- | --- |
+| **Host** | The Go application embedding EVM. |
+| **Script** | Go source compiled at run time (called a *plugin* in the README; a GoX template is a script too). |
+| **External** | Declared to scripts, implemented in native Go by the host (functions, methods, types, packages). |
+| **Schema** | The script-facing declarations of one external package, built once by `evmbind` from Go source. |
+| **Binding** | The native Go code wired behind an external declaration. |
+| **Module** | Compiler output: bytecode instructions and operand tables, with imports still referenced by name. |
+| **Program** | Linked module: imports resolved to bindings and operands validated. Immutable and safe to share. |
+| **VM / session** | One live execution state over a program: register banks, call stack, and script package variables. |
+| **R, P, V** | A word register (`uint64`), a GC-visible pointer register (`unsafe.Pointer`), and the pair of both at the same index. |
+| **KVO / Record** | EVM's typed data-modeling layer (Chapter 3): one 16-byte handle (`kvo.Record`) that reads Go structs and encoded database rows through the same API. |
 
-The word `1` can represent an integer, true, a one-byte string’s length or a function reference. The instruction that reads the register determines how to use those bits. The `values` package defines the storage:
+Now that the overall pipeline and terms are clear, let's zoom in on the first
+fundamental question of any VM: how do you represent every Go value in memory
+without drowning the garbage collector?
+
+## 2. Runtime values, types, and shapes
+
+Because Go is statically typed, EVM does not have to carry a type tag on every
+integer or pointer at run time. That single fact unlocks a compact,
+GC-friendly value model.
+
+### 2.1 Two-word values: splitting words and GC pointers
+
+Take the 64-bit word `1`. On its own, those bits could be the integer `1`, the
+boolean `true`, the byte length of a one-character string, or a function
+reference. In EVM, the *instruction* reading the register decides what those
+bits mean.
+
+In the `values` package, a general value is a pair of machine words:
 
 ```go
 type Value struct {
@@ -111,49 +283,77 @@ func String(v string) Value {
 }
 ```
 
-On a 64-bit machine a general cell is 16 bytes. Arithmetic uses only an R register; the VM does not allocate a 16-byte cell for every integer operation. A string uses both banks. P is a pointer as far as Go’s collector is concerned, so live registers can keep string data alive. P is never a spare second integer, and R must never be the only reference to a Go object.
+Why split `R` (raw bits) and `P` (pointer) instead of using one tagged word or
+NaN-boxing? C VMs like LuaJIT can hide pointers and type tags inside unused NaN
+bit patterns of a 64-bit `double`, because they own their own memory manager.
+EVM lives inside Go's precise, moving-capable garbage collector, which forbids
+hiding pointers inside `uint64` or `float64` values—the GC must know
+*statically* which words are pointers. Keeping pointers in a dedicated
+`unsafe.Pointer` bank means Go's GC can scan live `P` registers directly,
+without ever mistaking an integer for a pointer, losing track of a live string,
+or boxing scalars on the heap. Two ironclad rules follow from this: **`P` is
+never a spare integer**, and **`R` must never be the sole reference to a Go
+object.**
 
-| Script value | R | P |
-|---|---|---|
-| Integer, bool, float | Decoded bits; signed narrow integers sign-extended. | Unused. |
-| String | Byte length. | Immutable byte data. |
-| Mutable slice | Length in low 32 bits, capacity in high 32. | Start of the backing buffer. Its layout is fixed by the compiler or the external ABI. |
-| Map | Unused. | Map object. |
+Splitting the banks also saves work on hot paths: integer and floating-point
+arithmetic touch only the `R` bank, never allocating a 16-byte cell or
+bothering the GC. Strings, slices, interfaces, and KVO records use both halves:
+
+| Script value | `R` (word) | `P` (GC-visible pointer) |
+| --- | --- | --- |
+| Integer, `bool`, `float` | Decoded bits (narrow signed ints are sign-extended). | Unused. |
+| `string` | Byte length. | Immutable byte data. |
+| Mutable slice | Length in low 32 bits, capacity in high 32 bits. | Start of backing buffer (layout fixed by compiler or host ABI). |
+| `map` | Unused. | Map object. |
 | Pointer | Unused. | Address. |
-| Struct or array value | Unused. | Flattened snapshot; nil can represent all zeros. |
-| `complex64` | Real and imaginary parts packed as two float32s. | Unused. |
-| `complex128` | Unused. | Points to two float64 cells, one for each part. |
-| Function | Program’s function-reference index + 1. | Captures, if any. |
-| Interface | Payload, tag or concrete-type index; see §2.5. | Scalar marker, backing pointer or fallback box. |
-| KVO record/list | Typed-pair tag, representation ID and auxiliary length. | Encoded/native payload. |
+| Struct or array value | Unused. | Flattened snapshot (`nil` can represent all zeros). |
+| `complex64` | Real and imaginary `float32` bits packed together. | Unused. |
+| `complex128` | Unused. | Pointer to two `float64` cells. |
+| Function | Program's function-reference index + 1 (`0` = `nil`). | Closure capture environment, if any. |
+| Interface | Payload, tag, or concrete type ID (see §2.5). | Scalar marker, backing pointer, or fallback box. |
+| KVO record / list | Typed-pair tag, representation ID, and auxiliary length. | Encoded or native payload. |
 
-For a slice with length 2 and capacity 5, R is `0x0000000500000002`. The constructor packs both bounds into R:
+Slices are a neat example of how both halves cooperate. A slice with length 2
+and capacity 5 packs both bounds into `R` as `0x0000000500000002`:
 
 ```go
 return Value{R: uint64(length) | uint64(capacity)<<32, P: p}
 ```
 
-Copy the pair and both copies see the same elements. Reslice one and its R changes independently; P may advance into the same allocation. That is why a mutable slice needs both bounds, whereas a string only needs its byte length. The limit is on the number of elements, not their type.
+Copy that pair and both copies share the same backing elements. Reslice one,
+and its `R` changes independently while `P` may advance into the same
+allocation—just like Go's own slice header, only packed into two words instead
+of three (the trade-off is that slice length and capacity are capped at 32
+bits, measured in elements).
 
-### 2.2 What is in a type?
+### 2.2 Nominal types and register representations
 
-Each `Type` has an identity and a register representation:
+At the VM level, a `Type` carries two things: a nominal identity and a register
+representation (`Raw`, `Pointer`, or `Pair`):
 
 ```go
 type Type struct {
     name string
     repr Repr
-    own  OwnFunc // copies a borrowed value; see §2.6
+    own  OwnFunc // copies a borrowed value; see §3.3
 }
 ```
 
-Two separately created `*Type` values with identical names need not mean the same type. Signatures compare their lists of pointers. Two types can also share a representation and remain distinct: `type Points int` and `type Rank int` both fit in R.
+Identity is pointer identity: two separately constructed `*Type` values with
+the same name are *not* the same type, and signatures compare lists of `*Type`
+pointers. Conversely, two distinct types—like `type Points int` and `type Rank
+int`—can share the exact same `Raw` representation while staying distinct to
+the type system.
 
-### 2.3 Shapes and the 16-bit index
+### 2.3 Storage shapes and the 16-bit shape table
 
-A **shape** describes one Go type to the VM. It points to the type identity, describes how a value occupies memory, and links to shapes for the parts of a compound type. An instruction can refer to a shape by its index in the compiled module’s `Shapes` table. A million values of the same type can use the same entry. Their R and P payloads carry no copy of the descriptor.
+If a `Type` says *who* a value is, a **`Shape`** says *how it occupies memory*
+and links to the shapes of its fields or elements. Instead of carrying a
+descriptor on every value, instructions index the compiled module's `Shapes`
+table by a 16-bit integer—so a million `Row` values all point to one entry.
 
-`typeEnvironment.shape` looks up each Go type before creating its shape:
+Whenever the compiler encounters a Go type, `typeEnvironment.shape` unaliases
+it and checks its cache before building a new shape:
 
 ```go
 t = types.Default(types.Unalias(t))
@@ -166,9 +366,15 @@ e.shapes.Set(t, s)
 e.shapeOrder = append(e.shapeOrder, s)
 ```
 
-Suppose the compiler needs `type Points int`, `type Rank int`, and `type Score = Points`. Points and Rank each get a shape. Their values fit in the same register bank, but Go distinguishes the two types. Score reuses Points because it is an alias. Likewise, two occurrences of `[]Points` share a slice shape whose element points back to Points. A `[100000]Points` adds one array shape with a length of 100,000. The length changes the storage cost of an array value without consuming an index for every element.
+Walk through a concrete example: `type Points int`, `type Rank int`, and
+`type Score = Points`. `Points` and `Rank` each get a shape (distinct Go types,
+same register bank), while `Score` reuses `Points` because it is an alias.
+Every `[]Points` shares one slice shape pointing back to `Points`, and
+`[100000]Points` creates a single array shape with length 100,000 (consuming
+storage cells at run time, not 100,000 shape indices).
 
-For `type Row struct { Code [2]uint16; Name string }`, the compiler walks the fields in order. This is the assignment inside `typeEnvironment.shape` (line breaks adjusted):
+For a struct like `type Row struct { Code [2]uint16; Name string }`, the
+compiler flattens its fields into contiguous VM cells:
 
 ```go
 s.Fields = append(s.Fields, values.Field{
@@ -186,27 +392,64 @@ Row.Name     2                     cell 2: R length, P bytes
 Total        3 cells               48 logical bytes on a 64-bit machine
 ```
 
-Script offsets count cells. Native Go offsets count bytes. A user-defined script struct can have a different layout from the same declaration compiled by native Go. A binding that casts script cells to `*Row` would read the wrong memory. The generated wrappers in chapter 7 use field offsets and codecs instead.
+```mermaid
+flowchart LR
+    subgraph VM["Script struct (VM cell array)"]
+        VC0["cell 0: Code elem 0 (16 B)"]
+        VC1["cell 1: Code elem 1 (16 B)"]
+        VC2["cell 2: Name len+ptr (16 B)"]
+    end
+    subgraph Native["Native Go struct (Go heap)"]
+        NF0["bytes 0..3: Code 2x uint16 (4 B)"]
+        NF1["bytes 4..7: padding (4 B)"]
+        NF2["bytes 8..23: Name string (16 B)"]
+    end
+    FA["FieldAddr"] -->|VM pointer: cell offset| VC2
+    FA -->|Native pointer: byte offset| NF2
+```
 
-The compiler installs a shape in its cache *before* descending into the fields. For `type Node struct { Next *Node }` building the pointer’s element shape takes it back to the pending Node. Both references resolve to the same shape. The field itself costs one pointer cell. The linker also caches each copy before visiting its fields. Later edits to the module cannot change the linked shapes.
+Here is a subtle but vital distinction: **script struct offsets count VM cells,
+whereas native Go offsets count bytes.** A script-defined struct can have a
+completely different memory layout from the same declaration compiled by Go, so
+a host binding can never cast VM cells to `*Row`. Chapter 7 shows how generated
+wrappers bridge the two layouts safely.
 
-During compilation, `alloc`, `load` and `store` get a numeric index for each storage shape they address. Once the compiler finishes emitting code, it also appends every other shape it built to the same table. Importing an external package makes the compiler check every entry in its `Package.Types` against the Go layout, including types the script never mentions. The field, element and method-signature shapes reached from those declarations also count, once per distinct type.
+What about recursive structs like `type Node struct { Next *Node }`? Because
+the compiler inserts `Node` into its cache *before* descending into its fields,
+building `*Node` finds the pending `Node` shape immediately and avoids infinite
+recursion. The linker uses the same pre-cache trick when snapshotting shapes so
+later mutations to a `Module` can never corrupt a linked `Program`.
 
-Here are the counts for package `h`, the fixture of the `evmbind` tests. The third script calls `h.Pair()`, reads `row.Bits`, and calls `ctx.Credit` with the result. Chapter 7 shows its instructions.
+Every compiled module gets **65,536 shape slots**—a hard limit inherited from
+the 16-bit operand field in EVM's 64-bit instruction word. Today, the compiler
+lists all imported host shapes on the module (so interfaces and native bindings
+can resolve host types they meet at run time, counting toward the 65,536 cap),
+while a linked `Program` trims its runtime shape table down to only the highest
+index any instruction actually uses (saving ~23 KB on a trivial GoX plugin).
+
+> **Why this way? (Not yet needed)**
+> Assigning short 16-bit indices only to shapes addressed directly by `alloc`,
+> `load`, and `store` while reaching the rest by pointer would lift the 65,536
+> cap on imported types, but no real host has hit it yet.
+
+For the test fixture package `h` (from Chapter 7):
 
 | Script source | Shapes in module | Distinct shape indices read by memory instructions |
-|---|---:|---:|
+| --- | ---: | ---: |
 | Empty `Run`, no imports | 0 | 0 |
 | Empty `Run` with `import _ "h"` | 35 | 0 |
-| `Run` reads the Bits field of an external Row | 36 | 0 |
+| `Run` reads `Bits` on an external `Row` | 36 | 0 |
 
-The 16-bit limit is **65,536 entries per compiled module**. Each compiled module numbers its own shapes. A large imported API can still exhaust the table in a tiny script. In a boundary check, an external package declared 65,536 distinct named empty structs. A script with only a blank import and an empty function compiled. Adding one more struct produced the compile error `too many storage shapes`.
+In a boundary test, an external package declaring 65,536 empty structs compiled
+fine; adding one more hit `too many storage shapes`. (If that limit ever
+matters in practice, the compiler could assign short indices only to shapes
+addressed directly by instructions while keeping the rest linked by pointer.)
 
-One way to remove that pressure would be to keep the full shape graph for type checking and assign short indices only to descriptors an instruction addresses. The row example would need none: its field read is an extended operation, and a descriptor refers to its shapes by pointer. Other metadata, such as the element shape of a slice, refers to its child the same way. The compiler today puts both kinds of shape in the numbered table.
+### 2.4 Struct snapshots and Go aliasing semantics
 
-### 2.4 Copying data without breaking aliases
-
-A Bag with an integer and a slice takes two cells. A value copy gets its own integer cell and a copy of the slice header:
+In Go, assigning one struct to another copies the struct's own fields, while
+slices, maps, and pointers inside it keep sharing their targets. Take a `Bag`
+holding an `int` and a `[]int`:
 
 ```text
 a:  [ N: 1 ][ len: 1, cap: 1, P ] ─┐
@@ -214,15 +457,18 @@ a:  [ N: 1 ][ len: 1, cap: 1, P ] ─┐
 b:  [ N: 1 ][ len: 1, cap: 1, P ] ─┘
 ```
 
-Writing b.N cannot change a.N. Writing b.Items[0] changes the element both values see. Chapter 6 follows the exact addresses the compiler emits for these writes.
+Changing `b.N` must leave `a.N` alone, while changing `b.Items[0]` must show up
+in `a.Items[0]`. How does EVM pull this off in just a few lines?
 
-`Shape.Stored` can return a pointer into mutable cells. The executor’s `load` takes this extra step (error handling omitted here):
+When the evaluator executes `load`, it calls `snapshot`:
 
 ```go
 v, err := snapshot(shape, shape.Stored(p[b]), &budget.allocated, limits)
 ```
 
-Inside `snapshot`, scalar values and nil aggregate snapshots pass through unchanged. An aggregate with a non-nil backing pointer gets separate cells, even if all its fields are zero:
+Scalars and `nil` aggregate snapshots pass straight through. Any non-nil
+aggregate (a struct, array, or `complex128`) gets a fresh copy of its
+contiguous cells:
 
 ```go
 p, err := allocCells(s.Cells, allocated, limits)
@@ -233,37 +479,172 @@ s.Store(p, v)
 return values.Value{P: p}, nil
 ```
 
-`Shape.Store` copies a contiguous slice of cells. No recursive copy follows a pointer inside one of them. Go value assignment and Go pointer aliasing both fall out of that one choice.
+`Shape.Store` copies only that flat slice of cells—it never chases pointers
+inside them. Go value semantics and Go pointer aliasing both fall out of that
+single rule!
 
-The address supplies the first cell. The compiler knows the Go type at the dereference and puts its shape index into the instruction. The executor uses the shape to choose the register bank, decide whether the value needs a snapshot, and count the cells. Structs, arrays and `complex128` use aggregate storage.
+> **Why this way? (Reasonable default)**
+> Eager cell snapshots on `load` were never challenged—struct copies are small,
+> so copy-on-write was never needed here (unlike large borrowed `[]byte`
+> buffers in Chapter 7, where copy-on-write was chosen after eager cloning
+> proved too expensive).
 
-| Type at the address | Load | Store |
-|---|---|---|
-| `int` | Read R from one cell. | Write R and clear the cell's P. |
-| `string` | Read length and data pointer into R and P. | Write both halves. The string bytes stay in place. |
-| `*Customer` | Read the pointer into P. | Write P and clear the cell's R. |
-| `struct{ Customer *Customer }` | Copy one cell into fresh storage and put its address in P. | Copy that cell into the destination. A nil snapshot clears it. |
+Notice how the shape index in `load` and `store` tells the VM *how* to treat
+the exact same address:
 
-The last two rows have the same cell count and register representation. In the pointer case P holds the customer’s address. In the struct case P holds the address of a snapshot *containing* the customer’s address. Clearing the original field must preserve both the snapshot and its reference to the customer. The `Detach` listing in chapter 6 exercises exactly that case.
+| Type at the address | `load` | `store` |
+| --- | --- | --- |
+| `int` | Read `R` from one cell. | Write `R` and clear `P`. |
+| `string` | Read length and data pointer into `R` and `P`. | Write both halves (bytes stay in place). |
+| `*Customer` | Read pointer into `P`. | Write `P` and clear `R`. |
+| `struct{ Customer *Customer }` | Copy one cell into fresh storage; put its address in `P`. | Copy that cell into destination (`nil` clears it). |
 
-The full shape is convenient because the compiler already built it. A specialized instruction set could encode the first three rows as `load.r`, `load.v` and `load.p`, with matching stores. Aggregate instructions could carry a cell count and use it for both the copy and the budget charge. Field names, field types and methods play no part in copying the flattened cells.
+Look closely at the last two rows—they are both one cell wide and both live in
+`P`, yet they behave differently. For `*Customer`, `P` *is* the customer's
+address. For `struct{ Customer *Customer }`, `P` points to a snapshot cell
+*holding* the customer's address, so zeroing the original struct field leaves
+the snapshot untouched (the `Detach` listing in Chapter 6 demonstrates this
+live).
 
-### 2.5 Dynamic type and presence each have their place
+### 2.5 Unboxed interfaces and presence
 
-`any(int(1))` needs a runtime type because its consumer can ask what it contains. Scalars retain all 64 payload bits in R and put a real pointer into the linked program's type-marker array in P. Strings and common slice headers use high-bit tags in R while P retains their backing storage. Pointer payloads keep a concrete type ID in R and the original pointer in P; native Go pointers add a tag to the ID. Headers that do not fit remain boxed. All forms decode through the same API:
+Ordinary typed code knows every value's type at compile time. Interface values
+like `any(int(1))` do not—consumers can type-assert or switch on them at run
+time, so an interface value must carry its dynamic type.
+
+To avoid heap-boxing every integer or string stuffed into `any`, EVM uses
+compact encodings inside the same two-word pair:
+
+```mermaid
+flowchart LR
+    V["values.Value (16 bytes)"] --> R["R: uint64"]
+    V --> P["P: unsafe.Pointer (GC-traced)"]
+    R --> S1["Scalar in any: all 64 payload bits"]
+    P --> S2["Scalar in any: type-marker pointer"]
+    R --> T1["String / slice in any: tag + length/cap"]
+    P --> T2["String / slice in any: backing data pointer"]
+    R --> O1["Pointer in any: concrete type ID"]
+    P --> O2["Pointer in any: original Go/VM pointer"]
+```
+
+- **Scalars** keep all 64 payload bits in `R` and store a real pointer into the
+  program's type-marker array in `P`.
+- **Strings and common slices** pack high-bit tags into `R` while `P` keeps
+  pointing at the real backing data.
+- **Pointers** keep a concrete type ID in `R` and the original pointer in `P`
+  (native Go pointers add a tag bit).
+- Anything that doesn't fit—including functions—falls back to a heap box.
+
+> **Why this way? (Clear trade-off)**
+> Always boxing interfaces in a `Value` cell was the original baseline. On
+> JSON-heavy dynamic-value benchmarks, unboxed encodings cut re-boxing time by
+> **44.9%** (`2,050 → 0` allocations) and update-and-read time by **21.1%**
+> (`24.6 KB → 0`). An early prototype regressed pointer and function interface
+> loops by 6–7% until pointer assertion IDs were moved to link time, after
+> which control benchmarks stayed within ±3%.
+
+Regardless of which compact form was used, one function decodes them all:
 
 ```go
 shape, payload, err := program.UnpackInterface(value)
 ```
 
-Only R=0 together with P=nil is a nil interface. A scalar zero has a nonnil marker pointer; a typed nil pointer has a nonzero type ID; a typed nil slice has its slice tag. Marker pointers must be checked before R tags because scalar bits can match any prefix. The exact type ID belongs to the linked program. Copying the pair into another program and hoping the ID still means the same thing is invalid; a host must pack against the destination's registration. [Exact layouts](../values/README.md).
+Only `(R=0, P=nil)` is a `nil` interface: a scalar zero has a non-nil marker
+pointer in `P`, a typed `nil` pointer has a nonzero type ID in `R`, and a typed
+`nil` slice has its slice tag. Because a scalar's 64 bits can match any tag
+prefix, unpackers always check marker pointers first. And because type IDs
+belong to a single linked `Program`, always repack interfaces when crossing
+between programs (see [values/README.md](../values/README.md) for the exact bit
+layouts).
 
-Presence is a different question. `m[k]` can hold zero whether the key was set or absent. The comma-ok form emits a second output, a bool. `values.Map.Find` returns `(*MapEntry, bool, error)`: a missing key is neither a zero-valued entry nor a failure comparing keys. Equality uses the key shape; for interface keys, comparability can depend on their *dynamic* type.
+Presence is a separate question from dynamic type. A map lookup `m[k]` returns
+zero whether the key was stored as `0` or absent—so `v, ok := m[k]` emits a
+second boolean output, and `values.Map.Find` returns `(*MapEntry, bool, error)`
+to keep missing keys distinct from both zero values and comparison panics.
 
-### 2.6 KVO gives a stored word a meaning
+Everything in this chapter covers ordinary Go values. Next, let's see how EVM
+extends that exact same two-word value model to read and edit stored database
+records without decoding them.
 
-A KVO property code identifies a logical property across records. A VM field
-offset identifies storage within one shape. Neither is a Go byte offset.
+> **Key takeaways — Chapter 2**
+> - Every runtime value fits in two words (`R uint64`, `P unsafe.Pointer`); `P` is *always* a real GC pointer or `nil`, never an integer.
+> - Nominal `Type` identity is pointer equality; a `Shape` describes memory layout and is indexed by a 16-bit table entry.
+> - Shallow cell snapshots on `load` give Go struct value copies and pointer aliasing from a single rule.
+> - Interfaces pack scalars, strings, common slices, and pointers right into `(R, P)` without heap boxing; only `(R=0, P=nil)` is a `nil` interface.
+
+## 3. Data modeling with KVO
+
+### 3.1 Why a VM has a data modeling framework
+
+If you are coming from Lua, Python, or ordinary Go, seeing a dedicated chapter
+on a data-modeling framework inside a VM book probably looks unusual. Why would
+a virtual machine know anything about "KVO records"?
+
+Picture a real Go service backed by an embedded key-value database (such as
+[edb](https://github.com/andreyvit/edb)). A table holds 500,000 customer rows,
+and a script—or a Go report—wants to scan them and sum
+`c.profile.balance * c.profile.rate` for active customers.
+
+In ordinary Go, each row is serialized on disk (say, as MessagePack or JSON),
+so you decode every row into a `*Customer` struct. That allocates hundreds of
+thousands of strings, tag slices, history maps, and nested structs you never
+even touch—just to read three numbers—and floods the garbage collector. Yet if
+you try to read raw binary rows by hand, your business logic becomes welded to
+one storage format, and you end up maintaining separate code paths for encoded
+rows, in-memory Go structs (for tests and live objects), scripts, and HTML
+templates.
+
+**KVO ("Key-Value Objects") solves that by separating three concerns:**
+
+1. **What a record means:** A schema of typed properties with permanent numeric
+   codes.
+2. **How it is stored:** A Go struct, a `Fast2` binary row, a `Compact2` binary
+   row, a legacy `MessagePack` row, or decoded memory.
+3. **Who reads or edits it:** Native Go code, EVM scripts, or GoX templates.
+
+```mermaid
+flowchart LR
+    subgraph Storage["Physical storage"]
+        ST["Go struct"]
+        F2["Fast2 row"]
+        C2["Compact2 row"]
+        MP["MessagePack row"]
+    end
+    REC["kvo.Record (16-byte R,P pair)<br/>+ shared Schema / Model metadata"]
+    subgraph Consumers["Unified typed access"]
+        GO["Go: c.Get(Prop)"]
+        SC["EVM script: c.profile.balance"]
+        GX["GoX template: c.name"]
+    end
+    ST --> REC
+    F2 --> REC
+    C2 --> REC
+    MP --> REC
+    REC --> GO
+    REC --> SC
+    REC --> GX
+```
+
+Five concepts make up the whole model:
+
+| Concept | Role |
+| --- | --- |
+| **Schema** | A registry holding all properties and models for an application. |
+| **Property** | One typed field with a permanent numeric code (never renumbered) and a name like `customer:points_earned`. |
+| **Model** | The list of properties belonging to one record type (for example, `Customer`). |
+| **Record (`kvo.Record`)** | A 16-byte handle viewing one value of a model in place—struct or encoded bytes—without decoding the whole row. |
+| **Editor** | A typed handle for mutations: writes straight to a Go struct, or batches changes and encodes a new row. |
+
+Because both Go and EVM represent a `kvo.Record` using the exact same 16-byte
+`(R, P)` pair from Chapter 2, a script can scan half a million encoded rows
+with ordinary field syntax (`c.profile.balance`), reading only the bytes it
+touches with zero per-row heap allocations—and that exact same script runs
+unchanged against an in-memory Go struct in a unit test.
+
+### 3.2 Schemas, properties, and wire layouts
+
+A **KVO property code** identifies a logical field across every storage format;
+it is neither a VM cell offset nor a Go byte offset:
 
 ```go
 count := kvo.NewSignedProp[int64](schema, 1, "sample:count", kvo.TInt64)
@@ -276,15 +657,12 @@ model := kvo.NewModel(schema, entity, func(b *kvo.ModelBuilder) {
 })
 ```
 
-The declaration gives `count` its code and its signed type.
-`PresenceIsSignificant` makes the model keep a stored zero apart from an
-absent value; the matching Go field is then a `kvo.Optional[T]` or a pointer.
-`KeepDictionaryZeroValues` does the same for entries inside `labels`,
-independently of whether `labels` itself is present. Go struct fields map to
-properties by `kvo` tag, and registration rejects a field whose type cannot
-hold its property.
+`PresenceIsSignificant` tells the model to distinguish a stored zero from an
+absent field (matching `kvo.Optional[T]` or a pointer in Go);
+`KeepDictionaryZeroValues` does the same for entries inside `labels`.
 
-The codec supplies bytes; the property supplies interpretation:
+At the wire level, the codec provides raw bytes and the property tells you how
+to read them:
 
 ```go
 field := view.RawField(count.Code()) // Compact2 payload: ff
@@ -292,78 +670,159 @@ field.Decode(row2.Signed).AsInt()    // -1
 field.Decode(row2.Word).AsUint()     // 255
 ```
 
-The same byte reads as −1 or 255 depending on the type the property
-declares. The two current layouts differ in how they find a field. Compact2
-stores short integers, sign-extended on read, and walks a trailing catalog.
-Fast2 uses full-width scalar slots and a key directory. Both skip fields they
-do not know, a Fast2 row can contain Compact2 children, and neither boxes a
-scalar it reads. `Has` tells an absent property from a present zero.
+That same `0xff` byte means `-1` or `255` depending on the property's declared
+type. `Compact2` packs short integers with a trailing catalog for size; `Fast2`
+uses full-width scalar slots and a key directory for speed; and a `Fast2` row
+can embed `Compact2` children without boxing a single scalar on read.
 
-A `kvo.Record` is one 16-byte typed pair. P points at the payload. R holds a
-tag, a representation ID and an auxiliary length. The representation ID leads
-to shared metadata that names the model and the way to read this payload, so
-MessagePack rows, Fast2 and Compact2 rows, Go structs and decoded memory all
-travel in the same carrier. A host function returns one with
-`call.SetRecordResult(model, record)`, and no wrapper is allocated.
+### 3.3 Records in the VM: 16-byte pairs, lifetimes, and editors
 
-The compiler resolves script selectors to property codes. For
-`c.profile.balance` it can fuse the child read and the scalar read when the
-child has no other use: one operation visits both directories and stores no
-intermediate record. A missing child is an invalid dereference; a present
-child with no balance yields zero. When the child is used more than once, the
-script keeps it as an ordinary pair. Reading a record needs no scope and no
-expiry check.
+Best of all, a `kvo.Record` rides on the exact same 16-byte `(R, P)` pair as
+every other VM value: `P` points at the payload, and `R` packs a tag, a
+representation ID, and an auxiliary byte length. That representation ID indexes
+shared metadata naming both the model and the physical layout, so every
+representation travels in one uniform carrier—returning a record via
+`call.SetRecordResult(model, record)` allocates nothing.
 
-That puts the burden on lifetimes. A record borrows its bytes, and the bytes
-must stay valid while the script can reach them. The host declares ownership
-effects on its functions: which results borrow from which scope, which calls
-keep their arguments, which calls end a scope. From those the compiler inserts
-copies where a borrowed value escapes: at a store into longer-lived memory, at
-a return, before a call that invalidates the scope. A search loop therefore
-copies only the match it returns. Native Go code gets no such analysis and
-calls `Own()` or `Clone()` itself.
+When a script writes `c.profile.balance`, the compiler resolves both names to
+property codes and—if `c.profile` has no other use—fuses them into a single
+`GetChildKey` operation that visits both directories with no intermediate
+record. Reading an immutable record needs no transaction scope and no expiry
+check.
 
-Editors are different: a script holds an editor through a scoped handle that
-the host opens for the length of a transaction. A nested editor knows its path
-to the root. Reading through it creates nothing; writing creates the children
-it needs. The host flushes pending collection changes, saves the root and
-commits.
+> **Why this way? (Clear trade-off — 16-byte pairs with no read arena)**
+> Originally, `kvo.Record` was a 128-byte struct and EVM read handles checked
+> scope tokens on every access. Shrinking immutable handles to a 16-byte
+> `(R, P)` pair (32-bit length + flags + representation ID in `R`, payload in
+> `P`) cut Fast2 retain-and-read from **16.05 → 6.60 ns**, native
+> retain-and-read from **12.91 → 3.98 ns**, and a 256-row Fast2 scan from
+> **17.9 → 12.1 µs** (`5 → 0` allocs). Two runtime-checked alternatives were
+> explicitly rejected: a scope arena with generation counters (~16 MB of
+> bookkeeping per million reads when escape can't be disproved) and
+> per-transaction representation leases (no safe point to reuse an ID since
+> scripts never explicitly free records).
 
-KVO records carry no hidden database key. Keep the lookup key separately, or
-store an ordinary property marked `kvo.PrimaryKey`. Full decoding does not restore
-an omitted key. See [access and ownership](../kvo/_docs/access.md).
+Of course, dropping runtime read checks shifts lifetime safety onto the
+compiler: a borrowed record is only valid while its backing bytes stay alive.
+By attaching ownership effects to host functions (which results borrow from
+which scope, which calls retain arguments, which calls end a scope), you let
+the compiler insert copies only where a borrowed value actually escapes—so a
+scan loop over a million rows copies only the single match it returns. (Native
+Go code gets no compiler analysis and calls `Own()` or `Clone()` itself.)
 
-### 2.7 Collections and JSON in a record
+Editable records use a separate type (`CustomerEdit`, a **reasonable default**
+inherited from KVO's immutable/mutable split) and live inside a transaction
+`evm.WithRecords` scope—today an editor cache and registry rather than a
+read-lifetime gate. Nested editors remember their path to the root: reading
+creates nothing, writing creates children on demand, and the host flushes
+pending collections and commits. KVO records also carry no hidden database
+key (carrying one separately cost a 32-byte side allocation that erased the
+16-byte win)—keep the lookup key separately or store a `kvo.PrimaryKey`
+property (see [kvo/_docs/access.md](../kvo/_docs/access.md)).
 
-A list of scalars or strings can stay in the row. When the compiler proves
-that a script only reads a list locally, the script holds KVO's 16-byte list
-cell and the VM caches the traversal state, so `for _, tag := range c.tags`
-builds no slice. A list that escapes or is modified becomes an owned slice.
-See [list cells](list-cells.md).
+### 3.4 Lists, maps, and JSON inside records
 
-A JSON dictionary has fixed key type and dynamic values:
+Even lists inside a record can avoid allocating a Go slice. Whenever the
+compiler proves that a script only reads a scalar or string list locally
+(`for _, tag := range c.tags`, `len`, or indexing), the script carries KVO's
+16-byte list cell and reuses a VM iterator workspace—materializing an owned
+slice only if the list is mutated or escapes. That was a **measured trade-off**:
+list microbenchmarks improved 2–12% on range and 5–13% on `len` with zero
+allocations across 552 samples (while whole-database scans of 463K rows stayed
+within 1% noise; see [list-cells.md](list-cells.md)).
 
-```go
-extras := kvo.NewProp(schema, 34, "extras",
-    kvo.MapOf(kvo.TMachineString, kvo.TJSON), nil)
-```
+For schemaless data, a JSON dictionary (`kvo.MapOf(kvo.TMachineString,
+kvo.TJSON)`) appears in scripts as `map[string]any`, keeping `null` distinct
+from absent keys and preserving full 64-bit integer precision. On an editor,
+assigning into a JSON map materializes it once so all aliases see pending
+writes until the host flushes on save.
 
-Scripts see `map[string]any`. A present null differs from a missing key, and
-JSON integers keep their full signed or unsigned 64-bit value. When a script
-assigns into such a map on an editor, the map is materialized once and every
-alias sees the pending value; the host flushes it before saving.
+Finally, `Record.ToJSON` walks modeled data straight into an owned tree
+(replacing an accidental serialize-and-reparse path, cutting record export from
+32.3 → 11.5 µs and GoX rendering from 176.6 → 84.4 µs), while
+`Program.JSONValue` and `EncodeJSON` convert script `any` values into Go trees
+or JSON bytes while checking cycles, finite numbers, depth, and output size.
 
-`Record.ToJSON` walks modeled data straight into an owned tree and applies
-custom scalar JSON behavior at the leaves. Nothing is serialized and parsed
-back. `Program.JSONValue` turns a script `any` into owned Go JSON data and
-`EncodeJSON` into bytes. Both check types, cycles, finite numbers, depth and
-the size of the equivalent encoded output.
+With values, types, shapes, and records in place, let's look at how compiled
+modules sit in memory, how functions pass arguments across overlapping call
+windows, and the instruction set itself.
 
-## 3. The program image and the calling convention
+> **Key takeaways — Chapter 3**
+> - KVO separates logical schema (models + permanent numeric property codes) from physical storage (`Fast2`, `Compact2`, `MessagePack`, Go structs, decoded memory).
+> - A `kvo.Record` travels in the same 16-byte `(R, P)` pair as any VM value, enabling zero-decode, zero-allocation field reads.
+> - Immutable records borrow their bytes; the EVM compiler inserts `Own` copies automatically where records escape (Chapter 7), while mutable editors live in transaction scopes.
+> - Local read-only scalar/string lists iterate in place through 16-byte list cells without materializing Go slices.
 
-### 3.1 What travels with a word of code
+## 4. Instruction set and calling convention
 
-An EVM program is a Go object graph in memory. A `Function` owns its instruction words and a parallel array of source positions. A `Module` owns the things a word cannot hold: literal pools, variable-length lists of operands, signatures and type descriptions. The following fields hold the operands used in this example:
+Before diving into the opcode tables, it helps to understand the **shape** of
+EVM's instruction set—why it looks the way it does, and why certain tables keep
+appearing in operands.
+
+EVM is a **fixed-width, 64-bit, register-to-register RISC-style bytecode ISA**
+designed for fast decoding inside a Go `switch` loop:
+
+- **Fixed 64-bit words:** Every instruction is a single `uint64`, giving three
+  full 16-bit register operands with no extension words.
+- **Three-address register operations (not a stack VM):** In Go, there is no
+  portable computed `goto`, so every bytecode instruction pays for a pass
+  through a `switch`. A stack VM (like CPython or the JVM) needs three or four
+  dispatches (`push`, `push`, `add`, `store`) to do what one three-address
+  register instruction (`R[a] = R[b] + R[c]`) does in a single dispatch. Fewer,
+  wider instructions directly cut Go's switch overhead.
+- **Split register banks (`R` and `P`):** Instructions address frame-local
+  word registers (`Ra`) and GC-visible pointer registers (`Pa`) independently,
+  or pair them at the same index (`Va`).
+- **Constant pools instead of inline literals:** Because a 64-bit instruction
+  cannot hold an arbitrary 64-bit constant *and* an opcode and destination
+  register, large integers, floats, and strings live in per-module **constant
+  tables** (`Words` and `Strings`). Instructions like `const r3 wrd0` or
+  `string v1 str0` simply carry a table index. (Small signed immediates that
+  fit in 16 bits, like `add.imm.i64`, are encoded directly in the instruction.)
+- **The extended-operations table (`extended extN`):** Richer, multi-operand,
+  or type-directed operations (slice bounds, `append`/`copy`, map lookups,
+  `FieldAddr`, type assertions, KVO record reads/writes) share one opcode
+  (`OpExtended`) that indexes into a per-module **extended table**
+  (`Module.Extended`). Each entry is an immutable descriptor carrying a closed
+  op kind, shape metadata, input/output register lists, and flags.
+
+> **Why this way? (Reasonable default & clear trade-off)**
+> Fixed **64-bit words** were a reasonable provisional default chosen for
+> simplicity (operand room, easy assembly and validation) at twice the code
+> bytes of a 32-bit format like Lua's—code density against 32-bit words was
+> never benchmarked. **`OpExtended`**, by contrast, was a clear trade-off
+> against variable-width or continuation-word instructions so every instruction
+> in the stream stays strictly one word; ops migrate in or out case by case
+> when benchmarks justify it (early `new.struct`/`store.field` ops were retired
+> into `extended`, while hot native pointer loads later moved out to a
+> specialized path for GoX).
+- **Typed side tables:** For the same reason, storage shapes (`Shapes`),
+  numeric conversions (`Conversions`), closures (`Closures`), virtual method
+  descriptors (`Methods`), and defer descriptors (`Defers`) all live in sibling
+  tables on the `Module`, referenced by compact 16- or 32-bit indices.
+- **Link-time validation:** Every register index, table index, reserved-zero
+  field, and branch target is verified once at `Link` time so the evaluator can
+  index straight into frame slices without bounds-checking opcodes.
+
+To make that concrete, decode the 64-bit word `0x0003_0002_0001_0007`: the low
+16 bits (`7`) are `add.i64`, and reading the remaining 16-bit fields from right
+to left gives `A = 1`, `B = 2`, `C = 3`—executing `R[1] = R[2] + R[3]`. On a
+`store` instruction, that same physical `A` field names the destination pointer
+register `P[a]` instead; the opcode always determines the meaning and register
+bank of every field.
+
+### 4.1 In-memory modules and operand tables
+
+An EVM program lives as an in-memory Go object graph. Each `Function` owns a
+slice of 64-bit instruction words plus a parallel slice of source positions,
+while the enclosing `Module` holds everything too big to fit inside a single
+64-bit word—literal pools, type shapes, signatures, and extended operation
+descriptors:
+
+> **Why this way? (Not yet done)**
+> There is no serialized bytecode file format yet simply because scripts are
+> distributed as Go source and loading untrusted bytecode would require a
+> semantic verifier first.
 
 ```go
 // Selected fields of evm.Module
@@ -377,9 +836,14 @@ ExtendedOps  []ExtendedOp
 Globals      []*values.Shape
 ```
 
-A reference in the instruction stream is an **index into a particular table**. Index zero in `Words` is unrelated to index zero in `Imports`. Code and data move together: copying only the instruction words from one module to another does not copy their meaning. Linking turns strings into ready-to-load length/pointer pairs, imports into call targets, and shape descriptions into a checked graph. There is no bytecode file to install.
+Every table index inside an instruction refers to one specific table—index `0`
+in `Words` has nothing to do with index `0` in `Imports`—so instruction words
+only make sense alongside their module's tables. Linking turns string literals
+into ready-to-load `(length, pointer)` pairs, resolves imports to Go wrappers,
+and validates the shape graph.
 
-The development assembler accepts this function:
+To see the simplest possible function, here is `square` written for the
+development text assembler (`evmasm`):
 
 ```text
 func square i64 -> i64
@@ -396,11 +860,21 @@ square     1 R slot, 0 P slots
   1  ret       0  0  0
 ```
 
-On entry R0 contains the input. After PC 0 it contains the result. The assembler records signatures, labels and names first and resolves them as it emits instructions; there is no label lookup when the VM branches. It builds the same `Module` type as the compiler. It covers a small assembly vocabulary for writing machine tests; the compiler can emit operations the text assembler does not spell. The disassembler prints the full instruction set, so some listings cannot be assembled as text.
+On entry, `R0` holds the input; PC 0 squares it in place; PC 1 returns `R0`.
+The text assembler builds the exact same `Module` struct as the Go compiler,
+covering a compact vocabulary handy for VM unit tests (the compiler can emit
+additional instructions that the disassembler prints but the text assembler
+does not spell).
 
-### 3.2 Two register banks, one window per call
+### 4.2 Split register banks and overlapping call windows
 
-Within a function R0 is a word in `vm.r` and P0 is a pointer in `vm.p`. They are unrelated unless the operand is V0, a *pair* which uses both at index zero. The signature determines the calling convention: `LayoutOf` gives pairs matching slots first, then independently numbers all remaining raw and pointer values in source order. For parameters `(string, *Bag, int)`, the layouts are:
+Inside a function, `R0` is a word in `vm.r` and `P0` is a pointer in `vm.p`.
+They are completely independent unless an operand is a pair (`V0`), which uses
+both at index `0`.
+
+How do parameters map to slots? `LayoutOf` assigns pairs first (so both halves
+share an index), then independently numbers the remaining raw words and
+pointers in source order. For `(string, *Bag, int)`:
 
 ```text
              source argument:   0: string    1: *Bag    2: int
@@ -409,9 +883,14 @@ R window:                       byte length              int word
 P window:                       byte data       Bag address
 ```
 
-Result layout follows the same rule independently. A string parameter and an int result often both use R0. A wrapper must finish reading the incoming length before it writes the outgoing integer.
+Results follow the same rule independently—which means an incoming `string`
+parameter (`V0`) and an outgoing `int` result (`R0`) often share `R0`. That is
+why a host wrapper must always finish reading its arguments before writing
+results.
 
-Inside a script function, the allocator handles a *new local* pair by aligning its two high-water marks. A nearly empty P bank can therefore have gaps:
+When allocating a *local* pair inside a script function, the compiler simply
+aligns the two high-water marks (which can leave small gaps in the less-used
+bank so `move.v` can still name both halves with one index):
 
 ```go
 case values.Pair:
@@ -419,7 +898,11 @@ case values.Pair:
     f.r, f.p = n+1, n+1
 ```
 
-In the compiled `Native(s string, n int) int { return meter.Take(s,n) }` example, the caller owns three R slots and one P slot. It writes the two halves of `s` and the word `n` into the outgoing area, then calls import zero. The unequal bases are visible in the operands:
+Now look at the clever part of EVM's calling convention: **overlapping
+windows**. In `Native(s string, n int) int { return meter.Take(s, n) }`, the
+caller owns three `R` slots (`R0..R2`) and one `P` slot (`P0`). Rather than
+allocating an argument array, the caller writes its outgoing arguments right
+past its own locals—into `R3`, `R4`, and `P1`—and calls `meter.Take`:
 
 ```text
 move.r r3 r0       ; caller R3 is callee R0
@@ -433,9 +916,8 @@ pointer bank:   P0                 | P1 = data
 from callee:                         V0            R1
 ```
 
-For a method, `ParameterLayout` reserves incoming V0 for the receiver, even if its concrete form needs just R or P. Explicit parameters begin at R1/P1. A virtual call can therefore read the incoming interface pair, resolve the concrete method, and overwrite the receiver in place; explicit arguments stay in their assigned slots.
-
-The caller’s locals do not overlap the callee’s. The caller’s *outgoing* window overlaps the callee’s *incoming* window. The callee can return its result in that same area; no parameter array is copied or allocated at the call instruction. `VM.enterCode` computes the callee’s bases from the caller’s local counts:
+When `VM.enterCode` enters a callee, it simply slides the base offsets forward
+by the caller's own local counts (`RCount` and `PCount`):
 
 ```go
 next := frame{
@@ -445,23 +927,51 @@ next := frame{
 }
 ```
 
-`RCount` and `PCount` are the caller’s own counts. The linker also computes larger sizes (`rSize`, `pSize`) that include the largest outgoing argument/result footprint the function may need. Advancing by those larger sizes instead would skip past the arguments. The VM grows the backing slices if necessary, clears any pointer slots beyond the callee’s parameters, installs captures and saves the caller’s frame. It also clears raw locals unless the linker proved each one is assigned before use. An address-taken script local lives in a separate cell, so growing a register slice leaves its address valid.
+The caller's *outgoing* window becomes the callee's *incoming* window—zero
+copying, zero allocations. (The linker also computes larger total footprints
+`rSize` and `pSize` that include the caller's widest outgoing call so the VM
+knows how much backing slice to reserve, while advancing the base by `RCount`
+and `PCount` so the callee lands right on its arguments.)
 
-On return the callee leaves the result prefix intact and clears the remaining P slots. At the outermost return, the VM copies only the banks the declared result type uses into the host’s `[]values.Value`. That is how a scalar can leave the VM with P = nil even though the same-numbered P slot held a live object.
+Two more details round out the calling convention:
 
-## 4. Instruction set
+- **Method receivers always reserve `V0`** (`R0` and `P0`), even when a
+  concrete receiver only needs one bank, so explicit arguments always start at
+  `R1`/`P1`. That lets virtual dispatch (`call.virt`) unpack an interface
+  receiver in place without shifting a single explicit argument.
+- **Clean boundaries on entry and return:** On entry, the VM grows `vm.r` and
+  `vm.p` if needed (address-taken locals live in separate heap cells, so slice
+  growth never invalidates pointers), clears pointer slots past the parameters,
+  and clears raw locals unless the linker proved every raw slot is written
+  before read. On return, the callee leaves its result prefix intact and clears
+  all remaining `P` slots so dead references can be collected. At the outermost
+  return to Go, the VM copies only the banks each declared result type uses, so
+  a returned scalar never leaks a stale pointer in `P`.
 
-Consider the word `0x0003_0002_0001_0007`. The low sixteen bits, 7, mean `add.i64`. Read the other fields from right to left: A = 1, B = 2, C = 3. In the current frame this word executes `R[1] = R[2] + R[3]`. The same physical A field on a `store` names the pointer to write through. Its meaning comes entirely from the opcode.
+### 4.3 Instruction word layouts and operand tables
 
-### The instruction word and the module around it
+Every instruction uses one of three 64-bit layouts selected by its opcode:
 
 ```text
-bits   63          48 47          32 31          16 15           0
-ABC    |      C      |      B      |      A      |     opcode    |
-A,BC   |             BC            |      A      |     opcode    |
+bits     63          48 47          32 31          16 15           0
+ABC      |      C      |      B      |      A      |     opcode    |
+A,BC     |             BC            |      A      |     opcode    |
+
+bits     63     52 51     40 39     28 27     16 15                0
+ABCD12   |    D   |    C    |    B    |    A    |      opcode      |
 ```
 
-Two constructors in package `evm` build these forms with shifts.
+- **`ABC`** carries three 16-bit operands (up to 65,535 registers or table
+  entries per field).
+- **`A,BC`** merges `B` and `C` into one 32-bit operand
+  (`BC = uint32(B) | uint32(C)<<16`) for pool indices, function/import indices,
+  and signed 32-bit branch displacements.
+- **`ABCD12`** packs four 12-bit fields (0–4,095, or signed −2,048…2,047 for
+  loop displacements) for five fused instructions (`mul.add.f64`, `add.mul.f64`,
+  `sub.add.f64`, `loop.add.lt.i64`, `loop.add.le.i64`). If an operand exceeds
+  12 bits, the compiler falls back to the unfused sequence.
+
+Package `evm` builds the two primary forms with simple shifts:
 
 ```go
 func ABC(op Opcode, a, b, c uint16) Instruction {
@@ -474,13 +984,23 @@ func WithBC(op Opcode, a uint16, bc uint32) Instruction {
 }
 ```
 
-Five fused operations use a third layout, ABCD12. The opcode still occupies bits 0–15. A, B, C and D start at bits 16, 28, 40 and 52. Each has twelve bits. A float expression can name its result and three inputs in one word. The stepped loop uses D for a signed displacement. If a register exceeds 4,095 or the branch falls outside −2,048…2,047, the compiler emits the original instructions.
+#### Addressing, PC arithmetic, and module tables
 
-The opcode selects the layout. In the second form, `BC = uint32(B) | uint32(C)<<16`. A function stores a slice of these 64-bit words. PC counts **words** from the start of that function. Every fetch advances PC by one, including a fetch that leads to a branch. A jump to itself has BC = 0xffffffff (−1). For a jump at PC 12 to PC 8, BC = 8 − 13 = −5. The linker rejects targets outside the function.
+A function's code is a `[]Instruction` slice indexed by **word PC** starting at
+`0`. Every fetch increments `cur.pc` *before* executing the instruction, so
+branch displacements are relative to `PC + 1`: a jump to itself encodes
+`BC = -1` (`0xffffffff`), and a jump from PC 12 to PC 8 encodes
+`8 - 13 = -5`. The linker rejects any target outside `[0, len(Code))`.
 
-A module also carries tables. For example, `const` with A = 3 and BC = 0 reads `Words[0]` into R3. Set that table entry to `0x400921fb54442d18` and the single instruction loads the full float64 bit pattern for π. `add.f64` interprets those bits as a float. `eq.r` would compare the bits as words. Constants of any magnitude therefore cost one instruction, plus a pool entry when the value is new. String bytes, function signatures, source positions and variable-length operands likewise live outside the stream. These tables and the code form an in-memory Go `Module`. EVM has no serialized module format or specified file byte order.
+Because constants live in module pools rather than immediate fields, `const r3
+wrd0` loads any 64-bit integer or IEEE-754 `float64` (such as π,
+`0x400921fb54442d18`) in one instruction. Strings, signatures, source
+positions, and extended descriptors live in sibling tables of the in-memory Go
+`Module` (there is no serialized bytecode file format).
 
-When `VM.execute` enters or resumes a frame, it takes slices starting at the frame’s two bases. The fetch and add cases then index those local slices directly (intervening checks omitted):
+Inside `VM.execute`, entering or resuming a frame slices `vm.r` and `vm.p` at
+the frame's base offsets once, so every arithmetic case indexes straight into
+local slices:
 
 ```go
 resumeFrame:
@@ -495,9 +1015,23 @@ resumeFrame:
         r[a] = r[b] + r[c]
 ```
 
-Entering a callee can grow the backing arrays. Returning through `resumeFrame` takes fresh slices of the caller’s windows. In the tables below, `Ra` means the word at A in this frame, `Pa` the pointer at A, and `Va` both halves. A write to Ra leaves Pa alone. An index written `Shapes[C]` consumes only the 16-bit C field. An index written `Words[BC]` consumes both B and C. Fields marked **0** must literally be zero for the linker to accept the instruction. Opcode numbers are decimal; zero is not an instruction.
+#### Notation used in the tables below
 
-### Moving values and addressing memory
+| Symbol | Meaning |
+| --- | --- |
+| `Ra`, `Rb`, `Rc` | Word register in `r[...]` (writing `Ra` leaves `Pa` untouched) |
+| `Pa`, `Pb`, `Pc` | GC-visible pointer register in `p[...]` |
+| `Va`, `Vb`, `Vc` | Paired register `(Ra, Pa)` at the same index |
+| `Shapes[C]` | 16-bit index into `Module.Shapes` (uses `C` alone) |
+| `Words[BC]` | 32-bit index into `Module.Words` (uses combined `BC`) |
+| `B = 0`, `C = 0` | Unused field—must be literally zero for `Link` to accept the word |
+| `Code` | Decimal opcode number (`0` is invalid; `36–39` are reserved; later additions sit at `66+`, `139+`, and `147+` to preserve existing numbers) |
+
+### 4.4 Moving values and addressing memory
+
+These instructions load constants, copy values between frame registers,
+allocate and access VM heap cells via shape descriptors, and check pointers for
+`nil`.
 
 | Code | Mnemonic | Operation and operands |
 |---:|---|---|
@@ -520,7 +1054,7 @@ A store to a field of a native-backed struct uses the FieldStore extended
 operation instead. The same shape rules serve manual declarations and compiled
 structs. Opcode numbers 36–39 are reserved.
 
-### Arithmetic, conversion and comparison
+### 4.5 Arithmetic, conversions, and comparisons
 
 For each binary instruction below, A is the destination, B the left operand, C the right. Banks appear in the expression. Float operations read IEEE bits from R, operate at the stated width and write the result bits back into R. A float32 uses the low 32 bits. Every comparison writes exactly 0 or 1.
 
@@ -568,7 +1102,12 @@ The compiler can use the same add for signed and unsigned operands. Their low 64
 
 For `eq.r`, +0.0 and −0.0 have different words. For `eq.f64` they compare equal. Floating division uses the floating-point rules for infinities and NaNs. A string comparison costs one instruction. Concatenation also reserves allocation bytes for the combined length.
 
-### Branches, calls and returns
+### 4.6 Branches, calls, and returns
+
+Control-flow instructions include relative branches, direct/host/virtual/indirect
+calls, fused counted-loop back edges (`66`, `78–79`, `81`), fused four-operand
+float arithmetic (`75–77`), and checked single-word slice indexing (`71–72`,
+`139–144`).
 
 | Code | Mnemonic | Operation and operands |
 |---:|---|---|
@@ -611,7 +1150,7 @@ A direct call indexes the function table. An external call (`call.host`) indexes
 
 Even a call with no register operands can make the caller's linked frame larger. The linker reserves the largest outgoing parameter/result footprint among its calls. Each bank starts that area immediately after the caller's own slots. On return the VM clears callee P slots beyond the result prefix. A function with pending defers reaches `run.defers` before `ret`. A raw `ret` with an undrained stack is an invalid execution.
 
-### External calls with register operands
+### 4.7 Register-operand host calls
 
 Each word uses ABC. C is the 16-bit import index in every row. The suffix gives the explicit input types in order, followed by the result. A word (`u`) uses R, a string (`s`) uses both R and P, and a pointer (`p`) uses P. A method's receiver always lives in P[B].
 
@@ -680,7 +1219,12 @@ its source position. Indirect calls, deferred calls, and imports beyond the
 but forward its parameters, unchanged, to a void register binding, a call to
 it compiles to that binding with no script frame in between.
 
-### Extended operations
+### 4.8 Extended operations
+
+Any instruction that needs more than three operands, a dynamic shape, or
+variable arity—such as map lookups, struct field offsets, interface packing, or
+KVO record operations—uses opcode `54` (`extended`), indexing a validated
+`ExtendedOp` descriptor in `Module.ExtendedOps`.
 
 | Code | Mnemonic | Operation and operands |
 |---:|---|---|
@@ -743,11 +1287,14 @@ The table omits the common `Extended` prefix from the kind names. Parentheses in
 | NativeAddress | address pair → address pair, converted by the shape's native address codec. |
 | NativeAlloc | No inputs → address pair of zeroed storage in the shape's native Go layout. |
 | FieldStore | struct address, value → write one field by ordinal, through the native layout when the struct has one. |
-| Own | value → the same value with borrowed data copied (§2.6). |
+| Own | value → the same value with borrowed data copied (§3.3). |
 | RecordCopy | record pair → pointer to an owned one-cell struct holding the record. |
-| RecordList / RecordListLen / RecordListIndex | record pair → list cell, its length, or record pair, index → element, for a list property read in place (§2.7). |
+| RecordList / RecordListLen / RecordListIndex | record pair → list cell, its length, or record pair, index → element, for a list property read in place (§3.4). |
 
-### Defers and panic
+### 4.9 Defers, panic, and recover
+
+These five instructions manage per-frame defer stacks (including external stack
+handles for Go 1.23 range-over-func bodies), explicit `panic`, and `recover`.
 
 | Code | Mnemonic | Operation and operands |
 |---:|---|---|
@@ -761,9 +1308,27 @@ A defer descriptor selects a direct target, function value, interface invocation
 
 A final instruction must be `ret`, `panic` or an unconditional `jump`. Otherwise execution could fall past the end even if every operand was individually valid. Link-time validation checks indices, window bounds, representations and these control-flow edges. Pointer provenance still comes from the typed compiler. The interface for untrusted scripts accepts Go source.
 
-## 5. From Go source to a linked program
+Now you know the entire runtime model: values, records, modules, overlapping
+call windows, and every instruction. In Chapter 5, we watch the compiler turn
+Go source into this bytecode.
 
-### 5.1 Adding two bytes
+> **Key takeaways — Chapter 4**
+> - A `Module` is an in-memory Go graph pairing 64-bit instruction slices with typed operand pools (`Words`, `Strings`, `Shapes`, `Imports`, `ExtendedOps`).
+> - Calling conventions assign pairs (`V`) first, then number remaining `R` and `P` slots independently; method receivers always reserve `V0` so virtual dispatch unpacks in place.
+> - A caller's outgoing window *is* the callee's incoming window—calls slide base offsets `rb` and `pb` forward with zero argument-array allocations.
+> - Every instruction is a fixed 64-bit word (`ABC`, `A,BC`, or `ABCD12`) validated once at `Link` time; hot operations live in the main switch while richer type-directed ops share `extended` (`Module.Extended`).
+
+## 5. The compiler and linker pipeline
+
+How does a plain Go function become those 64-bit instruction words? EVM does not
+build a custom Go parser or type checker from scratch—it stands on Go's own
+`go/parser`, `go/types`, and `golang.org/x/tools/go/ssa`, then lowers SSA into
+register bytecode and validates everything at link time.
+
+Let's trace the whole pipeline on the smallest interesting function: adding two
+8-bit unsigned integers.
+
+### 5.1 Walkthrough: compiling uint8 addition
 
 <!-- listing: Arithmetic | Arithmetic(250,10)==4 -->
 ```go
@@ -782,7 +1347,10 @@ fun0 Arithmetic   R=2 P=0
 ```
 <!-- /bytecode -->
 
-With inputs 250 and 10, PC 0 writes 260 to R0, reusing x’s slot. PC 1 narrows it to 4 in place. PC 2 returns that word. The VM implements eight-bit addition with these two operations:
+Pass `250` and `10`. PC 0 adds them as 64-bit words and writes `260` right back
+into `R0` (reusing `x`'s slot now that `x` is no longer needed). PC 1 narrows
+`260` to `uint8`, keeping the low eight bits (`4`), and PC 2 returns `R0`. Inside
+the evaluator, those two instructions are just:
 
 ```go
 case OpAddI64:
@@ -792,13 +1360,19 @@ case OpConvert:
     r[a] = vm.program.conversions[c].convert(r[b])
 ```
 
-The low eight bits of 260 are 4. The compiler selects a u64-to-u8 conversion to keep those bits. The add itself can operate on a full word.
+Notice the design philosophy here: rather than proliferating `add.u8`, `add.i16`,
+and `add.u32` opcodes, EVM computes on full 64-bit words and emits an explicit
+`convert` whenever Go's narrow-integer wraparound rules require it.
 
-### 5.2 Get a typed function
+### 5.2 Frontend: parsing, type checking, and SSA
 
-A script can start with a function without a package declaration. The frontend scans the first token and, when needed, prepends a package clause: `package plugin`, or the name another file of the same compilation declares. It counts that extra line. Diagnostics use physical file positions and subtract the prefix; a `//line` comment cannot move an error to a different file.
+Scripts do not even need a `package` clause—if the first token isn't `package`,
+the frontend prepends `package plugin` (or the package name from a sibling file)
+and subtracts that extra line from diagnostics so errors always point at the
+user's real line numbers (`//line` directives cannot spoof a filename either).
 
-`compileTypedFiles` supplies its own importer to the Go type checker. `syntax` holds the parsed files of the script package:
+Next, `compileTypedFiles` hands the parsed AST to Go's standard type checker
+with EVM's own `Importer`:
 
 ```go
 config := types.Config{
@@ -809,7 +1383,10 @@ pkg := types.NewPackage("plugin", "")
 err := types.NewChecker(&config, c.files, pkg, info).Files(syntax)
 ```
 
-The target has Go 1.23 language semantics and 64-bit Go sizes, even when compiling elsewhere. `info` records declared objects, selector resolutions and generic instantiations. The importer admits explicitly supplied packages and the virtual standard library. From `typeEnvironment.importPackage`:
+Every compilation targets Go 1.23 semantics and 64-bit sizes, regardless of the
+host architecture. The custom importer is the script's capability gate—it
+admits only packages the host explicitly handed over, plus EVM's virtual
+standard library:
 
 ```go
 decl, ok := e.packages[p]
@@ -821,9 +1398,22 @@ if !ok {
 }
 ```
 
-A script that calls `meter.Take` must import `"meter"`, even when its schema is available. Conversely, `import "os"` cannot reach the host filesystem. A program that type-checks in Go can still be outside the VM language. The frontend rejects channel types, sends, select and goroutines; lowering can reject an unsupported operation with its source position. On error `Compile` returns diagnostics instead of a partial module.
+So `import "os"` fails immediately, and even an exposed host package like
+`"meter"` must be imported explicitly. The frontend also rejects Go features
+EVM does not support—channels, `select`, and `go` statements—and any failure
+returns diagnostics instead of a partial module.
 
-The typed package then enters `golang.org/x/tools/go/ssa`. The compiler supplies the parsed files for script and virtual Go bodies, and typed declarations for an external package. The compiler builds the SSA package and finds the functions to lower:
+Once type checking succeeds, the package enters `go/ssa` (with generics
+monomorphized via `ssa.InstantiateGenerics`):
+
+> **Why this way? (Reasonable default)**
+> Standing on Go's own `go/parser`, `go/types`, and `go/ssa` was the obvious
+> pick and worked well without ever testing a custom frontend. The practical
+> cost shows up as hardening around it: `ssaChecks` is gated behind `-tags
+> evmcrosscheck` because SSA self-verification cost more than building SSA (a
+> 1 MB script dropped from 0.53 s / 650 MB to 0.35 s / 380 MB without it), and
+> the frontend rejects deeply nested source before type checking so `go/types`
+> cannot recurse unboundedly.
 
 ```go
 prog := ssa.NewProgram(c.files,
@@ -835,13 +1425,18 @@ c.pkg.Build()
 functions := c.discoverFunctions(prog, allDecls, info, needsInit)
 ```
 
-`ssaChecks` is empty outside builds tagged `evmcrosscheck`, where it makes the builder check each function it builds; the check costs more than the build. For `Arithmetic`, SSA records the two parameters and the typed result of a binary add. In a loop there are also basic blocks, control-flow edges and phi inputs. For a closure there is a separate function and a list of free variables. The lowerer reads these SSA instructions.
+SSA hands the lowerer an already-normalized control-flow graph: basic blocks,
+`phi` nodes for loops, concrete generic instantiations, and lifted closure
+functions with explicit free variables.
 
-### 5.3 Turn SSA values into slots
+### 5.3 Lowering SSA values to register slots
 
-Discovery visits concrete script functions and follows call targets and method sets, including instantiated functions and generated method wrappers. An open generic template has no executable calling convention yet. Each discovered executable gets a function index **before any body is lowered**. For mutually recursive functions A and B, the compiler can emit a call to B while it is still lowering A.
+Before lowering a single function body, discovery walks all reachable concrete
+functions (skipping open generic templates, which have no calling convention
+yet) and assigns every one of them a numeric function index. That way, if `A`
+and `B` call each other mutually, lowering `A` already knows `B`'s index.
 
-For each function, `lowerFunction` assigns positions for incoming parameters and result slots, reserves captures, then visits the SSA instructions to register their results and operands. Its register map is one-to-many:
+Inside `lowerFunction`, each SSA value maps to a slice of virtual registers:
 
 ```go
 regs map[ssa.Value][]vreg
@@ -852,7 +1447,9 @@ type vreg struct {
 }
 ```
 
-A result tuple has one slot per component. For `x, ok := m[k]`, the extended lookup can write x and ok directly to their two slots. Each SSA projection becomes another name for one of them during register assignment:
+Why a *slice* instead of one `vreg`? Because multi-value operations like
+`x, ok := m[k]` produce a tuple. Giving the tuple two slots lets each
+`*ssa.Extract` simply slice into the tuple's slots with zero moves:
 
 ```go
 if extract, ok := v.(*ssa.Extract); ok {
@@ -864,9 +1461,15 @@ if extract, ok := v.(*ssa.Extract); ok {
 }
 ```
 
-The `Extract` instruction itself emits no move. A call that returns a tuple still uses the outgoing window. When all its users extract components, the call emitter moves only the results they use back to caller-local slots. Calling a function for its side effects still emits the call.
+For calls returning a tuple, the call emitter copies out only the components
+the caller actually uses (while still executing the call for its side effects).
 
-The emitter loads constants, globals and function references that need slots, then emits one basic block at a time. For the addition, `lowerer.binary` chooses a word opcode and explicitly narrows narrow integers:
+After preloading constants, globals, and function references that need slots
+(equal scalar and string literals of the same type share one slot per function,
+and share bit patterns across the module's word pool), the lowerer walks each
+basic block and emits instructions. For `x + y`, `lowerer.binary` emits the
+64-bit add and—because `uint8` is narrower than 64 bits—appends the narrowing
+conversion:
 
 ```go
 f.emit(evm.ABC(op, dst.slot, x.slot, y.slot))
@@ -875,11 +1478,8 @@ if numeric && n.Kind != evm.NumericFloat && n.Bits < 64 {
 }
 ```
 
-Both addition and narrowing write R0. The add has already read x when it reuses that slot. Return reads R0 directly. The allocator normally assigns a fresh slot to each SSA result. It shares equal non-nil scalar and string constants of the same Go type within the function (complex constants are handled separately). The pool shares bit patterns across the module; the per-function literal map also saves the repeated load and register. Loop-carried scalar updates have one further reuse rule below.
-
-Two operands depend on information the compiler gets later: the PC of a branch target and the base of an outgoing window. The lowerer records both uses and patches the instructions after it has emitted the body.
-
-`emit` appends an instruction and its source position at the same index:
+Every `emit` records the instruction and its source position in lockstep so any
+runtime fault can report the exact Go line:
 
 ```go
 func (f *lowerer) emit(ins evm.Instruction) {
@@ -892,11 +1492,18 @@ func (f *lowerer) emit(ins evm.Instruction) {
 }
 ```
 
-A failing arithmetic instruction or external function can therefore identify its script source line by function and PC.
+### 5.4 Patching call windows, phi copies, and branches
 
-### 5.4 Decisions the emitter makes before it knows the final PCs
+While emitting a function body, the compiler faces two chicken-and-egg
+problems:
 
-The script code calls a helper and multiplies its result:
+1. It does not yet know the final total of local registers, so it cannot yet
+   know where the **outgoing call window** starts.
+2. It does not yet know the final word addresses of forward basic blocks, so it
+   cannot yet fill in **branch displacements**.
+
+Watch how EVM solves both cleanly using a two-line helper (`NoOptimization:
+true` keeps `sum` from being inlined so you can see the call):
 
 ```go
 func sum(x, y int) int {
@@ -908,9 +1515,9 @@ func SumThenDouble(x, y int) int {
 }
 ```
 
-In `2*sum(x,y)`, the literal needs a register because multiplication reads two registers. The direct call needs a function index. The parameters already have slots in the caller’s frame.
-
-When `lowerFunction` scans a call’s operands, it skips the function used as a direct target:
+First, notice that `sum` is a direct call target, not a function value—so the
+operand scanner skips allocating a register for it (whereas `apply(sum)` would
+allocate one and emit `function`):
 
 ```go
 case *ssa.Function:
@@ -919,7 +1526,7 @@ case *ssa.Function:
     }
 ```
 
-The pointer comparison identifies the operand's *role*. In `apply(sum)`, the same function can appear as an argument. The scan then registers a function value, and the prologue can emit `function` to materialize it. For the integer literal, the module pool is shared across functions. The first half of `typedCompiler.word` looks up the bits in a map. On a miss the new index equals the old pool length:
+The literal `2` is interned into `c.module.Words`:
 
 ```go
 i := uint32(len(c.module.Words))
@@ -928,7 +1535,7 @@ c.module.Words = append(c.module.Words, x)
 return i
 ```
 
-Compile this example with `evmcompiler.Options{NoOptimization: true}` to see the call window. The default compiler inlines `sum`. The first six instructions in debug mode use these operands.
+In debug mode, the first six instructions of `SumThenDouble` are:
 
 ```text
 0  const      r4 wrd0   ; word 0x2
@@ -939,21 +1546,19 @@ Compile this example with `evmcompiler.Options{NoOptimization: true}` to see the
 5  mul.i64    r3 r4 r2
 ```
 
-The compiler first emits PC 1 as a move into outgoing slot **zero**. Once lowering finishes, the local R count is five: two parameters, two intermediate results and the literal 2. The patch changes that destination to R5. PC 4 has the reverse problem: its *source* is outgoing result zero. The compiler records the direction of the patch when it emits the move. Both moves now refer to the same physical slot without either lowering routine having to predict the other's register use.
+When PC 1 is first emitted, it targets outgoing slot `0`. Once the whole
+function has been lowered, the compiler knows `SumThenDouble` owns five local
+`R` slots (`R0..R4`), so a quick patch shifts every outgoing-argument
+destination (PC 1 → `R5`, PC 2 → `R6`) and outgoing-result source (PC 4 ← `R5`)
+by `5`. Neither the call emitter nor the register allocator has to guess the
+other's count.
 
-Pairs impose a second constraint on allocation. After three raw allocations and one pointer allocation, the next pair must start at index three so both halves have the same number. Here is the pair case in `lowerer.allocBanks`, where the two counters mean “first free slot”:
+Two more lowering tricks keep loops tight:
 
-```go
-case values.Pair:
-    n = max(f.r, f.p)
-    f.r, f.p = n+1, n+1
-```
-
-That allocation leaves two holes in the pointer bank. It also lets `move.v` name a complete pair with one source index and one destination index.
-
-For a loop, the successor’s phi nodes specify an assignment for each incoming edge. An unconditional predecessor can emit its copies immediately and fall through if the destination block is next. A conditional predecessor must copy only on the chosen edge. If that edge needs copies, the lowerer creates a separate label, emits the copies after the ordinary blocks and jumps back to the destination. For a conditional whose false edge is physically next, it emits just `jnz` to the true edge. For `!=` used only by the branch, it can test equality and swap the successors.
-
-Here is the body and return path of the compiled `Fib` example in chapter 6. At loop entry R3 holds n, R4 holds a and R6 holds b. R5 contains zero.
+- **Pair alignment:** Allocating a pair aligns `f.r` and `f.p` to
+  `max(f.r, f.p)` so `move.v` can move both halves with a single index.
+- **Loop-slot reuse and parallel copies:** Consider the loop of `Fib` from
+  Chapter 6 (with `n` in `R3`, `a` in `R4`, `b` in `R6`, and `0` in `R5`):
 
 ```text
  PC  instruction        effect
@@ -969,22 +1574,34 @@ Here is the body and return path of the compiled `Fib` example in chapter 6. At 
  15  jump    -10        run the body at PC 6
 ```
 
-Before emission, `reuseLoopSlots` recognized the back edge to a header that dominates its predecessor. It let the decrement write directly into the n phi’s slot: this arithmetic result stays local to the update and phi, and nobody reads the old n after the decrement. The pass also counts the other phis’ incoming values as reads at the end of the block. Writing the sum straight into b would destroy the old b that PC 8 still needs.
+`reuseLoopSlots` sees that nobody reads the old `n` after `n--`, so PC 7 writes
+straight into `R3`—whereas `a+b` must go into `R1` because PC 8 still needs the
+old `b` in `R6`. Then `parallelCopy` schedules the remaining phi moves in order,
+inserting a temporary only when a move would clobber a source needed by a later
+move (tracking `R` and `P` independently). Conditional branches that only test
+`!=` flip to `==` and swap targets, and edges that fall through to the next
+block skip the jump altogether.
 
-`parallelCopy` schedules the remaining assignments in their declared order. For the two moves above, neither destination overwrites a source that a later move needs. No scratch slot is needed. For a swap `R2 ← R1, R1 ← R2`, the first destination would clobber the second source. The emitter first saves R2 in a temporary, then emits the two moves. It tracks R and P separately: writing R2 cannot clobber P2, but it can clobber the R half of V2. The same scheduler assigns return slots.
-
-Only now do all labels have word addresses. These are the two lines that determine the displacement, with the signed-range check omitted:
+Finally, once every block has a PC, branch displacements are patched relative
+to the *next* instruction word (`p.pc + 1`), matching the evaluator's
+post-increment fetch:
 
 ```go
 delta := int64(f.labels[p.target]) - int64(p.pc) - 1
 f.code.Code[p.pc] = evm.WithBC(ins.Op(), ins.A(), uint32(int32(delta)))
 ```
 
-In Fib, `14  jz r8 -4` branches to PC 11 when R8 is zero. Its displacement is `11 - 14 - 1 = -4`. The evaluator increments the PC during fetch, so it adds −4 to 15. Compiler and evaluator agree on the address of the *next* word as their origin.
+At PC 14 of `Fib`, jumping back to PC 11 gives `11 - 14 - 1 = -4`.
 
-### 5.5 Finish the program before dispatch
+### 5.5 Linking: binding imports and validating bytecode
 
-A `Module` can say “call import 0, `meter.Take`,” but has no receiver to call. `Link` builds an export map keyed by package, name and receiver type. For each import it takes a copy of the declaration, compares the signatures, and computes the two slot layouts. Record results retain their model and pair representation. The essential lines are below.
+At this point we have a `Module` that says "call import 0 (`meter.Take`)", with
+no Go function wired to it yet. `evm.Link` finishes the job in one pass:
+
+1. **Resolve imports:** Builds an export map by `(package, name, receiver)`,
+   verifies exact nominal signatures (same storage is not enough—types must
+   match nominally), computes parameter/result layouts, and appends linked
+   wrappers to `p.natives` in import order so every bytecode index stays valid:
 
 ```go
 g := linkNative(f, args, results)
@@ -992,26 +1609,114 @@ g := linkNative(f, args, results)
 p.natives = append(p.natives, g)
 ```
 
-The linker appends wrappers in import order, so both a general call’s BC and a register call’s C keep their original index. `linkNative` records the maximum of parameter and result counts for each bank. On a hot host call those two numbers already give the size of the borrowed window. At runtime dispatch indexes `p.natives`; no map or string is involved. A nonmatching receiver or a different nominal parameter type fails linking, even when the types happen to have the same storage.
-
-The linker snapshots mutable input slices and shapes, computes each function’s outgoing footprint, binds method targets, and checks each instruction against the resulting frame and tables. For example:
+2. **Snapshot and validate:** Deep-copies mutable slices and shapes, computes
+   each function's total outgoing frame footprint, binds virtual method tables,
+   and validates every instruction's register indices, table indices, and
+   control-flow edges:
 
 ```go
 case OpConvert:
     valid = r(a) && r(b) && c < len(p.conversions)
 ```
 
-This verifies that both R slots exist and the descriptor index is valid. That is distinct from proving the bit pattern in Rb came from a script `uint64`. That information came from the typed frontend. The architecture relies on both checks in that order.
+Notice the clean division of labor: the **type checker** proves that `Rb`
+actually holds a `uint64`, and the **linker** proves that `a`, `b`, and `c` are
+in bounds—so the evaluator never has to check them inside its hot loop.
 
-## 6. Go, construct by construct
+### 5.6 Shared compile and link environments
 
-A type alias disappears during type checking. SSA turns a short-circuit expression into a branch between basic blocks. A map lookup reaches the interpreter as a typed operation.
+If your host runs one script, compiling and linking directly against a slice of
+packages is plenty. Against a large host API (in our measurements, 28 host
+packages with ~6,000 method bindings), rebuilding the `go/types` universe was
+most of compile time, each link spent ~4 ms and allocated ~7 MB rebuilding
+binding tables, and every linked program held an identical ~1.2 MB copy of
+~2,700 host shapes.
 
-The disassembly below each Go example comes from compiling that example.
-The book calls `Module.DisassembleFunction` for each listing. A comment gives the source line when it changes. Trailing unused zero fields disappear. Register names start with r, p or v. A table operand has a three-letter prefix followed by its index. For example, `call.func fun2` enters the function whose listing starts with `fun2`. A branch displacement is a signed number.
+EVM solves this with a **measured, two-level shared environment**:
+
+1. **Compile environment:** Call `env, err := evmcompiler.NewEnvironment(declared...)`
+   once at startup. It builds and freezes the host package symbol tables and
+   host storage shapes once; every subsequent `env.Compile(...)` runs in a
+   read-only overlay and type-checks only the script's own source.
+2. **Link environment:** Call `linkEnv, err := env.NewLinkEnvironment(bound...)`
+   once against the matching bound packages. Every subsequent
+   `linkEnv.Link(module)` copies only the tables that belong to that module.
+
+```mermaid
+flowchart LR
+    DECL["Host schemas & packages<br/>(built once)"] --> CENV["Compile Environment<br/>(shared symbols & HostShapes)"]
+    CENV --> LENV["Link Environment<br/>(shared bindings, shapes,<br/>all-native method tables)"]
+    CENV -.-> M1["Script A Module"]
+    CENV -.-> M2["Script B Module"]
+    LENV -.-> P1["Program A<br/>(shares host tables)"]
+    LENV -.-> P2["Program B<br/>(shares host tables)"]
+```
+
+Under the hood, three table splits delivered most of the memory savings:
+
+- **`HostShapes` bitset:** Instead of repeating ~3,400 host shape pointers
+  (27 KB) on every module, modules reference the environment's shared list plus
+  a 448-byte bitset (cutting a trivial plugin module from 112 KB to 84 KB).
+- **`MethodImports` split from `Imports`:** A trivial GoX plugin referenced
+  687 imports, of which bytecode called only 115 directly—the rest existed only
+  for virtual method tables. Splitting them keeps `Imports` small at the cost
+  of one extra branch on indirect `FunctionRef` calls.
+- **Shared all-native method tables:** Host types whose methods are all native
+  share read-only method tables across programs (dropping a trivial GoX plugin
+  from 1.37 MB to 0.96 MB), while still exposing only reachable shapes
+  (`Program.Shape` returns `nil` for the rest).
+
+Both environments are immutable and safe for concurrent use across goroutines.
+
+> **Why this way? (Clear trade-off)**
+> Against a real 28-package / ~6,000-method host, rebuilding the `go/types`
+> universe dominated compile time, each link spent ~4 ms and allocated ~7 MB,
+> and every linked program held an identical ~1.2 MB copy of ~2,700 host
+> shapes. Sharing `HostShapes` via a 448-byte bitset (down from 27 KB of
+> pointers), splitting `MethodImports` from `Imports` (687 → 115 direct
+> imports on a trivial GoX plugin), and sharing all-native method tables
+> dropped a trivial GoX plugin from **1.37 MB to 0.96 MB** (at the cost of one
+> extra branch on indirect `FunctionRef` calls). Stateless virtual packages—
+> originally a reasonable default—are what make sharing them safe.
+
+> **Key takeaways — Chapter 5**
+> - EVM reuses Go's own `go/parser`, `go/types`, and `golang.org/x/tools/go/ssa` so type rules, generics, and method sets match Go without reimplementing a frontend.
+> - SSA values lower directly to register slots, then a single patching pass resolves overlapping call windows, parallel phi copies, and relative jump offsets.
+> - `evm.Link` resolves imports by exact nominal type and validates every register index, table index, and branch target once so the evaluator can skip those checks at run time.
+> - For multi-tenant hosts compiling many scripts against one API, `NewEnvironment` and `NewLinkEnvironment` freeze host declarations, shapes, and method tables once and share them across all compiled modules and linked programs.
+
+Now let's put this compiler under a microscope and walk through Go's features
+one construct at a time.
+
+## 6. Compiling Go, construct by construct
+
+Chapter 5 traced the compiler on a single two-byte addition. Real Go programs
+have a lot more going on—package globals, `init`, narrow integer wrapping,
+short-circuit branches, struct aliasing, slices, maps, closures, generics,
+interfaces, `defer`/`recover`, and Go 1.23 range functions.
+
+This chapter is a guided tour through all of them, starting from the simplest
+declarations and building up to the trickiest corners of Go. Notice how work
+naturally splits across three layers: some constructs (like type aliases and
+`iota` constants) disappear completely during type checking, others (like `&&`
+and `switch`) become control-flow edges in SSA, and the rest (like map lookups
+and type assertions) reach the interpreter as typed descriptors.
+
+#### Reading the disassembly listings
+
+Every listing below is produced directly by compiling the Go snippet above it
+with `Module.DisassembleFunction`. A quick legend makes them easy to scan:
+
+- **PCs and registers** are local to each function (`r` = word, `p` = pointer,
+  `v` = both halves at the same index; trailing unused zero fields are
+  omitted).
+- **Branch displacements** are signed word offsets relative to `PC + 1` (the
+  comment `; -> PC N` shows the target).
+- **Table operands** use a three-letter prefix plus an index into the module's
+  tables (for example, `call.func fun2` calls `fun2`):
 
 | Table | Prefix | Table | Prefix |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Functions | `fun` | External imports | `imp` |
 | Function references | `ref` | Call signatures | `sig` |
 | Word constants | `wrd` | String constants | `str` |
@@ -1020,15 +1725,16 @@ The book calls `Module.DisassembleFunction` for each listing. A comment gives th
 | Closures | `cls` | Interface methods | `mth` |
 | Deferred calls | `dfr` | | |
 
-The comment after an `ext` operand spells out its descriptor: the kind, the
-shape or field, and the input and output registers. A trailing `typ3` on
-MakeInterface is the dynamic type index.
+On `extended` instructions (`extN`), the trailing comment spells out the
+descriptor's kind, shape or field, and input/output registers (`typ3` on
+`MakeInterface` is the dynamic type index). Because register and pool numbers
+are local to one compilation, editing source can renumber them.
 
-The PC starts at zero in each function. Registers are local to one frame;
-`V3` means R3 and P3 together. Pool and function indices are local to one
-compilation. Recompiling after a source change can assign different register numbers.
+### 6.1 Package variables, constants, and init
 
-### 6.1 Local variables and addressable storage
+Start with what lives *outside* any single call: defined types, type aliases,
+`iota` constants, package globals, and `init()`. Watch which ones vanish at
+compile time and which ones turn into real instructions:
 
 <!-- listing: Visit | Visit()==7 && Visit()==9 -->
 ```go
@@ -1091,30 +1797,34 @@ fun3 init#1   R=2 P=1
 ```
 <!-- /bytecode -->
 
-The machine has an address for `balance` and no address for `Next`. At PC 0,
-`global` puts the address of this session's `balance` in P0. PC 1 loads its value. PC 2 adds the literal two encoded in the instruction. The load, add and store implement
-`+=`. The caller can observe the store: a fresh session initializes `balance`
-to one, calls the user's `init` to add four, then two calls to `Visit` return
-seven and nine. The compiler builds a package initializer in addition to the
-user's function; PCs 7–8 of `init` store the initial Points value and call `init#1`, the user's initializer.
+Notice what survived into bytecode and what vanished:
 
-That is the difference between a package variable, which lives across calls in
-one VM, and a constant declaration. Go typing resolves typed and untyped
-constants, including `iota`, before emission. The defined type
-`Points` keeps its identity for methods and type assertions; `Total` is another
-spelling for the same type. Neither declaration executes. A local `var` or
-`:=` does not push a slot just because it starts a scope. SSA can keep a local in
-a register, merge its values at a join, or put it in a cell if something needs
-its address. A zero value can be a word of zero bits, a cleared P slot, or
-zeroed cells. Assigning to `_` discards a result, not the side effects of
-evaluating it.
+- **`Next` disappeared completely.** Go's type checker folds `iota` constants
+  before emission, so `balance += Next` becomes `add.imm.i64 r2 r1 2`—the
+  literal `2` baked straight into the instruction.
+- **`balance` lives in per-session global storage.** `Visit` fetches its
+  address with `global p0 gbl0`, loads it, adds `2`, and stores it back. Every
+  `*evm.VM` gets its own `gbl0` cell, so two sessions never share package state.
+- **Synthetic package `init` guards one-time setup.** The compiler synthesizes
+  `fun2 init`, which checks a hidden boolean guard (`gbl1`), stores `balance = 1`
+  (PC 7), and calls the user's `init#1` (PC 8) to add `4`. A fresh session runs
+  `init` once before the first entry call, so two calls to `Visit()` return `7`
+  and `9`.
 
-A package clause, an import, its alias, a dot import and a qualified package
-selector settle names before emission. A blank import must still resolve. The
-compiler forbids global variables and `init` functions in virtual standard
-packages, so blank-importing one does not add work to session startup.
+Type definitions (`Points`) keep their nominal identity for methods and type
+assertions, while type aliases (`Total = Points`) vanish completely. Local
+variables (`var` or `:=`) do not automatically allocate heap cells either—SSA
+keeps them in registers unless something takes their address. Package clauses,
+import aliases, and dot imports all resolve before emission, and virtual
+standard packages are forbidden from declaring globals or `init` functions so
+blank-importing them never adds startup work.
 
-### 6.2 Operators: what a type makes the compiler emit
+### 6.2 Operators, narrowing, and conversions
+
+Because EVM registers hold untagged 64-bit words, the Go *type* of each
+operand decides everything: whether to narrow a result, whether a shift is
+arithmetic or logical, and whether a signed shift count needs a runtime check.
+This one-liner exercises all three at once:
 
 <!-- listing: Mask | Mask(255,1)==60 -->
 ```go
@@ -1140,12 +1850,11 @@ fun1 Mask   R=6 P=0
 ```
 <!-- /bytecode -->
 
-`0x87` and all ones come out of the pool. XOR produces the complement, AND
-clears those bits of x, and the first conversion narrows the result. Although
-the value being shifted is unsigned, the *count* has signed type `int`.
-Hence the check on R1 followed by an **unsigned** shift of R2. With x = 255
-and count = 1, the answer is 60. A negative count takes the script panic path.
-The emitter rewrites the right operand of AND-NOT before it selects the final AND. These lines account for the two different masks and the temporary at PC 2:
+Three details stand out in those nine instructions:
+
+1. **Bit-clear (`&^`) lowers to `xor` + `and` (PCs 2–3):** EVM has no dedicated
+   `andnot` opcode, so the emitter complements the right-hand mask with
+   `^uint64(0)` from the word pool before emitting `and`:
 
 ```go
 case token.AND_NOT:
@@ -1156,9 +1865,17 @@ case token.AND_NOT:
     op = evm.OpAnd
 ```
 
-Parentheses and unary plus need no
-instruction. A constant expression can fold, including string concatenation;
-a surviving number loads from the word pool, a string from the string pool.
+2. **Explicit narrowing (`convert`, PCs 4 and 7):** Because registers are 64 bits
+   wide, every `uint8` operation narrows its result back to 8 bits.
+3. **Shift-count check vs. shift signedness (PCs 5–6):** Even though the *value*
+   being shifted is unsigned (`uint8`), the shift *count* has signed type `int`.
+   Go requires panicking on a negative shift count, so PC 5 emits `check.shift
+   r1` before PC 6 runs an **unsigned** right shift (`shr.u64`). With `x = 255`
+   and `shift = 1`, the result is `60`; a negative count panics.
+
+Parentheses and unary `+` emit nothing, and constant expressions (including
+string concatenations) fold before codegen. Surviving literals load from `Words`
+or `Strings`.
 
 | Go expression | Lowering decision |
 |---|---|
@@ -1202,20 +1919,25 @@ fun1 Components   R=9 P=1
 ```
 <!-- /bytecode -->
 
-The first four instructions use `extended` with different descriptors. `complex(x,y)`
-packs two float32 bit patterns into R2. The conversion needs two float64 cells,
-so the next result lives in P0. Real and Imag read those cells into separate
-raw slots. The two MinMax descriptors select max and min (flags 1 and 0); only
-the final addition is a scalar arithmetic opcode.
+Notice the contrast in register banks: `complex64` packs two `float32` values
+into a single 64-bit word (`r2`), whereas `complex128` needs two 64-bit cells
+and therefore lives behind a pointer (`p0`). Every operation except the final
+`add.f64` goes through `extended`—keeping complex arithmetic and `min`/`max`
+out of the hot main switch.
 
-A spelling that looks like a numeric conversion can request a copy or a new
-encoding. `string(r)` treats r as a Unicode code point; `string([]byte)` and
-`[]rune(s)` create the target representation. The conversion descriptor carries
-the source and destination shapes. A change between named types of the same
-underlying representation, such as `Points(n)` for `n int`, can lower to a
-move. Converting a slice to an array also checks its length and copies the elements.
+Some Go "conversions" do much more than truncate or widen bits: `string(r)`
+encodes a Unicode code point, `string([]byte)` and `[]rune(s)` allocate new
+backing storage, and converting a slice to an array checks length and copies
+elements. All of those carry source and destination shapes in their descriptor,
+while converting between two types with the same representation (like
+`Points(n)`) simplifies to a plain register move.
 
-### 6.3 Statements become edges
+### 6.3 Control flow: branches, loops, and switches
+
+Every `if`, short-circuit `&&`/`||`, `for`, `switch`, `fallthrough`, and `goto`
+lowers to the same three primitives: comparisons, conditional branches
+(`jz`/`jnz`), and unconditional `jump`s. Start with short-circuit `&&`, where
+the second half must not run when `d == 0`:
 
 <!-- listing: Choose | Choose(0,9)==0 && Choose(2,9)==4 -->
 ```go
@@ -1251,15 +1973,10 @@ fun1 Choose   R=7 P=0
 ```
 <!-- /bytecode -->
 
-PC 2 tests `d == 0`, even though the source says `d != 0`. Only the branch
-reads that boolean. The compiler can keep the equality result and exchange
-the two successors. For a zero divisor, r2 is one. PC 3 falls through to
-the jump at 4 and the function returns zero at PCs 7–8. For a nonzero
-divisor, PC 3 jumps to 9 to evaluate the second half of `&&`. If that
-test succeeds, PC 12 sends execution to 5, which divides again for the
-return expression.
-
-The exchange happens before the emitter chooses the branch opcode:
+Look at PC 2: the source writes `d != 0`, yet the bytecode tests `d == 0`
+(`eq.r`). Why? Because EVM has no separate "not-equal" opcode—when a `!=`
+comparison only feeds a branch, the compiler keeps `eq.r` and simply swaps the
+`yes` and `no` edges:
 
 ```go
 yes, no := f.edge(b, b.Succs[0]), f.edge(b, b.Succs[1])
@@ -1268,15 +1985,16 @@ if neg, ok := i.Cond.(*ssa.BinOp); f.optimizing() && ok && branchUsesInequality(
 }
 ```
 
-When one successor follows in the instruction stream, control can fall
-through to it. Otherwise the emitter writes a conditional branch and a
-jump. It patches the displacements after laying out the blocks. At PC 11,
-`jz r5 -5` reaches PC 7 because the instruction fetch has already advanced
-the PC to 12. An `if` initializer, an `else if` and a nested `if` change
-the graph and the scope of names. The same branch instructions suffice.
+When `d == 0`, `r2` is `1`, so `jz r2` falls through to PC 4 and jumps straight
+to `return 0` (PCs 7–8)—the division at PC 9 never runs. When `d != 0`, `jz`
+jumps to PC 9 to evaluate `n/d > 1`; if that succeeds, PC 12 jumps to `return
+n / d` at PC 5. Notice also the PC-relative arithmetic at PC 11: `jz r5 -5`
+lands on PC 7 because fetch has already advanced PC to 12 (`12 - 5 = 7`).
 
-A loop adds a second incoming path to its header. In the next example,
-follow the old value of b as it changes roles on that path.
+Now add a back edge. A `for` loop introduces SSA **phi** values at its header
+(merging initial values from entry with updated values from the previous
+iteration). In `Fib`, watch how `n`, `a`, and `b` update on the back edge
+(PCs 6–10) without clobbering each other:
 
 <!-- listing: Fib | Fib(6)==8 -->
 ```go
@@ -1316,20 +2034,18 @@ fun1 Fib   R=9 P=0
 ```
 <!-- /bytecode -->
 
-The loop header needs n, a and b from either the entry or the previous
-iteration. SSA represents each choice with a phi. On entry, PCs 2–4 put n
-in r3, zero in r4 and one in r6. In the loop, PC 6 computes a+b in r1
-while both old values are live. PC 7 decrements n in r3 itself. The
-compiler can reuse that loop slot because the old n has had its last read.
-PCs 8–9 install the next a and b in order: first `r4 ← r6`, then
-`r6 ← r1`. PC 10 transfers control to the header test.
+Notice how cleanly the loop body runs:
 
-The lowerer emits phi assignments on each incoming edge. A block with a
-single successor can make the assignments before its jump. A conditional
-edge that needs its own copies gets a separate block. The same move
-scheduler handles return values. Its decision to save a source depends on
-whether a preceding destination in the planned order would overwrite the
-bank that source uses:
+- **Entry (PCs 2–5):** Loads `n`, `a=0`, `b=1` into `r3`, `r4`, `r6` and jumps
+  to the header test at PC 13.
+- **Body (PCs 6–10):** Computes `a+b` into `r1` while both old values are still
+  live, decrements `n` *in place* (`r3`, reusing the loop slot once the old `n`
+  has had its last read), and installs the next `a, b` in safe order:
+  `r4 ← r6`, then `r6 ← r1`.
+
+Because SSA phi assignments happen conceptually in parallel, the move scheduler
+checks whether writing an earlier destination would clobber a later source's
+register bank, and saves that source to a temporary only if needed:
 
 ```go
 banks := src.typ.Repr()
@@ -1342,11 +2058,15 @@ dst := to[i]
 written[dst.slot] |= dst.typ.Repr()
 ```
 
-Those saves run before the destination writes. Fib can move the old b
-straight into a. A swap would need to save the value that the first move
-would destroy. Ordinary assignments, increments, decrements and compound
-assignments likewise become reads, writes or new SSA values. Go evaluates
-the operands of a multiple assignment before carrying out its writes.
+Here `r4 ← r6` writes `r4` after `r4` is no longer needed, so no temporary is
+required; a true swap (`a, b = b, a`) would allocate one.
+
+Switches, `fallthrough`, labeled `break`/`continue`, and `goto` all lower to
+the exact same comparison-and-jump pattern—no switch-table opcode needed.
+**What to look for** in `Route` below: trace `case 1` at PC 9 → PC 7 (`v++`)
+→ PC 8, which jumps straight into `case 2`'s body at PC 12, bypassing `case 2`'s
+equality test at PC 15 (`fallthrough`), and then jumps to `return v` at PC 19
+(`goto done`).
 
 <!-- listing: Route | Route(1)==3 && Route(9)==0 -->
 ```go
@@ -1410,15 +2130,18 @@ fun1 Route   R=11 P=0
 ```
 <!-- /bytecode -->
 
-For `n == 1`, PC 9 recognizes case 1. PC 7 sets v to one. The jump at 8 enters the body of case 2 at 12, skipping its comparison at 15. PC 12 adds two. PCs 13–14 send the result to the common return at 19. That path implements `fallthrough` followed by `goto done`. The default case sets n to zero at 17 and jumps to the first test for `continue outer`.
+Expression switches, expressionless switches, multi-value `case` lists,
+`fallthrough`, labeled `break`/`continue`, and `goto` all collapse into the
+same graph of comparisons and jumps—each case expression evaluates only if
+control reaches its test. (Type switches build on type assertions instead; see
+§6.7.)
 
-Expression switches, expressionless switches, case lists and default all
-use tests and edges. A case expression runs only when execution reaches
-its test. Labels identify destinations for `goto`, `break` and
-`continue`. An unconditional `for {}` has a back edge and still spends
-dispatch fuel. A type switch builds its tests from assertions (§6.7).
+### 6.4 Structs, pointers, and field addresses
 
-### 6.4 Taking the address of a field
+Structs bring addressable memory into play. Whenever a script allocates a
+struct, writes through a field pointer, or copies one struct into another, the
+compiler pairs `alloc`, `load`, and `store` with `FieldAddr` extended
+descriptors:
 
 <!-- listing: Edit | Edit()==12 -->
 ```go
@@ -1461,14 +2184,18 @@ fun1 Edit   R=6 P=6
 ```
 <!-- /bytecode -->
 
-P0 is the address returned by `new(Pair)`. The keyed literal gets a zeroed
-Pair of its own at PC 3. PCs 4–5 set its field B to three, and PCs 6–7 copy
-the whole struct into `*p`. PC 8 selects field B again, this time through p,
-and puts **its address** in P4. Thus the two fours at PC 11 mean different
-things: P4 is the address and R4 is the multiplier loaded at PC 1. The
-store's C field selects the `int` shape.
+Here is the pattern you will see throughout struct code:
 
-These lines of the executor resolve the selector:
+- **Allocating and copying (`PCs 2–7`):** `new(Pair)` allocates a zeroed struct
+  in `p0`; the keyed literal `Pair{B: 3}` allocates a second zeroed struct in
+  `p1`, writes field `B` via `FieldAddr` + `store`, and then `load`/`store` with
+  `shp0` copies the whole struct into `*p`.
+- **Field pointers (`PCs 8–11`):** `q := &p.B` calls `FieldAddr` to compute the
+  cell address of `p.B` into `p4`. Then `*q *= 4` loads from `p4`, multiplies by
+  `r4`, and stores back through `p4` using the `int` shape (`shp1`).
+
+Under the hood, `FieldAddr` checks for `nil` and offsets into the struct's VM
+cells (or native Go byte offset for a native struct pointer):
 
 ```go
 index := op.Index &^ VMFieldBase
@@ -1477,19 +2204,18 @@ field := s.Fields[index]
 p := values.CellAt(x.P, field.Offset)
 ```
 
-For FieldAddr the executor checks x.P for nil and returns p. A nested field's
-offset counts VM cells, not native Go bytes. A `Field` read
-from a struct *value* instead snapshots the field when it is itself an
-aggregate. Chained selectors and promoted fields use the selection path that
-Go typing resolved. Dereferencing a nil pointer fails at the operation that
-needs its pointee.
+Now look at how Go's **shallow struct copy** semantics fall out naturally from
+snapshots. This listing is longer because it constructs a slice literal inside a
+struct, so skip the setup boilerplate:
 
-`&T{...}`, keyed and positional literals, omitted fields, address-of on a
-local and explicit dereference all use this vocabulary: `alloc`, stores to
-components, and `load`. SSA can remove an allocation when the value stays in
-registers. Manual host declarations use these same shape-based operations.
-
-A selector on a copied struct can lead back to the original data. In the next example watch PCs 21–23 for the copy, then PCs 25 and 28 for the two writes.
+> **What to look for in `Copies`:**
+> - **PCs 6–20:** Builds `a := Bag{N: 1, Items: []int{2}}` (setup).
+> - **PCs 21–23:** `b := a` allocates a new `Bag` (`p8`) and copies `a`'s cells
+>   into it—including the *header* of `Items`, which still points to `a`'s
+>   backing array.
+> - **PCs 25 vs. 28:** `b.N = 9` writes into `b`'s own cell (`p10`), leaving
+>   `a.N == 1`, while `b.Items[0] = 7` writes through the shared slice header
+>   (`v12`), mutating `a.Items[0]` to `7`. Result: `10*1 + 7 = 17`.
 
 <!-- listing: Copies | Copies()==17 -->
 ```go
@@ -1558,13 +2284,16 @@ fun1 Copies   R=22 P=19
 ```
 <!-- /bytecode -->
 
-PCs 21–23 allocate the second Bag, snapshot the first Bag's cells, and
-store them into the second. PC 25 writes nine to the integer field in the
-second Bag. PC 28 reaches through its copied slice header to the backing
-cell shared with the first Bag. The result is 17 because a.N still holds
-one and a.Items[0] now holds seven.
+Because `load` with a struct shape (`shp0`) snapshots the struct's cells—not
+whatever pointers or slices inside it point to—`b := a` copies the integer `N`
+by value while sharing the slice's backing array. That is exact Go semantics
+without any special-case logic.
 
-The box and its first field share an address because the field has offset zero. The following loads read that cell through two different shapes.
+One subtle consequence of cell layouts: a struct and its first field share the
+exact same address (offset 0), so the **shape** on `load` is what decides
+whether you snapshot the struct or read the pointer inside it. In `Detach`,
+compare PC 2 (`load p2 p0 shp0`, snapshot the `Box`) with PC 5 (`load p4 p3
+shp2`, read the `*Customer` pointer stored at that same address):
 
 <!-- listing: Detach | Detach(&Box{Customer: new(Customer)}) -->
 ```go
@@ -1605,11 +2334,27 @@ fun1 Detach   R=1 P=9
 ```
 <!-- /bytecode -->
 
-At PC 2, P0 points at the box. Shape 0 tells `load` to snapshot its cell. At PC 5, P3 holds the same address, but shape 2 tells `load` to read the customer pointer stored there. PC 7 clears the field in the original box. At PC 10 the pointer in the saved box still compares equal to the original non-nil customer pointer.
+After PC 7 sets `p.Customer = nil`, `saved` (snapshotted at PC 2) still holds
+the original `*Customer` pointer, so PC 10 returns `true`.
 
-### 6.5 Arrays, slices, strings and maps
+### 6.5 Arrays, slices, strings, and maps
 
-Watch the third slice bound. It forces append to allocate a new backing buffer. The later copy shows which array changed.
+Go's composite collections—arrays, slices, strings, and maps—are where
+`extended` descriptors shine. Rather than bloating the main dispatch switch,
+operations like slicing, appending, copying, and map lookup each carry a typed
+descriptor in `Module.Extended`.
+
+Start with full three-index slicing and `append`. Most of `Tail` is array-literal
+setup, so focus on the three lines that do the interesting work:
+
+> **What to look for in `Tail`:**
+> - **PC 16:** `Slice [3]int [p0,r2,r3,r3]` forms `a[1:2:2]`—both length and
+>   capacity are `1` (`flags=0`, meaning no bounds were omitted).
+> - **PC 24:** `Append []int` sees that capacity is full and allocates a brand-new
+>   backing array in `v10`, leaving `a` untouched.
+> - **PCs 27–31:** `s[:1]` and `a[:1]` pass `flags=2` (omitted third bound), and
+>   `Copy` writes into `s`'s new backing array—so `a[1]` stays `2` and `s[1]` is
+>   `9`, returning `29`.
 
 <!-- listing: Tail | Tail()==29 -->
 ```go
@@ -1680,16 +2425,10 @@ fun1 Tail   R=25 P=15
 ```
 <!-- /bytecode -->
 
-PC 16 forms the slice with bounds from r2, r3 and r3 again: 1, 2, 2.
-Its length and capacity are both one. The compiler constructs a one-element
-slice containing nine in v9. Appending it at PC 24 requires a new backing
-array. At PC 31 the Copy descriptor takes v11 (`s[:1]`) as its destination
-and v12 (`a[:1]`) as its source. The copy changes the new array. The
-original still holds two at a[1], so the return value is 2 × 10 + 9 = 29.
-
-The two omission flags matter. For `s[:]`, the compiler supplies zero
-registers for the missing bounds but sets flags to distinguish an absent high
-or max from an *explicit* zero. The core of the executor is:
+Notice the `flags` field on `Slice` (`flags=3` at PC 23 for `[:]`, `flags=2` at
+PCs 27 and 30 for `[:1]`): because omitted bounds still pass a zero register,
+the flags tell the evaluator whether `hi` (`bit 0`) or `max` (`bit 1`) was
+omitted rather than explicitly `0`:
 
 ```go
 if op.Flags&1 != 0 {
@@ -1703,17 +2442,29 @@ if lo > hi || hi > capBound || capBound > capacity {
 }
 ```
 
-After those checks, a nonempty tail advances the data pointer by `lo` elements using the backing buffer’s stride. A mutable slice packs length and capacity into R. A substring uses byte offsets and returns an immutable string view. Slice length and capacity
-are limited to 32 bits. Builtin `copy` handles overlap; a string source for
-copy or append to a byte slice sets a separate flag.
+After those bounds checks, a non-empty slice advances its data pointer by `lo`
+elements using the backing buffer's stride and packs `len` and `cap` (each up
+to 32 bits) into `R`. Substrings reuse the same `Slice` descriptor over byte
+offsets and return an immutable string pair.
 
-| Source | Result |
-|---|---|
-| `var s []T` / `make([]T,n,k)` | A nil pair / a MakeSlice descriptor with length, capacity and element shape. |
-| `s[i] = x` / `x = s[i]` | A checked indexed word can read or write an element directly. A separately used address goes through IndexAddr and a typed load or store. |
-| `a := [...]T{...}` / `[]T{...}` | Fixed-size array and element stores; the slice case also forms a header over its backing array. Omitted entries stay zero. |
-| `len`, `cap`, `clear(s)` | Constant lengths and capacities can fold. A string’s length lives in R. A slice’s length occupies the low 32 bits of R. A descriptor reads its capacity or a map’s length. Clear zeros the current length. |
-| `text[i]` / `for i,r := range text` | Index returns a byte; the iterator returns a byte offset and a decoded rune. |
+| Source | Lowering |
+| --- | --- |
+| `var s []T` / `make([]T, n, k)` | Nil pair / `MakeSlice` descriptor with length, capacity, and element shape. |
+| `s[i] = x` / `x = s[i]` | Direct checked indexed load/store (`load.index.r`, `store.index.r`); taking `&s[i]` uses `IndexAddr`. |
+| `a := [...]T{...}` / `[]T{...}` | Array `alloc` + element stores; slice literal wraps it with `Slice`. |
+| `len`, `cap`, `clear(s)` | Constants fold; string length is `R`, slice length is low 32 bits of `R`; `cap`/`len(map)`/`clear` use `extended`. |
+| `text[i]` / `for i, r := range text` | Byte index vs. UTF-8 rune iterator (`Range`/`Next`). |
+
+Now look at UTF-8 string iteration and maps together in `Counts`.
+
+> **What to look for in `Counts`:**
+> - **PCs 3–5:** `Range string` allocates a UTF-8 iterator (`p2`), and `Next`
+>   returns `(ok, byteIndex, rune)` into `r1, r2, r3`—advancing by UTF-8 byte
+>   width (`0`, then `2` for `"éé"`).
+> - **PCs 6–8:** `m[r]++` lowers to `Lookup` (1 output—zero if absent),
+>   `add.imm.i64`, and `MapUpdate`.
+> - **PC 10:** `n, ok := m['é']` uses the exact same `Lookup` kind, just with
+>   **two** outputs (`[r6, r7]`) so `jz r7` at PC 13 tests presence directly.
 
 <!-- listing: Counts | Counts("éé")==2 -->
 ```go
@@ -1767,15 +2518,8 @@ fun1 Counts   R=10 P=3
 ```
 <!-- /bytecode -->
 
-At PC 6 the first Lookup writes the old count to r4, yielding zero for an
-absent key. The second Lookup at 10 implements `n, ok := m['é']` and
-writes both the count (r6) and presence (r7). The branch at 13 reads r7
-directly. PC 8 implements the map assignment with one instruction.
-`ext4` supplies the map p1, the key r3 and the new count r5.
-
-The string iterator has a different result layout. At PC 4 r1, r2 and r3
-hold success, byte index and rune. For `"éé"` the successful indices are 0 and 2. The execution
-loop in `ExtendedNext` advances by bytes consumed, not by one:
+Inside `ExtendedNext`, the string iterator decodes one rune at a time and
+advances by the UTF-8 byte length rather than by `1`:
 
 ```go
 r, n := utf8.DecodeRuneInString(it.text[it.index:])
@@ -1785,7 +2529,22 @@ put(2, values.Int(int64(r)))
 it.index += n
 ```
 
-Three loops, one aliased slice, and one copied array: follow the array conversion before tracing the repeated index and branch instructions.
+Unlike string and map ranges (which need an iterator object), ranging over an
+integer (`for i := range 2`), a slice, or an array lowers to plain counter
+loops. `RangeKinds` packs all three—plus Go's slice-to-array value vs. pointer
+conversions—into one function:
+
+> **What to look for in `RangeKinds`:**
+> - **PCs 3–7 (value vs. pointer conversion):** Both `[2]int(s)` and
+>   `(*[2]int)(s)` run the same bounds-checked `SliceToArray`, but `[2]int(s)`
+>   immediately snapshots the array into a fresh allocation (`PCs 5–6`), whereas
+>   `p` aliases `s`'s backing storage directly. That is why `p[0]++` changes `s`
+>   and `p` to `[3, 3]` while `a` stays `[2, 3]` (`5 + 6 + 6 = 17`).
+> - **PCs 13–22 (`range 2`), PCs 23–32 (`range s`), PCs 33–42 (`range p`):**
+>   All three are ordinary integer counter loops—notice PC 23 extracts `len(s)`
+>   with a `u64 -> u32` conversion (`convert r13 r0 cnv0`), and PC 29 reads `s`
+>   with a direct `load.index.r`. (PCs 45–54 at the bottom are out-of-line edge
+>   copy blocks for phi updates.)
 
 <!-- listing: RangeKinds | RangeKinds([]int{2,3})==17 -->
 ```go
@@ -1885,14 +2644,12 @@ fun1 RangeKinds   R=27 P=10
 ```
 <!-- /bytecode -->
 
-Both conversions first perform the *same* bounds-checked slice-to-array-pointer
-operation. The difference is PCs 5–6: `a` receives a snapshot; `p` keeps
-the backing pointer. Incrementing through p leaves a at [2,3] and changes the
-others to [3,3], giving 5 + 6 + 6. The three forms of range here are counter
-loops: over an integer bound, over a slice length, and over a fixed array
-length. Each element address advances by its shape's cell count. The Go
-frontend gives iteration variables declared by the loop their Go 1.23
-per-iteration lifetimes, including when a closure retains one.
+Go 1.23 per-iteration loop variable lifetimes work automatically because
+`go/ssa` already allocates separate cells whenever a closure captures a loop
+variable.
+
+Map iteration, by contrast, cannot use an integer index—especially when the
+loop body deletes keys mid-iteration:
 
 <!-- listing: MapRange | MapRange()==5 -->
 ```go
@@ -1937,17 +2694,17 @@ fun1 MapRange   R=11 P=2
 ```
 <!-- /bytecode -->
 
-A map literal creates a map and inserts entries. Assignment copies the map
-reference. Reading a nil map works; updating one raises a script panic. Map
-range cannot compute the next key from an integer index and a stride. It saves
-the entries slice on entry. Next walks that initial range, skipping entries
-marked dead; Delete can therefore remove the current entry during traversal.
-The result here is five regardless of visit order. A script must not depend on
-the order of this implementation.
+Because `Range` snapshots the map's entry slice on loop entry and `Next` skips
+entries marked dead, `delete(m, k)` during traversal is completely safe (and
+reading a `nil` map returns zero while writing one panics, just like Go).
 
-### 6.6 Calls, closures and methods
+### 6.6 Functions, closures, methods, and generics
 
-This listing uses the unoptimized compiler to show the two frames. In default mode the addition executes in the caller.
+Calls in EVM use the overlapping register window from Chapter 4: the caller
+drops arguments just past its own register count, and the callee sees those
+exact same slots starting at `r0`/`p0`. To keep `sum` as a real frame rather
+than letting the optimizer inline it, `SumThenDouble` below is compiled with
+`NoOptimization: true`:
 
 <!-- listing: SumThenDouble | raw | SumThenDouble(2,5)==14 -->
 ```go
@@ -1982,25 +2739,16 @@ fun2 sum   R=3 P=0
 ```
 <!-- /bytecode -->
 
-SumThenDouble owns r0 through r4. PCs 1–2 write the arguments to r5
-and r6. The callee sees those same slots as r0 and r1. PC 3 needs only
-the function index for `sum`. When `sum` returns, PC 4 reads its result
-from r5. Here is the argument loop inside `emitCall`, as it runs for this
-unoptimized listing:
+`SumThenDouble` owns `r0–r4` (`R=5`), so its outgoing window starts at `r5`.
+PCs 1–2 copy `x` and `y` into `r5` and `r6`; `sum` reads them as `r0` and `r1`,
+writes its result back into `r0`, and `SumThenDouble` picks it up at `r5`
+(PC 4). Recursive calls work the exact same way—each invocation pushes a new
+frame subject to the VM's call-depth limit, with no Go-level recursion.
 
-```go
-for j, arg := range common.Args {
-    f.outMove(params.Slots[j], f.regs[arg][0], false)
-}
-```
-
-The call executes even if the script ignores its results. For a tuple
-result whose uses are all extractions, the compiler can restrict the
-copies out of the return window to the components the caller reads.
-
-For a recursive direct call, the index can refer to the current function. Each
-invocation still gets new local windows and a VM frame. The interpreter drives
-the stack in a loop subject to its call-depth limit.
+Closures add one twist: captured variables that may mutate must live in a heap
+cell so repeated calls share state. In `Counter`, watch PCs 0–2 allocate a cell
+for `start` (`p1`) and bundle it into a closure pair (`v2 = (funcRef, envPtr)`),
+and watch `BookCheck` PC 6 invoke that pair with `call.indirect`:
 
 <!-- listing: Counter | Counter(4)()==5 -->
 ```go
@@ -2049,15 +2797,22 @@ fun2 plugin.Counter$1$2   R=4 P=1
 ```
 <!-- /bytecode -->
 
-The argument starts in R0. The compiler puts it in a cell and captures P1, the
-cell's address. A capture of the *initial integer* would be wrong: two calls
-on the same closure must see successive values. The function result is a pair:
-a reference number and a pointer to the capture environment. Assigning that
-pair to another variable preserves the shared cell. A function declaration
-used as a value, without captures, needs only `function` to build a callable
-pair. The check for this example calls `Counter(4)()`. Its first call names Counter; the second emits `call.indirect` on the returned pair. The instruction names that register and a signature. The runtime checks for nil and resolves the target before entry.
+Capturing the cell pointer `p1` (rather than the initial integer) is what lets
+successive calls to the returned closure increment the same counter. A
+top-level function used as a value needs no environment, so it uses the simpler
+`function` opcode instead of `closure`.
 
-Find both calls to Plus: one calls through a bound function value, and the other has an explicit receiver. The helper bodies below the entry reveal the difference.
+Now combine three Go features at once—a generic function (`first[T]`), a bound
+method value (`s.Plus`), and a method expression (`Score.Plus(s, 0)`):
+
+> **What to look for in `Methods`:**
+> - **PC 14 (`call.func fun3`):** Calls the monomorphized instantiation
+>   `first[Score]`. Open generic templates are never emitted into bytecode.
+> - **PCs 16 & 18 (`s.Plus`):** Captures `s`'s current value (`r4`) into a
+>   closure around the generated wrapper `Plus$bound$4`, then invokes it via
+>   `call.indirect`. Mutating `s` later would not affect `bound`.
+> - **PC 22 (`Score.Plus(s, 0)`):** Passes `s` explicitly as argument 0 to the
+>   direct thunk `Plus$thunk$5`—no closure allocation.
 
 <!-- listing: Methods | Methods()==11 -->
 ```go
@@ -2146,18 +2901,9 @@ fun5 (plugin.Score).Plus$thunk$5   R=3 P=0
 ```
 <!-- /bytecode -->
 
-PCs 14, 16, 18 and 22 show how the compiler chooses callees. The type checker
-inferred `Score`, so SSA instantiated `first[Score]` and PC 14 calls its
-concrete body; the open template is never an executable target. At 16,
-`s.Plus` saves the receiver's current value in a closure. Even if s later
-changes, the indirect call at 18 still sees the captured Score. At 22, the method
-expression `Score.Plus(s,0)` passes the receiver explicitly to a generated
-thunk. A direct concrete method similarly passes its receiver as an argument.
-A pointer receiver preserves mutations of its pointee; a nil dereference
-required by an adapting method wrapper emits `check.nil`.
-
-The discovery filter in the compiler distinguishes an open generic definition
-from code that has type arguments:
+Notice how cleanly generics fit: `go/ssa` monomorphizes every reachable
+instantiation (`first[Score]`, `Duo[int].Both`), and the compiler simply skips
+open templates that have type parameters without type arguments:
 
 ```go
 func genericTemplate(f *ssa.Function) bool {
@@ -2165,9 +2911,15 @@ func genericTemplate(f *ssa.Function) bool {
 }
 ```
 
-Constraints, including type sets, determine which type arguments are legal.
-Methods of instantiated generic types get concrete bodies too. The next
-method returns two integers to a caller that passes them on in a slice.
+Next, see how multi-value returns and variadic `s...` forwarding work on a
+generic struct method:
+
+> **What to look for in `Spread`:**
+> - **PCs 10–13:** Passes the `Duo[int]` snapshot in `p8` to `Both`, then reads
+>   its two return values directly from `r12` and `r13` into `r3` and `r4`.
+> - **PCs 23–25:** Because `add([]int{a, b}...)` uses `...`, the caller passes
+>   the slice header `v7` directly into the outgoing window (`r12`/`p8`) without
+>   wrapping it in another slice.
 
 <!-- listing: Spread | Spread()==11 -->
 ```go
@@ -2267,10 +3019,9 @@ fun3 (plugin.Duo[int]).Both$3   R=4 P=4
 ```
 <!-- /bytecode -->
 
-The receiver of Both is a struct value. PC 10 passes its snapshot in p8.
-The results come back in r12 and r13. PCs 12–13 move them to the caller's
-r3 and r4. Those slots are also the values of a and b. The lowerer registers
-each SSA Extract as a one-element view into the tuple's register list:
+Extracting tuple results (`a, b := ...`) emits zero extra moves because the
+lowerer maps each SSA `Extract` directly to a one-element view of the call's
+result register list:
 
 ```go
 if extract, ok := v.(*ssa.Extract); ok {
@@ -2282,15 +3033,25 @@ if extract, ok := v.(*ssa.Extract); ok {
 }
 ```
 
-There is no separate move for either extraction. The stores at 16 and 18
-read r3 and r4 directly. A variadic function takes a slice. For ordinary
-arguments, as in the call to `first`, the caller constructs that slice.
-With `s...` it passes the existing header. PCs 23–24 transfer the two
-halves of v7 into the outgoing r12 and p8. A bare return uses the usual
-result slots too. A named result whose address escapes needs a cell so a
-deferred closure can change its value before the function returns.
+So `r3` and `r4` *are* `a` and `b` right away. (A named result whose address
+escapes—for example, into a `defer`—gets a heap cell instead, as you will see
+in §6.8.)
 
-### 6.7 Interfaces: decide which method at run time
+### 6.7 Interfaces, type switches, and virtual dispatch
+
+Up to now, every call target and every field offset has been known at compile
+time. Interfaces defer both to run time—carrying a dynamic type alongside the
+payload so type assertions, type switches, and method dispatch can inspect it.
+
+> **What to look for in `Read`:**
+> - **PCs 2–3 and 12–13:** A type switch lowers to a chain of comma-ok
+>   `TypeAssert` descriptors (`[v0] -> [val, ok]`) followed by `jz`.
+> - **PC 5:** `MakeInterface plugin.Weight [r3] -> [v4] typ3` packs the scalar
+>   `Weight` into `r4` and places the program's type-3 marker pointer into
+>   `p4`—no heap allocation (§2.5).
+> - **PCs 6–8:** Moves `v4` into the outgoing `V0` (`r10`/`p5`) and executes
+>   `call.virt mth0` (`Measure.Size`). The receiver's slot is always `V0`, so
+>   the instruction only needs to name the method.
 
 <!-- listing: Read | Read(7)==7 && Read("x")==0 -->
 ```go
@@ -2356,28 +3117,15 @@ fun0 (plugin.Weight).Size$0   R=2 P=1
 ```
 <!-- /bytecode -->
 
-A type switch looks like a series of assertions and branches. The first
-TypeAssert checks for the exact `int` type and writes (value, ok). If ok is
-true, the source converts the value to `Weight` and assigns it to `Measure`.
-The `MakeInterface` descriptor knows that `Weight` is concrete type 3 in this
-module. A Weight is a scalar, so its bits stay in r4 and p4 receives the
-marker pointer that the program keeps for type 3 (§2.5). No cell is
-allocated. If the concrete payload had pointer representation, p4 would carry
-that pointer and r4 the type ID. This is why a typed nil pointer has nonzero
-R and nil P.
+Why does `call.virt` reserve the full pair `V0` for the receiver even when the
+concrete method takes only `R0` (a scalar receiver like `Weight`) or only `P0`
+(a pointer receiver)? Because the caller does not know which concrete type will
+run when it stages explicit arguments like `Add(delta int)`. Reserving `V0`
+pins `delta` to `R1` for *every* implementation, so virtual dispatch can unpack
+the receiver in place—marker in `P0` + scalar in `R0`, or type ID in `R0` +
+pointer in `P0`—without shifting a single argument.
 
-At PCs 6–7 the compiler copies v4 into the outgoing r10 and p5. From the callee’s point of view that pair is V0. The receiver is argument zero, so its location is implicit in `call.virt mth0`. The instruction only needs to name the method.
-
-Dispatch needs both halves of the interface. For this scalar, the marker in P0 identifies the concrete type whose method to call, and R0 already holds the raw weight that `Weight.Size` expects. For a pointer receiver, R0 holds the type ID and P0 the pointer the method expects.
-
-Reserving V0 fixes the position of every explicit parameter. Take `Add(delta int)`. The caller can put `delta` in incoming R1 before it knows which implementation will run. A raw receiver takes R0 and a pointer receiver takes P0. Either implementation finds `delta` in R1. The price is one unused half-slot for a single-bank receiver. In return, dispatch can unpack the receiver in place without moving any explicit argument.
-
-Changing between statically compatible interface types preserves the
-concrete type and payload. A pair move carries both.
-
-A failed single-result assertion raises a script panic. In comma-ok form the
-returned boolean carries failure and the value is zero. This is how the
-executor distinguishes the two after it has tried the assertion:
+Single-result vs. comma-ok type assertions differ only in `len(op.Out)`:
 
 ```go
 if len(op.Out) == 1 && !ok {
@@ -2389,14 +3137,25 @@ if len(op.Out) == 2 {
 }
 ```
 
-Interface equality first checks dynamic types. If they agree, the shape
-determines whether and how the payloads can be compared. Comparing two
-interfaces containing slices can panic despite both operands having a
-comparable *static* interface type.
+Interface-to-interface conversions between statically compatible types are just
+a pair move (`move.v`). Interface equality compares dynamic types first and
+then delegates to the concrete type's shape—so comparing two `any` values
+holding slices panics at run time, just like standard Go.
 
-### 6.8 Which frame owns a defer?
+### 6.8 Defers, panic/recover, and range-over-func
 
-The return value changes *after* panic. Track the cell for the named result from its allocation to its final load.
+`defer` and `recover` are the trickiest part of Go's control flow because a
+deferred closure can mutate a named return value *after* a `panic` has already
+begun.
+
+> **What to look for in `Saved`:**
+> - **PCs 3–4:** Named return `n` lives in a heap cell (`p0`) so the deferred
+>   closure can modify it.
+> - **PCs 5–6:** `closure` captures `p0`; `defer` separately snapshots the
+>   already-evaluated argument `7` (`r3`).
+> - **PCs 8–11:** `panic v4` unwinds into `Saved$1$2`, where `recover v1`
+>   catches the panic and adds `7` into `p0`. Recovery then resumes `Saved` at
+>   PC 9, which reloads `p0` (`8`) and returns it.
 
 <!-- listing: Saved | Saved()==8 -->
 ```go
@@ -2451,20 +3210,27 @@ fun2 plugin.Saved$1$2   R=6 P=4
 ```
 <!-- /bytecode -->
 
-The named result n lives in the cell at P0. The closure at 5 captures that
-cell; the defer at 6 separately saves the already evaluated argument 7.
-Ordinary exit runs saved calls in reverse order. Here a panic starts the
-drain carrying the interface value from V4. In the deferred closure, PC 2 executes `recover`; PCs 5–7 update the captured cell.
+Just as in Go, `recover()` returns the panic value only when called directly
+from a deferred function (not from a helper it calls), and fatal traps like
+budget exhaustion skip script defers altogether (Chapter 8).
 
-`recover` returns the panic value only in the directly deferred invocation
-(with special handling for transparent compiler-generated wrappers). An
-ordinary helper called from it has no matching recover token. On success the
-parent resumes at the recovery continuation: PC 9 in Saved reloads P0 and
-therefore sees the eight that its defer stored. An allocation-budget abort
-is a different exit; it cannot be turned into an ordinary return by the
-script.
+Go 1.23 **range-over-func** (`for i := range seq`) pushes `defer` one step
+further: `go/ssa` turns the loop body into a synthesized `yield` callback, yet
+a `defer` written inside that loop still belongs to the *enclosing function*
+(`Yield`), not to the callback! Because this listing spans four functions, use
+this map to read just the four lines that make it work:
 
-The key instruction is in the synthesized callback: who owns the defer when that callback tells the iterator to stop?
+> **What to look for in `Yield`:**
+> - **`Yield` PC 6 (`defer.stack r1`):** Grabs a handle to `Yield`'s own defer
+>   stack and captures it into the synthesized callback `Yield$1$3` (PC 9).
+> - **`Yield$1$3` PC 12 (`defer r6 dfr0 ; owner r6`):** Pushes the deferred
+>   closure onto **`Yield`'s** defer stack (`r6`), not `Yield$1$3`'s. So when
+>   `break` returns `false` at PC 23, the defer does *not* run yet.
+> - **`Yield` PCs 17–25:** Computes `n + 11` (`12`), stores it to `p0`, drains
+>   `Yield`'s defer stack via `run.defers` (PC 21, running `Yield$1$1$4` which
+>   bumps `p0` to `13`), and then reloads `p0` at PC 23 before returning `13`.
+> - **`seq` PC 12 (`loop.le.i64`):** Bonus sight of a fused counted-loop
+>   instruction (Chapter 10).
 
 <!-- listing: Yield | Yield()==13 -->
 ```go
@@ -2605,19 +3371,17 @@ fun4 plugin.Yield$1$1$4   R=2 P=1
 ```
 <!-- /bytecode -->
 
-Range over a function compiles the loop body as a callback that returns a
-boolean. `break` returns false; `seq` must stop calling the callback. The
-defer in that body still belongs to **Yield**. The callback captures
-the parent's `defer.stack` handle along with its result cell and loop state. In the
-synthesized callback, PC 12 executes `defer` with A=6: R6 names the parent's stack. Returning false does not run the defer. The
-body adds one to n; Yield's return expression stores twelve. PC 21 drains
-the parent's stack, then PC 23 reloads n and returns thirteen. A normal SSA
-return can omit the drain for a defer hidden in a synthesized range body.
-The EVM lowerer recognizes the owner, emits `run.defers`, then jumps to its
-existing result-reload block. Draining at callback return or using the value
-already loaded at PC 20 would get this example wrong.
+That `defer.stack` + `owner r6` mechanism is why range-over-func behaves
+identically to standard Go even when `break`, `return`, `defer`, and named
+return values all collide—and why `Yield` must drain defers *after* storing
+`n + 11` and reload `p0` afterward rather than returning the pre-drain value.
 
-### 6.9 Builtins and the edge of the language
+### 6.9 Built-in functions and unsupported constructs
+
+Most Go builtins (`new`, `make`, `len`, `cap`, `append`, `copy`, `clear`,
+`delete`, `min`, `max`, `complex`, `panic`, `recover`) have already appeared
+above. The odd ones out are `print` and `println`, which have no fixed
+signature—so the compiler synthesizes a typed `evm/debug` import per call site:
 
 <!-- listing: Trace | Trace(7)==7 -->
 ```go
@@ -2642,16 +3406,10 @@ fun1 Trace   R=2 P=2
 ```
 <!-- /bytecode -->
 
-The output statement has no result. Its arguments move into the outgoing window; the host supplies the debug sink and the script can still return its own n. The compiler's debug binding needs the argument types at this site to render both the string and the integer.
-
-Most builtins have appeared above. `new` produces an SSA allocation; `make`
-produces a typed slice or map constructor. `len`, `cap`, `append`, `copy`,
-`clear`, `delete`, `min`, `max`, `complex`, `real` and `imag` use typed
-descriptors when they survive folding. `panic` and `recover` have their own
-opcodes. The debug builtins `print` and `println` are unusual: the compiler
-interns an import called `evm/debug.print` or `evm/debug.println` for the
-argument types at that call site. The final lines of `printBuiltin` use the
-ordinary external-call ABI:
+Because `print` and `println` accept arbitrary argument lists, `printBuiltin`
+interns a fresh `evm/debug.print` or `evm/debug.println` import matching the
+exact argument types at that call site and invokes it through the ordinary
+host-call ABI (routing output to `VM.Output`):
 
 ```go
 for i, v := range call.Call.Args {
@@ -2660,17 +3418,155 @@ for i, v := range call.Call.Args {
 f.emit(evm.WithBC(evm.OpCallHost, 0, ref.Index))
 ```
 
-`byte`, `rune` and `any` are aliases. The predeclared `error` is an
-interface, and `comparable` constrains type arguments. None is an
-instruction. Channels, send/receive, range over a channel, `close`,
-`select` and goroutines have no execution support. Nor can a script import
-`unsafe`, use cgo or import arbitrary native packages. Declarations must
-type-check against the supplied environment and their SSA operations must
-lower before the linker ever hands the program to a session.
+Predeclared identifiers like `byte`, `rune`, `any`, `error`, and `comparable`
+resolve purely in `go/types` and emit no instructions. Concurrency primitives
+(`go`, `chan`, `<-`, `close`, `select`), `unsafe`, and `cgo` are intentionally
+omitted—the compiler rejects them before bytecode is ever produced.
 
-## 7. How Go enters the machine
+Now let's gather every semantic difference between EVM Go and standard Go in
+one clean reference table.
 
-The binding tests expose a package named `h`. Its `Pair` function returns two pointers to the same row. The script takes the first row, reads its unsigned 16-bit `Bits` field and passes the number to a transaction through an interface:
+### 6.10 How EVM Go differs from standard Go
+
+If you already know Go, 95% of EVM Go is identical to the language you write
+every day. The remaining 5% is deliberate—either because EVM runs inside a
+capability-sandboxed, budgeted VM, or because EVM gives scripts first-class
+access to host packages and KVO records. Here is the complete list of semantic
+differences to keep in mind.
+
+#### 1. Omitted language features and fixed target
+
+- **No concurrency:** Goroutines (`go`), channels (`chan`, `<-`, `close`),
+  `select`, and `range` over channels are rejected at compile time. Scripts are
+  strictly sequential.
+- **No `unsafe` or cgo:** `import "unsafe"`, `//go:linkname`, and arbitrary
+  native imports are unavailable.
+- **Fixed Go 1.23 semantics and 64-bit sizes:** Scripts always type-check as
+  Go 1.23 with 64-bit `int`/`uint` sizes, regardless of the host toolchain or
+  CPU architecture.
+- **Optional `package` clause:** In single-file compilation
+  (`evmcompiler.Compile`), omitting `package ...` automatically prepends
+  `package plugin` (without shifting line numbers in diagnostics).
+- **Compile-time safety bounds:** Total source is capped at 1 MiB, folded
+  constant strings at 1 MiB, nesting at 32 types / 500 expressions / 100
+  statements / 32 function literals, and package-wide branching at
+  `MaxBranchWeight`.
+- **32-bit slice lengths and capacities:** Slice headers pack length and
+  capacity into a single 64-bit `R` word, capping each at `uint32` elements.
+
+#### 2. Host-defined virtual packages and session globals
+
+- **Closed import universe:** A script can import only packages explicitly
+  supplied by the host plus EVM's built-in / `evmstd` standard library. There
+  is no filesystem, network, process, or environment access unless the host
+  exposes an API for it.
+- **Curated standard library:** Built-in and `evmstd` packages omit unsafe or
+  host-escaping symbols (`errors.As`, `log.Fatal`, `time.Sleep`, `time.Local`,
+  `time.LoadLocation`, `filepath.Glob`, etc.; `encoding/json` covers validation
+  and reformatting only; `time.Now` is exposed). Virtual standard packages
+  cannot declare package globals or `init` functions.
+- **Read-only host package variables:** Host `Package.Values` (such as
+  `db.Customers`) can be read and have methods called on them, but scripts
+  cannot reassign them (`db.Customers = ...`) or take their address
+  (`&db.Customers`).
+- **Session-scoped package variables:** Script `var` globals and `init()`
+  belong to one `*evm.VM` session—not the Go process—and reset whenever the
+  host calls `vm.Reset()`.
+
+#### 3. Host-bound structs, generics, and boundary types
+
+- **Hidden host fields:** When a host trims a struct with `Options.OmitFields`
+  or `Options.Fields`, copying a native struct still preserves hidden fields in
+  Go memory, whereas script equality (`==`) and map hashing inspect only the
+  exposed fields, and a newly constructed script value leaves hidden fields
+  zeroed.
+- **Concrete host generics only:** Generic host structs (`Options.Instances`)
+  and generic host functions (`Options.GenericFunctions`) work only for the
+  concrete type arguments the host pre-registered—scripts cannot instantiate
+  new type arguments on host generics, and nominal script types (`type ID int`)
+  do not match a native generic registered for `int`.
+- **Unsupported boundary shapes:** Maps of KVO models, native `[]error`
+  storage, native interface map keys, anonymous structs with fields in host
+  bindings, and variadic native function fields are rejected.
+
+#### 4. KVO records and editors
+
+KVO model types (`m.Customer`, `m.CustomerEdit`) behave like Go structs in most
+expressions, with five important differences:
+
+- **Alias selectors and read-only enforcement:** Both local (`c.points_earned`)
+  and qualified (`c.customer_points_earned`) field selectors compile directly
+  to numeric property codes. Read-only records forbid field assignment *and*
+  whole-record overwrite through a pointer (`*p = ...`); mutations require an
+  editor (`*m.CustomerEdit`).
+- **No defined types over models:** `type R m.Customer` is rejected because it
+  would strip the model identity; write a type alias (`type R = m.Customer`)
+  instead.
+- **No implicit decoding:** Assigning an encoded record to a Go-backed struct
+  field or slice—or dereferencing it (`*encoded`)—will not silently decode it.
+  Call `encoded.NativeCopy()` explicitly (when `NativeAllocation` is enabled).
+- **Deferred collection flushes on editors:** Scalar assignments on an editor
+  take effect immediately, whereas collection assignments on an encoded editor
+  stay pending until the host calls `FlushRecord` (typically inside its save
+  function).
+- **Zero-slice local list iteration:** Ranging over a local, read-only
+  scalar/string list property (`for _, tag := range c.tags`) traverses KVO's
+  16-byte list cell in place without allocating a slice.
+
+#### 5. Borrowing and automatic ownership copies
+
+Standard Go has no borrow checker; EVM's compiler inserts automatic ownership
+copies for borrowed host data (transaction-scoped KVO records and
+`//evm:borrow-bytes` byte slices):
+
+- **Escape and invalidation copies:** Whenever a borrowed value escapes its
+  scope (into a global, closure, return value, or container) or stays live
+  across a host call that may invalidate its borrow domain, the compiler emits
+  an `Own` copy automatically.
+- **Copy-on-write for borrowed `[]byte`:** Reading a `//evm:borrow-bytes` slice
+  reads the host's bytes directly; mutating it, taking a mutable element
+  address, or letting it escape detaches a single writable copy shared across
+  all aliases of that slice.
+- **Snapshot identity:** Because owning a borrowed KVO record can change its
+  representation or pointer address, pointer equality is not a stable database
+  identity across an ownership boundary—use an explicit primary key instead.
+
+#### 6. Fatal traps, `recover()`, and idle callbacks
+
+- **Fatal errors bypass `defer`/`recover()`:** Script `panic(v)` and Go
+  language errors (`ErrNil`, `ErrBounds`, `ErrDivideByZero`,
+  `ErrTypeAssertion`, etc.) unwind through `defer` and can be caught by
+  `recover()`, just like Go. Budget exhaustion (`ErrSteps`, `ErrAllocations`,
+  `ErrAllocation`, `ErrDepth`, `ErrOutput`), context cancellation, invalid
+  values, and host callback errors are **fatal**—they abort immediately without
+  running script `defer`s.
+- **Invalidated sessions and no rollback:** After any uncaught failure, the VM
+  returns `evm.ErrInvalidState` until `vm.Reset()`, and host side effects are
+  not rolled back.
+- **VM-bound closures and guest errors:** A script closure or script-defined
+  `error` returned to Go stays tied to its owning VM. Calling it while the VM
+  is idle requires `vm.RunNative` or `vm.OpenCallbackScope`.
+
+> **Key takeaways — Chapter 6**
+> - Constants, `iota`, type aliases, and open generic templates vanish at compile time; only concrete, reachable code emits bytecode.
+> - Control flow (`if`, `&&`/`||`, `for`, `switch`, `fallthrough`, `goto`) lowers to comparisons, `jz`/`jnz`, and `jump`; range-over-func uses `defer.stack` handles so defers inside a synthesized callback still belong to the enclosing function.
+> - Composite operations (slices, maps, UTF-8 range, `FieldAddr`, type assertions) ride on `extended` descriptors, while `call.virt` reserves `V0` so virtual dispatch unpacks any receiver in place.
+> - EVM Go matches standard Go for ~95% of everyday code; the remaining 5% (no goroutines/channels/`unsafe`, host virtual packages, KVO records, borrow-aware lifetimes, deterministic budgets) is deliberate and cataloged in §6.10.
+
+With the entire Go language surface mapped out, Chapter 7 crosses the boundary
+into native Go to see how host packages, bindings, and the virtual standard
+library actually work.
+
+## 7. Host integration and native bindings
+
+So far, every example has stayed inside pure script code. In real applications,
+the whole point of EVM is crossing the boundary into host Go code—reading
+application structs, invoking methods on interfaces, calling package helpers,
+and sharing standard library functions.
+
+Watch a small script cross that boundary twice against the test package `h`:
+first calling `h.Pair()` to get a native `*Row`, reading its `uint16` field
+`Bits`, and then passing it to an interface method `ctx.Credit(...)`:
 
 ```go
 import "h"
@@ -2699,11 +3595,24 @@ fun0 Run   R=7 P=4
  11  ret
 ```
 
-PC 0 returns both rows in the outgoing window. A pointer to a host struct travels as a pair, so the first row is R7/P4. The script uses only that one: PCs 1–2 copy it into local V1. PC 3 reads the 16-bit field straight from the Go struct into R4, through the field's native offset, and PC 4 converts it to `int`. PCs 5–7 stage the interface receiver in R7/P4 and the amount in R8. PC 8 dispatches `Credit` on the concrete transaction. In this run the field holds 65535, the balance starts at zero, and the method returns 65535.
+Trace what happens here:
 
-### 7.1 An external call through an overlapping window
+- PC 0 calls `h.Pair()`, which returns two native struct pointers in the
+  outgoing window (the first sits at `R7`/`P4` because a native pointer travels
+  as a pair). Since the second return value is ignored (`_`), PCs 1–2 copy only
+  the first into local `V1`.
+- PC 3 reads `row.Bits` straight out of the Go struct using its native byte
+  offset, and PC 4 widens `uint16` to `int`.
+- PCs 5–7 stage the interface receiver `ctx` (`R7`/`P4`) and the integer
+  argument (`R8`), and PC 8 dispatches `Credit` dynamically on whatever concrete
+  transaction the host passed in.
 
-The native `meter` function reads an argument by its position in the Go signature. The wrapper can use the same argument number whether the value occupies one register or a pair:
+Let's unpack every piece of machinery that makes those 12 instructions work.
+
+### 7.1 Host calls: register windows and direct bindings
+
+A hand-written host function sees a clean `*evm.Call` interface where argument
+`0` is always argument `0`, whether it occupies one register or a pair:
 
 ```go
 func(c *evm.Call) error {
@@ -2736,9 +3645,16 @@ fun1 Native   R=3 P=1
 ```
 <!-- /bytecode -->
 
-The caller owns three R slots and one P slot. Its outgoing window starts at R3 and P1. The native wrapper sees those as its R0 and P0, the two halves of argument zero. Its R1 is the second argument. Writing the scalar result overwrites the word that held the string length. For `("abc", 4)`, PC 4 reads seven.
+Just like a script-to-script call, `Native` owns `R0..R2` and `P0`, so its
+outgoing window begins at `R3` and `P1`. The Go wrapper sees those slices as
+its own `R0` and `P0` (argument 0, the string) and `R1` (argument 1, `n`).
+When the wrapper writes its `int` result into result slot 0, it overwrites
+`R0` (formerly the string length)—which is why wrappers always read all inputs
+before writing results.
 
-During a run, the VM reuses one `Call` object. Before each native call, `VM.invokeNativeCall` sets the callee, context, source position, and the two slices the wrapper can access. These lines show how the wrapper gets its windows. The linked native function already knows each window’s size.
+To avoid allocating on every host call, the VM reuses a single embedded
+`vm.call` struct and slices the exact outgoing register window with three-index
+slices (bounding both length and capacity):
 
 ```go
 g := &vm.program.natives[index]
@@ -2757,9 +3673,16 @@ if g.results.PCount < pn {
 }
 ```
 
-The three-index slices bound both length and capacity. A wrapper must consume its `*Call` and its register slices before returning. The next call reuses that object. The pointer clear releases arguments outside the result prefix. No argument array was needed to pass the string.
+Right after `call` returns, the VM detaches the slices and clears any pointer
+slots outside the result prefix so incoming arguments are released to the GC.
+That is also why a wrapper must never retain `*evm.Call` or its register slices.
 
-For a call with one raw argument and one raw or pointer result, the compiler can put both register moves in the call word. The Scan benchmark of chapter 10 reads 128 sensors through an external function. Here is its call to `sensors.Reading(i)` before and after fusion:
+#### Skipping the window for small calls
+
+Moving arguments into and out of the outgoing window takes extra instructions.
+When a host call takes a single raw word and returns a raw word or pointer
+(like `sensors.Reading(i)` in Chapter 10's `Scan` benchmark), the compiler
+fuses the moves straight into the call word:
 
 ```text
 move.r        r17 r5             ; argument to the outgoing window
@@ -2769,11 +3692,13 @@ move.r        r9 r17             ; result out of the window
 call.host.rr  r8 r5 imp0         ; same three operations in one dispatch
 ```
 
-The Go wrapper still reads and writes its ordinary R0. The fused instruction copies the result to its destination only after a successful return. An ordinary pointer result uses `call.host.rp`; an immutable KVO result needs an RP pair. The linker verifies both banks against the import signature. These two move-fusing forms keep the general callback ABI, including its error return. A wrapper with a declared direct binding can take operands straight from locals. An import above 65535 uses the general call’s 32-bit index.
+The Go wrapper still reads/writes its normal `R0`, while the VM skips two
+dispatches (`call.host.rp` handles pointer results; immutable KVO records use a
+pair; imports above index 65,535 stay on `call.host`).
 
-#### A pointer method in one word
-
-This script knows the receiver's concrete type. The external package exposes `func (*Sensor) HasLabel(string) bool`. The script calls it like any Go method.
+And when a binding declares a `DirectBinding`, it goes one step further and
+receives its operands straight from local registers without touching the call
+window at all—as in a concrete pointer method `(*Sensor).HasLabel(string) bool`:
 
 <!-- listing: Tagged | Tagged(&meter.Sensor{Label:"ready"}, "ready") && !Tagged(&meter.Sensor{Label:"ready"}, "off") -->
 ```go
@@ -2793,13 +3718,18 @@ fun1 Tagged   R=1 P=2
 ```
 <!-- /bytecode -->
 
-The call word names an import and two local slots. The receiver goes into Go as a GC-visible pointer. A is wide enough for the incoming string. After Go returns a boolean, the VM writes the raw word and clears the old string pointer. A nil receiver reaches the method too, as it does in Go. An interface receiver takes the `call.virt` path.
+One instruction! `P1` hands Go the real GC-visible `*Sensor` pointer (even if
+`nil`, matching Go semantics), `V0` hands over the string, and on return the VM
+writes the boolean into `R0` and clears `P0`. Cancellation is still checked on
+both sides of the call, returned strings keep their Go backing storage while
+charging the allocation budget, and interface receivers continue to use
+`call.virt`.
 
-Generated package functions also receive a leading `*evm.Call`. EVM supplies the same context, source position and R/P argument window that the regular wrapper exposes. A handwritten register wrapper that accepts its arguments directly can omit this window. The VM checks cancellation on both sides of the external call. A string result retains its Go backing storage and charges its length to the VM allocation budget. An immutable KVO result carries its typed pair. Compiler ownership analysis copies borrowed data when it escapes or crosses an invalidating call.
+### 7.2 Source-driven bindings with evmbind
 
-### 7.2 Declaring the external package
-
-The binder reads Go declarations. Here is the part of the test package that explains the two calls above. The excerpts omit other fields and methods:
+Writing `evm.Package` structs by hand works, but it is tedious when you already
+have Go types. `evmbind.New` reads your package's actual `.go` files instead.
+Here is the slice of test package `h` behind the opening example:
 
 ```go
 type Row struct {
@@ -2815,7 +3745,9 @@ type Context interface {
 func Pair() (*Row, *Row)
 ```
 
-`Pair` has no Go body in the declaration file. That file carries the `evmguest` build tag. An ordinary Go build compiles the data types; the binder reads both files and gets the function signature as well. The test registers the native types and wrappers once:
+Notice that `Pair` has no body (that declaration file uses a `//go:build
+evmguest` tag so ordinary `go build` ignores it while `evmbind` reads both
+files). Setup registers the package once:
 
 ```go
 schema, err := evmbind.New("h", os.DirFS("internal/fixture"), evmbind.Options{
@@ -2828,11 +3760,24 @@ schema, err := evmbind.New("h", os.DirFS("internal/fixture"), evmbind.Options{
 })
 ```
 
-`Host` is the binder field for the Go receiver that implements package functions. Its `Pair` method has a leading `*evm.Call` parameter followed by the parameters in the external declaration. From the method signatures the binder discovers the native data types. `Implementations` also admits `*transaction` as a concrete value of the `Context` interface.
+Each option has one clear job:
 
-`PointerForCall` supplies the external call when a method needs its source position or execution budget. It lets the host return a receiver for that one call. The script still holds the original transaction pointer. Use `Pointer[transaction]()` when methods need no per-call information.
+- **`Host`** names the Go receiver whose methods implement package functions
+  (each method takes a leading `*evm.Call`). From those signatures, `evmbind`
+  discovers reachable native data types automatically.
+- **`Types`** adds extra root types nothing else points to (`Observer`).
+- **`Implementations`** registers concrete Go types that may satisfy script
+  interfaces (`*transaction` implementing `Context`). Use
+  `Pointer[transaction]()` normally, or `PointerForCall` when a method needs
+  the active `*evm.Call` (for source positions or budget scopes) without
+  changing the pointer held by the script.
 
-The fixture’s `Context` embeds `Observer`. A script can pass its context to a helper that takes only the observer methods. Here is one call from the binding test.
+Two real-world Go patterns work seamlessly across this boundary:
+
+1. **Embedded interfaces and live collections:** `Context` embeds `Observer`,
+   so scripts can pass `ctx` anywhere an `h.Observer` is expected, along with
+   slices and maps (`[]string`, `map[string]any`) that keep their Go backing
+   storage and exact Go types (`uint64` stays `uint64`):
 
 ```go
 var observer h.Observer = ctx
@@ -2841,7 +3786,9 @@ row := map[string]any{"n": uint64(1<<63) + 7, "items": []any{"a", true, nil}}
 observer.Observe(columns, row)
 ```
 
-An external method can also accept a synchronous `func()`. For example, the fixture declares `During(func())`. Its Go implementation calls `f()`. This script can capture a local and make another external call inside the callback.
+2. **Synchronous callbacks back into scripts:** A host method like
+   `During(func())` can invoke a script closure mid-call via
+   `Call.RunCallback`:
 
 ```go
 var n int
@@ -2851,28 +3798,23 @@ observer.During(func() {
 })
 ```
 
-The binding calls `Call.RunCallback`. The callback gets its own register arrays and frame stack. The caller’s native argument and result windows therefore stay valid. Both evaluators use the same global cells, captures, record scope and remaining execution budget. The active parent frames still count towards the depth and register limits. The Go wrapper may invoke the callback synchronously while it owns the call. Invoking it after the wrapper returns fails.
+The callback runs with its own register slices and frame stack (so the parent
+host call's argument window stays untouched) while sharing the VM's globals,
+captures, record scope, and remaining budget.
 
-Generated and reflective calls pass these arguments the same way. The host receives the script's slice and map in their Go backing storage, not copies. Values keep their Go types: `n` arrives as a `uint64`, so the large integer survives exactly. The test changes both collections in the host and reads the changes back in the script.
+Under the hood, `evmbind.parse` type-checks the non-test `.go` files with
+`go/types`, walks exported declarations, and builds shapes—tracking VM cell
+offsets for VM aggregates while using Go byte offsets for live native structs
+(in `Row`, seven one-cell fields precede `Bits`, so `Bits` sits at VM cell
+offset 7 even if Go pads the struct differently). Slices, maps, variadic
+functions, and embedded struct field promotion all work; concrete generic
+structs and functions bind per instantiation via `Options.Instances` and
+`GenericFunctions`.
 
-`evmbind.parse` parses non-test Go files, checks the package with `go/types`, and visits its exported scope. A type declaration creates a graph of shapes. A package function becomes an operation with an argument list and result list. Exported methods carry a receiver. Constants contribute their types and values. The struct case records the field and then advances by the field's **cell count**. These are the two updates to the binder's field metadata, shown with the shape construction wrapped to fit.
+### 7.3 Binding receivers and packing host interfaces
 
-```go
-n.fields = append(n.fields, field{f.Name(), c, sh.Cells})
-sh.Fields = append(sh.Fields, values.Field{
-    Name: f.Name(), Tag: u.Tag(i), Shape: c.shape, Offset: sh.Cells,
-    Embedded: f.Embedded(),
-})
-sh.Cells += c.shape.Cells
-```
-
-In the full Row declaration, the fields before Bits are Next, Counter, Detail, Count, Active, Ratio and Amount. Detail contains one string, which takes one addressable cell. Each of the other six also takes one cell. Bits therefore has offset seven and Row occupies eight cells. Native Go may pad the struct differently. The binder checks names, order, types and tags. Native field operations use the Go layout; VM aggregates use the cell layout.
-
-A package function can take and return slices and maps of bound types, and variadic arguments. Embedded structs keep Go's field promotion. A generic struct or function binds one instance at a time, through `Options.Instances` and `Options.GenericFunctions`; those bindings use reflection.
-
-### 7.3 Binding the receiver and passing the transaction
-
-Compiling against `schema.Package()` fixes the import signatures. The host application supplies two Go objects to run this example. One implements `h.Pair`. The other implements `ctx.Credit`. Their lifetimes can differ. The call sequence below omits the error checks:
+Here is the full sequence that compiles, links, and runs our opening `Run`
+example (error checks omitted):
 
 ```go
 module, err := evmcompiler.Compile("credit.go", source, schema.Package())
@@ -2883,57 +3825,53 @@ var result [1]values.Value
 err = evm.New(program).Run(ctx, "Run", []values.Value{arg}, result[:])
 ```
 
-`Bind` copies the function and method declarations and sets their wrappers. Linking checks each import's name, receiver type, parameter types and result types. The program keeps those bindings for its lifetime. Passing another transaction to `Run` uses the same program. Changing the receiver supplied to `Bind` requires another link.
-
-Interface packing follows linking because the concrete type index belongs to the program. After checking the native pointer type, `Program.PointerInterface` returns:
+Notice the two distinct lifetimes: the `host` receiver is fixed at `Link` time
+(changing it requires re-linking), whereas you can pass a fresh `transaction`
+to every `Run` call on the same `Program`. Interface packing happens *after*
+linking because the concrete type ID belongs to `program`:
 
 ```go
 return values.Value{R: uint64(id), P: ptr}, nil
 ```
 
-A typed nil `(*transaction)(nil)` has a nonzero R and nil P. An absent interface has both halves zero. For a live transaction, P is the original Go pointer. The script can call `Credit`; it cannot select the private balance field. To pass the transaction to a different program, pack the pointer using that program’s type registry.
+A typed `nil` (`(*transaction)(nil)`) has a nonzero `R` and `nil` `P`, while an
+empty interface has both zero. Because `P` holds the real Go pointer, the script
+can call `Credit` without ever being able to touch `tx.balance`.
 
-### 7.4 Generated and reflective bindings
+### 7.4 Generated wrappers vs. reflection
 
-`evmbind` checks API declarations against native signatures during setup.
-Generated wrappers replace reflection with typed Go calls and field operations.
-Both paths use `nativebind` for live native fields; KVO can attach the same schema.
+`evmbind` validates every declaration against its Go signature at setup time,
+then lets you choose between convenience and speed:
 
-A registered host `*Row` stays the original pointer. Returning it twice preserves
-aliasing. Script field assignments and native methods mutate the same object;
-there is no detached copy to reconcile afterward. By-value struct arguments keep
-value semantics. VM-cell pointers that cross into Go still use temporary
-conversion and copyback where required; do not confuse those with host pointers.
+- **Reflective bindings** work with zero build step.
+- **Generated bindings** (`Options.Static`) replace reflection with direct,
+  typed Go calls and `nativebind` field operations (which KVO can reuse via
+  `WithNativeSchema`).
 
-For a native interface method, virtual dispatch restores the concrete receiver
-in argument slot zero. Explicit arguments follow it. The generated wrapper calls
-the actual Go interface method; its result goes through the declared scalar or
-pointer conversion.
+Both paths follow identical semantics: a registered `*Row` stays the live Go
+pointer (returning it twice preserves aliasing; script field writes mutate the
+host object directly), by-value structs copy cleanly, and VM-cell pointers
+crossing into Go use call-scoped temporaries with copy-back.
 
-Schemas fingerprint sorted declarations and require a complete wrapper set.
-`Automatic` uses matching generated bindings and otherwise selects reflection.
-`StaticOnly` rejects missing/stale bindings. Both reject a wrong native signature.
-Whitespace does not change the ABI; fields, constants and operation signatures
-can. Regenerate after changing declarations.
+Schemas fingerprint sorted declarations (ignoring whitespace) so `Automatic`
+uses generated wrappers when fresh and falls back to reflection when stale,
+while `StaticOnly` fails fast on mismatches. Small non-variadic calls (≤2
+function args or receiver + ≤1 arg, ≤1 result) emit `DirectBinding` register
+instructions; larger ones use register windows. See
+[evmbind/README.md](../evmbind/README.md) for full details.
 
-Small signatures use `DirectBinding`: up to two function arguments, or a pointer
-receiver plus one explicit argument, with zero or one result. Variadic
-functions and operations on mutable records are excluded. Larger signatures
-use register windows. Both support normal function values and deferred calls;
-interface methods retain virtual dispatch. The generated code specializes the
-actual call, not a reflective helper hidden behind a uniform API.
+> **Why this way? (Clear trade-off & reasonable default)**
+> Generating wrappers over reflection and adding the `call.host.d*` direct-call
+> matrix were **measured trade-offs**: generated direct calls cut a scalar
+> predicate by **68%** (`12.43 → 3.98 µs`, `256 → 0` allocs) and a struct tag
+> check by **89%** (`66.44 → 7.19 µs`, `2,049 → 1` alloc), while all 51
+> direct-call shapes improved 11–35% without regressing control benchmarks.
+> Reading real Go source instead of defining an IDL was simply a **reasonable
+> default that worked fine**.
 
-A returned native string keeps its Go backing storage and is charged to the VM
-budget. A returned KVO record uses the pair convention and carries both words.
-Ownership effects govern borrowed results; immutable records require no runtime
-read scope. Mutable editors do.
+### 7.5 Host state mutations and return values
 
-[Binding guide](../evmbind/README.md) covers generation, supported boundary types,
-record methods and reflection-only builds.
-
-### 7.5 The result on each side of the call
-
-The test implementation of `Credit` adds the argument to the transaction's balance and returns the new balance:
+Inside Go, `Credit` simply updates its private field and returns the new total:
 
 ```go
 func (t *transaction) Credit(n int) int {
@@ -2942,11 +3880,17 @@ func (t *transaction) Credit(n int) int {
 }
 ```
 
-After PC 8, the external method has written 65535 into the Go object’s balance field. Its wrapper has written the same number into outgoing R7. PCs 9–10 copy it through R6 into the script’s result slot R0. When `Run` returns, the application can read both `tx.balance` and `result[0].AsInt()`. They agree because of the method body. Mutating external state and returning a VM value are separate operations.
+When PC 8 finishes, `t.balance` is `65535` in Go memory and outgoing `R7` holds
+`65535` in the VM; PCs 9–10 move it to `R0`. After `Run` returns, `tx.balance`
+and `result[0].AsInt()` agree—not through any magic synchronization, simply
+because mutating host state and returning a value are two separate, explicit
+steps.
 
-### 7.6 External calls in the virtual standard library
+### 7.6 The virtual standard library
 
-The virtual standard library mixes script bodies and native leaves. `log.Printf` is a script body. This is the implementation the compiler sees.
+EVM's built-in standard library uses the exact same mechanism—mixing pure
+script bodies with native Go leaves. For instance, `log.Printf` is ordinary
+script source:
 
 ```go
 func Printf(format string, v ...any) {
@@ -2958,9 +3902,13 @@ func Printf(format string, v ...any) {
 }
 ```
 
-Formatting may call user code. In virtual `fmt`, the branch for a matching `Stringer` contains `b.leaf(f.String(), verb)`. That call goes through ordinary script interface dispatch and runs on the same VM stack and budget. Printing finally reaches the native `fmt.output` leaf, which charges the output byte count and passes the string to `vm.Output`. With a nil sink it calls the normal Go logger.
+That means formatting a script-defined `fmt.Stringer` runs through normal
+script interface dispatch under the same VM stack and budget, before finally
+calling the native `fmt.output` leaf (which charges `OutputBytes` and forwards
+to `vm.Output`).
 
-A standard package can also declare a function with no body. For example, virtual `strings` declares `func HasPrefix(s string, sub string) bool`.
+Performance-critical leaves like `strings.HasPrefix` are declared without a
+body and linked straight to Go's standard library:
 
 <!-- listing: Prefix | Prefix("custom_notice") && !Prefix("other") -->
 ```go
@@ -2988,17 +3936,124 @@ fun1 Prefix   R=3 P=3
 ```
 <!-- /bytecode -->
 
-PC 0 of `Prefix` loads the literal `"custom_"`. PCs 1–4 move the two strings into the outgoing window. PC 5 is `call.host` with BC zero, the module's first import. The linker supplies this leaf.
-
 ```go
 case "HasPrefix":
     v0 := strings.HasPrefix(args[0].AsString(), args[1].AsString())
     c.result(0, values.Bool(v0))
 ```
 
-The importer type-checks a virtual package when script code imports it. For bodyless declarations it postpones VM type and layout construction until a leaf is reached. Script function discovery similarly decides which standard bodies need bytecode. Virtual packages cannot define globals or init functions. Adding another entry to the supported library therefore does not schedule another initializer for every VM session.
+Virtual packages are type-checked lazily when imported, only reachable bodies
+are compiled, and globals/`init` functions are forbidden in virtual packages so
+growing the standard library never slows down VM startup.
 
-## 8. Running and stopping
+> **Why this way? (Reasonable default)**
+> In `evmstd`, generic packages (`cmp`, `iter`, `maps`, `slices`, and `sort`)
+> compile from script source rather than wrapping Go's standard library simply
+> because the binding generator does not bind generic Go functions or types
+> natively—staying metered under the VM budget is a welcome bonus.
+
+### 7.7 Borrowing and automatic ownership analysis
+
+Remember from Chapter 3 that a read-only database record or a native `[]byte`
+slice often borrows its backing bytes directly from a transaction buffer or
+cursor. EVM keeps those reads zero-copy through **compile-time ownership
+analysis** plus copy-on-write for borrowed `[]byte`.
+
+> **Why this way? (Clear trade-off)**
+> Eagerly cloning at the host boundary was measured and rejected: `bytes.Clone`
+> turned a 4 KiB read from `97 ns` into `458 ns` and a 64 KiB read from `96 ns`
+> into **4.14 µs** (plus a 64 KiB allocation). Compile-time ownership analysis
+> with copy-on-write cut 64 KiB reads by **87%** and dropped allocations from
+> `66 KB` to `633 B` per call—at the cost of ~7–9% overhead when a subslice
+> actually escapes and copies, plus real compiler engineering (the initial
+> ownership planner was quadratic on chained `&&`/`||` conditions until
+> rewritten to linear time).
+
+#### Declaring host effects
+
+A host package tells the compiler which functions lend borrowed storage, which
+functions end a borrow scope, and which functions are guaranteed not to retain
+arguments or invalidate live borrows, by attaching `*evm.OwnershipEffects` to an
+`ExternalFunction` or `ExternalMethod`:
+
+```go
+readEffects := &evm.OwnershipEffects{
+    NoRetain: true, NoInvalidate: true,
+    Borrowed: []evm.BorrowSource{{Result: 0, Domain: "db.tx", ScopeParameter: 1}},
+}
+endEffects := &evm.OwnershipEffects{
+    NoRetain: true,
+    Ends: []evm.ScopeEnd{{Domain: "db.tx", ScopeParameter: 1}},
+}
+writeEffects := &evm.OwnershipEffects{
+    NoRetain: true,
+    Callbacks: []evm.ScopedCallback{{Argument: 1, Domain: "db.tx"}},
+}
+```
+
+- `Borrowed` says "result `0` borrows storage belonging to domain `"db.tx"`,
+  scoped to parameter `1` (the transaction receiver, or `0` for an enclosing
+  callback scope)."
+- `Ends` says "calling this function invalidates borrows in that domain/scope."
+- `Callbacks` says "argument `1` is a callback invoked inside a temporary
+  `"db.tx"` scope."
+- `NoRetain` promises the call never keeps arguments past its synchronous
+  return; `NoInvalidate` promises it never closes or overwrites live borrowed
+  buffers.
+
+Native methods returning a single `[]byte` can opt in even more simply with a
+source comment in `evmbind`:
+
+```go
+//evm:borrow-bytes domain [nativeMethod]
+```
+
+Guest reads use the lent bytes directly with zero copies; the first write,
+mutable address, or escape triggers a single copy-on-write detach shared across
+all slices derived from that result.
+
+#### What the compiler inserts
+
+During compilation, EVM tracks borrowed values and their aliases across SSA
+blocks, calls, containers, and closures:
+
+- **Stays borrowed (zero copies):** Reading fields inside the transaction scope,
+  passing a record to a `NoRetain` helper, or keeping it in a scope-local flat
+  slice/map whose aliases never escape and whose scope is never invalidated.
+- **Automatically owned (detached copy):** Returning a borrowed value from the
+  scoped callback, storing it in a package global or escaping closure, keeping
+  it live across a call that ends or may invalidate its domain, or passing it to
+  an unknown host function without `NoRetain`. At the exact escape or
+  invalidation boundary, the compiler emits an `Own` step (which calls the
+  type's budgeted ownership callback—built in for immutable KVO records, or
+  registered via `values.NewOwnedType` for custom host types).
+
+```mermaid
+flowchart LR
+    ACQ["Host returns borrowed<br/>record or byte slice"] --> CHECK{"Escapes scope,<br/>survives invalidation,<br/>or mutated?"}
+    CHECK -->|No: local read| ZERO["Zero copies<br/>(reads lent bytes directly)"]
+    CHECK -->|Yes| OWN["Compiler inserts Own<br/>(budgeted detach copy)"]
+```
+
+Effects are part of the compiled binding contract—`evm.Link` rejects mismatches
+between compiled and linked effects—and you can inspect every copy the compiler
+inserted through `Function.OwnershipSites`. Unannotated host calls are treated
+conservatively (assumed to retain and invalidate), while simple read-only guest
+helpers are analyzed automatically.
+
+> **Key takeaways — Chapter 7**
+> - Host calls share the exact same overlapping register-window ABI as script calls, plus fast direct-call opcodes (`call.host.d*`) for small, non-escaping calls.
+> - `evmbind` derives script-facing schemas directly from real Go source files and generates reflection-free wrappers verified by source fingerprints.
+> - Native struct pointers, slices, and maps keep their real Go backing storage across the boundary; `any` preserves native types and wraps guest-only values in `*evm.GuestValue`.
+> - Virtual standard packages (`strings`, `fmt`, `evmstd`, etc.) are type-checked lazily and compiled only when reached, keeping startup fast.
+> - Compile-time ownership analysis (`OwnershipEffects` and `//evm:borrow-bytes`) lets scripts read borrowed records and byte slices with zero copies while automatically detaching any value that escapes its scope.
+
+Now that scripts can talk to Go, we need to make sure they can never hang the
+host process or exhaust its memory. That is Chapter 8.
+
+## 8. Sessions, budgets, and failure handling
+
+Every embedded VM eventually meets an infinite loop:
 
 <!-- listing: Spin | ErrSteps after 8 steps -->
 ```go
@@ -3015,13 +4070,26 @@ fun0 Spin   R=0 P=0
 ```
 <!-- /bytecode -->
 
-Spin has exactly one instruction. Fetching the jump at PC 0 advances the PC to 1, then the jump adds −1 and takes it back to 0. Every iteration runs the same word without allocating, making a call, or touching a variable. Run it with eight steps and the VM refuses a ninth dispatch. The check belongs in the interpreter: an emitter that forgot to instrument even one kind of back edge could otherwise produce an unstoppable loop.
+`Spin` is a single 64-bit word: fetch advances PC to 1, `jump -1` pulls it back
+to 0. It allocates nothing, calls nothing, and touches no memory. Yet if you
+run it with a budget of 8 steps, the VM refuses to fetch a 9th instruction and
+returns `evm.ErrSteps`. Putting the fuel check right in the interpreter—rather
+than trusting the compiler to instrument every back edge—makes an unstoppable
+loop impossible.
 
-### 8.1 The life of a session
+### 8.1 VM sessions and initialization
 
-`New(program)` holds a pointer to a shared, immutable program. On first use, `RunWithBudget` allocates session storage for each declared global and executes the package initializer, if present. Only then does it execute the requested entry. A second successful call on the same VM sees the previous globals; another VM starts from zero. One machine cannot run concurrently or be entered again from one of its own native wrappers.
+`evm.New(program)` wraps an immutable, shared `Program` in a single-goroutine,
+non-reentrant session:
 
-Script instructions executed by package initialization, the entry function and their callees share one instruction budget. The host can give a batch calculation a larger budget than a callback inside a transaction:
+- On the first `Run`, the VM allocates session storage for package globals and
+  runs the package initializer (if any) before entering the requested function.
+- Subsequent successful calls on the same VM see those persisted globals; a
+  separate VM starts fresh.
+- Package initialization, the entry call, and all callees share one budget.
+
+You can tailor budgets per call—giving a background report a generous cap while
+keeping a transaction callback tight:
 
 ```go
 err := vm.RunWithBudget(ctx, "Decide", args, results, evm.Budget{
@@ -3029,11 +4097,16 @@ err := vm.RunWithBudget(ctx, "Decide", args, results, evm.Budget{
 })
 ```
 
-Zero fields inherit defaults. By default a call has one million steps; a session has one million logical allocations and 64 MiB of cumulative allocation reservations. The VM also bounds call depth, register banks and output. A per-call allocation cap cannot increase the remaining session allowance. The byte counter tracks reservations, not the Go heap’s live size; collecting an object doesn’t refund its cost.
+Zero fields inherit defaults (1,000,000 steps per call; 1,000,000 logical
+allocations and 64 MiB cumulative reservations per session; plus call-depth,
+register-bank, and output caps). A per-call cap can only tighten—never expand—
+the session's remaining allowance, and allocation bytes track *cumulative
+reservations* rather than live Go heap size (GC never refunds the meter).
 
-### 8.2 Where the meter runs
+### 8.2 Fuel checkpoints, deadlines, and allocation meters
 
-The register loop keeps one local counter. Each dispatch consumes one step, including a linked comparison and branch that execute together. A jump costs one, and so does a copy of 4,096 cells. A Go wrapper can compute on its arguments without touching the counter. If a wrapper allocates a result, the allocation meter accounts for it separately.
+How do you enforce exact step counts and context deadlines without slowing
+every single instruction to a crawl? With a countdown and a cheap bitmask:
 
 ```go
 remaining := budget.remaining
@@ -3055,15 +4128,41 @@ for {
 }
 ```
 
-Suppose a call has 259 instructions left. After three dispatches, the counter reaches 256 and the loop checks cancellation. The next 256 dispatches take it to zero. The VM refuses to fetch a 260th instruction. Counting down keeps the last check exact for any starting budget. A successful package initializer hands its unused steps to the entry function. A script call, return or defer resumes inside the same dispatch loop with the same counter.
+Walk through the arithmetic: suppose you start with 259 steps. After 3
+dispatches, `remaining` hits 256 (`256 & 255 == 0`), triggering one context
+check. After 256 more dispatches, `remaining` hits `0`, and the VM traps
+before fetching instruction 260 (and skips `ctx.Err()` altogether when the
+context is non-cancellable).
 
-A call can also set `Budget{Duration: 50 * time.Millisecond}`. One context timer covers the run. The dispatch loop samples cancellation at its existing fuel checkpoints. It never reads a clock per instruction. At final return the VM checks the deadline before copying results.
+> **Why this way? (Clear trade-off & reasonable defaults)**
+> Counting *down* in a local variable replaced an earlier count-up meter that
+> loaded and stored a shared `budget.steps` field on every instruction—cutting
+> `Price` from **46.26 → 37.06 µs** and a 256-call scan from **4.52 → 4.13 µs**
+> while keeping the stop exact for any starting budget. Generating a separate
+> coverage interpreter (§8.4) was likewise a clear trade-off to guarantee zero
+> overhead when coverage is off. By contrast, cumulative allocation metering,
+> session invalidation (`ErrInvalidState`), and skipping script `defer`s on
+> fatal traps were **reasonable defaults that worked fine**—cheap,
+> deterministic, and requiring no GC hooks.
 
-An external function that opens a transaction can save `section := c.NarrowBudget(100_000, 50*time.Millisecond)`. The same VM keeps executing. The section derives a deadline from the current context and sets a floor on the caller’s remaining fuel. It uses the last checkpoint and allows 255 instructions for work that may precede the section. External calls receive this narrower context. The closing function calls `section.End(c)` **before** committing. It checks elapsed time and fuel, then restores the parent. Nested sections inherit the tightest floor and deadline. The scoped instruction allowance can overshoot by at most two polling intervals (512 dispatches). The outer fuel limit remains exact. A blocked external operation must itself return or honor the context. The application owns rollback if the VM exits with a section open.
+A few subtle properties of the meters:
 
-The bit test runs on every dispatch. Only the slow path reads the context, and a run with a noncancellable context skips that read. External calls also check cancellation on entry and return. Long traversals in the VM, such as hashing a large map key, poll cancellation internally without debiting extra instructions.
-
-`charge` checks the allocation budget before the VM reserves backing storage. For a nonzero allocation it runs:
+- **One dispatch = one step**, whether it is a `jump`, a fused loop instruction,
+  or a 4,096-cell copy. Native Go wrappers do not consume steps, though any
+  results they allocate charge the allocation meter.
+- **Wall-clock deadlines:** `Budget{Duration: 50 * time.Millisecond}` installs
+  one context timer for the run, polled at the 256-step checkpoints, on entry
+  and return of external calls, inside long VM traversals (like hashing a huge
+  map key), and right before copying results out.
+- **Narrowing inside a call:** A host function opening a database transaction
+  can call `section := c.NarrowBudget(100_000, 50*time.Millisecond)` and later
+  `section.End(c)` *before* committing. Nested sections inherit the tightest
+  floor and deadline (scoped step caps can overshoot by at most two 256-step
+  polling intervals while the outer limit stays exact). Host I/O must still
+  honor `c.Context` cooperatively, and the host owns rollback if execution
+  aborts with a section open.
+- **Allocation metering:** Every VM-owned allocation (including register and
+  frame buffer growth) passes through `charge` *before* reserving Go memory:
 
 ```go
 if n > limits.AllocationBytes-used.bytes {
@@ -3076,11 +4175,10 @@ used.bytes += n
 used.count++
 ```
 
-A program creating many small objects can hit the count first. A single large slice can hit the byte limit first. Register and frame buffer growth are charged too. Limits guard VM-owned work, not memory that arbitrary native Go allocates. A native wrapper passes `Call.Context` to blocking I/O and checks `Call.Context.Err()` in long Go loops. Cancellation inside that wrapper is cooperative.
+### 8.3 Recoverable language faults vs. fatal traps
 
-### 8.3 What the host sees on failure
-
-The interpreter checks whether script code can handle a fault:
+When an instruction fails, the evaluator asks one decisive question: *is this a
+Go language error, or a host/budget failure?*
 
 ```go
 if !isLanguageError(failure) {
@@ -3091,13 +4189,109 @@ if err := vm.beginPanic(&cur, cur, values.Value{}, failure, budget); err != nil 
 }
 ```
 
-An out-of-bounds access can start a script panic, run defers, and recover. Exhaustion or cancellation aborts execution; cleanup cannot spend unbounded time running script defers. Once a run has begun, a failure leaves the session marked failed. Results are copied out only on successful return. `Reset` discards globals and initialization state, releases retained script references, and renews allocation allowances. It does not roll back an external write. If a script writes to a database through the external API, the application controls when that transaction commits or rolls back.
+- **Language errors** (nil dereference, bounds check, divide by zero, failed
+  type assertion) trigger normal Go panic unwinding, running script `defer`s
+  and allowing `recover()`.
+- **Budget exhaustion, cancellation, invalid values, and host callback errors**
+  trap immediately without running script `defer`s—otherwise a runaway script
+  could hide unbounded work inside a `defer`.
 
-## 9. Inside the evaluator
+```mermaid
+flowchart TD
+    FAIL["Instruction or call fails"] --> KIND{"isLanguageError?"}
+    KIND -->|Yes: nil deref, bounds,<br/>div-by-zero, bad assertion| PANIC["beginPanic -> run script defers"]
+    PANIC --> REC{"Deferred recover()?"}
+    REC -->|Yes| RESUME["Resume caller frame"]
+    REC -->|No| INV["Return error to host<br/>VM -> ErrInvalidState until Reset()"]
+    KIND -->|No: ErrSteps, ErrAllocation,<br/>ctx cancel, host error| TRAP["vm.trap -> skip all script defers"]
+    TRAP --> INV
+```
 
-### 9.1 Registers, frames and the dispatch loop
+Once execution starts, any uncaught failure leaves the VM in an invalid state
+until you call `vm.Reset()` (which clears globals, releases references, and
+renews session allocation allowances). Results are written only on success, and
+the VM never rolls back external side effects.
 
-Calling `SumThenDouble(2, 5)` from Go returns 14. Use `NoOptimization: true` for this trace to see the call to `sum`. The default compiler inlines the addition.
+### 8.4 Zero-overhead execution coverage
+
+When you ship per-account scripts—especially scripts authored or edited by AI
+agents—you want real line and branch coverage in tests without slowing down
+production execution.
+
+EVM provides a coverage collector that attaches to any session:
+
+```go
+cov := evm.NewCoverage(program)
+vm.SetCoverage(cov)
+// ... run tests ...
+lines := cov.Lines()
+```
+
+How does it achieve **zero overhead** when coverage is off? Instead of adding
+`if vm.coverage != nil` checks inside the hot interpreter loop, EVM generates a
+separate coverage-instrumented interpreter loop (`go generate .`) and chooses
+between the normal loop and the coverage loop once at invocation entry. When
+coverage is `nil`, the normal interpreter executes not a single extra branch.
+
+A few thoughtful details make the coverage output genuinely useful for Go
+source:
+
+- **Instructions and lines:** `cov.Instructions()` reports exact execution
+  counts, conditional branch outcomes, and source positions for every
+  instruction (including unreachable ones). `cov.Lines()` aggregates by source
+  file and line; a line counts as fully covered only when every instruction on
+  it ran *and* every conditional jump took both branches.
+- **Optimizer-aware branch normalization:** Compiler optimizations like loop
+  fusion can split one source `if` or `for` condition into an entry guard and a
+  back edge, and loop unrolling can introduce proven-constant guards. `Lines()`
+  merges normalized outcomes back to the original source condition and ignores
+  proven-constant unroll guards, so coverage matches what the script author
+  actually wrote.
+- **Concurrent runs:** Collectors are per-program and not concurrent—attach one
+  collector per goroutine/VM and combine them with `cov.Merge(...)` after the
+  runs finish. Fused instructions stay fused under coverage (recording the
+  consumed branch outcome), while float-loop acceleration is bypassed so every
+  iteration is observed.
+
+### 8.5 Trust boundary and threat model
+
+EVM is a **capability and resource sandbox**, not an OS process boundary. When
+running per-account or AI-generated scripts, it helps to know at a glance what
+the VM guarantees automatically and what remains the host's job:
+
+| Threat or bug | What EVM guarantees | What the host must still enforce |
+| --- | --- | --- |
+| **Infinite loop / CPU spin** | Hard stop at `Budget.Steps` (`ErrSteps`), polled in the interpreter loop itself; skips script `defer`s. | Set a reasonable `Budget.Steps` and `Budget.Duration` per call. |
+| **Memory bomb / runaway allocation** | Every VM-owned allocation charges `Limits.Allocations` and `Limits.AllocationBytes` *before* reserving Go memory (`ErrAllocation`). | Bound allocations made *inside* native host callbacks (they run outside VM meters unless they charge `c`). |
+| **Deep recursion** | Bounded by call-depth and register-bank limits (`ErrCallDepth`); no Go-level recursion. | Choose limits appropriate for your workload. |
+| **Nil deref, bounds error, div-by-zero, panic** | Caught safely as Go language errors; unwinds cleanly (or returns an error to Go with source positions) without crashing the host process. | Never panic uncaught from hand-written native callbacks (native Go panics propagate after VM cleanup). |
+| **Unauthorized file, network, or env access** | Scripts can only import packages you pass to `Compile`/`Link`; `evmstd` excludes all I/O, network, and OS APIs. | Audit the capabilities exposed by your own host packages. |
+| **Slow or blocked host I/O** | Polls `ctx` at 256-step checkpoints and around external calls. | Honor `c.Context` inside every native host callback and set timeouts on external I/O. |
+| **Escaping a borrowed DB record** | Compiler ownership analysis inserts budgeted `Own` copies before any borrowed value escapes its scope or survives invalidation. | Declare accurate `OwnershipEffects` (or `//evm:borrow-bytes`) on host APIs; `Link` checks consistency, not host implementation honesty. |
+| **Partial side effects on failure** | Uncaught errors invalidate the VM (`ErrInvalidState` until `Reset()`) and suppress entry results. | Roll back database transactions and release host resources on error—EVM never rolls back host state. |
+| **Malicious hand-crafted bytecode** | `Link` validates indices, layouts, and control-flow edges, but cannot prove arbitrary raw pointer provenance. | **Always accept Go source** through `evmcompiler.Compile`; never accept untrusted pre-compiled `Module`s. |
+
+> **Key takeaways — Chapter 8**
+> - A `*evm.Program` is immutable and shared; a `*evm.VM` is a single-goroutine session that initializes globals once and persists them across calls until `vm.Reset()`.
+> - Fuel counts *down* and polls `ctx` on `remaining&255 == 0`, giving exact step limits with one context check every 256 dispatches; `NarrowBudget` lets host transactions tighten budgets temporarily.
+> - Allocation meters charge cumulative reservations *before* allocating Go memory.
+> - Language faults unwind through script `defer`/`recover`; budget, cancellation, and host errors trap immediately and invalidate the VM until `Reset()`.
+> - Execution coverage selects a separate generated interpreter at call entry—zero overhead when disabled, with line/branch normalization across compiler optimizations.
+> - EVM is a capability and resource sandbox for Go *source*: the VM enforces API surface, step/memory budgets, and borrow safety, while the host owns transaction rollback and `ctx` cancellation inside native callbacks.
+
+Now let's open the lid on `VM.execute` and watch the interpreter loop itself
+run instruction by instruction.
+
+## 9. Inside the bytecode evaluator
+
+Everything we have built so far—the two-word values, overlapping register
+windows, validated bytecode, and fuel counter—converges in one Go function:
+`VM.execute`.
+
+### 9.1 Register banks, call frames, and the dispatch loop
+
+To watch a real call and return, let's bring back `SumThenDouble(2, 5)`
+compiled with `NoOptimization: true` (so `sum` stays a separate frame):
 
 ```go
 func sum(x, y int) int {
@@ -3109,7 +4303,7 @@ func SumThenDouble(x, y int) int {
 }
 ```
 
-The VM stores register contents in two Go slices. These are the fields used by the instruction loop, selected from `VM`:
+The interpreter's hot state lives in just four fields of `VM`:
 
 ```go
 type VM struct {
@@ -3121,11 +4315,12 @@ type VM struct {
 }
 ```
 
-Each active function has a frame. Its `function` indexes the program's function table, and its `pc` indexes the next instruction within that function. The frame’s `rb` and `pb` are offsets into the two slices. A register named `r2` in the listing means `vm.r[cur.rb+2]`. A pair named `v2` uses that word and `vm.p[cur.pb+2]`. A saved frame holds offsets. The dispatch loop takes local slices starting at those offsets when it enters or resumes a frame. If a callee grows a bank, resuming the caller builds fresh slices from the current backing arrays.
-
-At entry, `execute` grows the register spans, clears the pointer span and copies each argument to its parameter slot. Debug mode also clears the raw span. In optimized mode a link-time proof can skip that clear. For this call the raw bank starts with `vm.r[0] = 2` and `vm.r[1] = 5`. Both frame bases start at zero. The first bytecode instruction is `const r4 wrd0`. It loads the multiplier 2 from the program’s word table into slot 4.
-
-The following is the main loop in `VM.execute`, with selected cases. The same loop executes the caller and callee. Each ordinary case writes its result and falls through to the next iteration.
+Each active `frame` stores its `function` index, its next `pc`, and its base
+offsets `rb` and `pb` into `vm.r` and `vm.p`. Why store integer *offsets*
+instead of sub-slices? Because a deep callee might grow `vm.r` or `vm.p` to a
+new backing array; storing offsets means resuming a caller simply re-slices
+`vm.r[cur.rb:]` and `vm.p[cur.pb:]` once at `resumeFrame`, and every arithmetic
+instruction inside the loop pays zero base-addition overhead:
 
 ```go
 resumeFrame:
@@ -3163,24 +4358,14 @@ for {
 }
 ```
 
-For `const r4 wrd0`, A is 4 and BC is 0. The switch selects `OpConst`, reads `words[0]`, and writes `vm.r[4]`. For `add.i64`, all three fields select registers. Nothing in a raw register says whether it holds an integer or float. The opcode determines which Go operation runs.
+Notice how clean that loop is: `cur.pc++` happens *before* the switch, so
+branches add displacements to the next word and calls save the already-advanced
+resume PC. And nothing in `r[a]` carries a type tag—the opcode alone decides
+how to interpret those 64 bits.
 
-Fetch increments `cur.pc` before the switch. A conditional branch therefore adds its signed displacement to the address of the next instruction. A script call saves that already-advanced PC so the caller can resume just after the call. The operand indices in the switch are relative to the current windows. A sequence of arithmetic instructions pays for slicing the banks once on frame entry.
+### 9.2 Tracing a call and return across frames
 
-### 9.2 Following a call through both frames
-
-Here is the script again. Compile it with `NoOptimization: true` to keep `sum` as a separate frame. Calling `SumThenDouble(2, 5)` must preserve the multiplier while `sum` runs.
-
-```go
-func sum(x, y int) int {
-    return x + y
-}
-
-func SumThenDouble(x, y int) int {
-    return 2 * sum(x, y)
-}
-```
-Here is the debug listing for both functions, with source-line comments omitted. PC numbering starts at zero in each function. The destination is the first operand.
+Here is the unoptimized bytecode for `SumThenDouble` and `sum`:
 
 ```text
 fun1 SumThenDouble   R=5 P=0
@@ -3199,7 +4384,9 @@ fun2 sum   R=3 P=0
   2  ret
 ```
 
-The header `R=5` means that `SumThenDouble` owns slots 0 through 4. PC 0 loads the multiplier into R4. PCs 1 and 2 copy x and y into the outgoing slots R5 and R6. At PC 3 the VM enters `fun2` with a raw base of 5 and saves the caller with resume PC 4. On the first call it may have to grow the raw bank or the stack. Subsequent calls to this scalar function can install the same frame directly in the dispatch loop.
+At entry, `vm.r[0] = 2` and `vm.r[1] = 5`. PC 0 loads `2` into `r4`; PCs 1–2
+stage `x` and `y` into `r5` and `r6`. When PC 3 calls `sum`, the two frames
+overlap directly in `vm.r`:
 
 ```text
 physical index in vm.r     4     5     6
@@ -3209,7 +4396,23 @@ sum register                    r0    r1
                                 x     y
 ```
 
-On a cold call, `enterCode` reserves the callee’s windows and saves the caller. The excerpt omits its depth and allocation checks.
+```mermaid
+flowchart LR
+    subgraph Caller["SumThenDouble (rb = 0)"]
+        C0["r0..r4: own locals<br/>(vm.r 0..4)"]
+        C1["r5..r6: outgoing args<br/>(vm.r 5..6)"]
+    end
+    subgraph Callee["sum (rb = 5)"]
+        S0["r0..r1: params x, y<br/>(same vm.r 5..6)"]
+        S1["r2: local x+y<br/>(vm.r 7)"]
+    end
+    C1 -->|rb slides 0 -> 5<br/>zero copy| S0
+    S0 -->|ret writes r0 = 7<br/>caller reads r5| C1
+```
+
+On a cold call, `enterCode` slides `rb` and `pb` forward, grows the banks if
+needed, clears pointer locals (and raw locals unless the linker proved
+`definedRaw`), pushes the caller onto `vm.stack`, and swaps in `next`:
 
 ```go
 next := frame{function: int(ref.Index), rb: cur.rb + f.RCount,
@@ -3225,20 +4428,22 @@ vm.stack[size] = *cur
 return nil
 ```
 
-For this debug build the VM clears the callee’s locals after its parameters. The arguments remain in slots 5 and 6. The interpreter enters `resumeFrame` with the new frame and fetches from `sum` at PC 0. The slot numbers in the effect column below are physical indices into `vm.r`.
+Follow the physical indices in `vm.r` across the entire call:
 
-| Fetched word | Raw base | Effect |
-|---|---:|---|
-| caller PC 3: `call.func fun2` | 0 → 5 | Save the caller with resume PC 4. |
-| sum PC 0: `add.i64 r2 r0 r1` | 5 | Slot 7 gets slot 5 + slot 6, or 7. |
-| sum PC 1: `move.r r0 r2` | 5 | Copy 7 from slot 7 into slot 5. |
-| sum PC 2: `ret` | 5 → 0 | Restore the caller. Slot 5 holds 7. |
-| caller PC 4: `move.r r2 r5` | 0 | Copy slot 5 into slot 2. |
-| caller PC 5: `mul.i64 r3 r4 r2` | 0 | Slot 3 gets 2 × 7. |
-| caller PC 6: `move.r r0 r3` | 0 | Copy 14 into slot zero. |
-| caller PC 7: `ret` | 0 | Write the application’s result and finish. |
+| Fetched instruction | Raw base | Effect on `vm.r` |
+| --- | ---: | --- |
+| caller PC 3: `call.func fun2` | 0 → 5 | Push caller with resume PC 4. |
+| `sum` PC 0: `add.i64 r2 r0 r1` | 5 | `vm.r[7] = vm.r[5] + vm.r[6]` (`7`). |
+| `sum` PC 1: `move.r r0 r2` | 5 | `vm.r[5] = vm.r[7]` (`7`). |
+| `sum` PC 2: `ret` | 5 → 0 | Pop caller; `vm.r[5]` still holds `7`. |
+| caller PC 4: `move.r r2 r5` | 0 | `vm.r[2] = 7`. |
+| caller PC 5: `mul.i64 r3 r4 r2` | 0 | `vm.r[3] = 2 × 7` (`14`). |
+| caller PC 6: `move.r r0 r3` | 0 | `vm.r[0] = 14`. |
+| caller PC 7: `ret` | 0 | Copy result to host and exit `execute`. |
 
-On a nested return, these lines restore the saved instruction stream:
+On a nested `ret`, the VM clears dead pointer slots past the result prefix,
+pops the caller frame, checks whether the caller was in the middle of draining
+defers, and jumps back to `resumeFrame`:
 
 ```go
 if f.pSize > f.results.PCount {
@@ -3252,11 +4457,12 @@ if cur.mode != drainNone {
 goto resumeFrame
 ```
 
-The pointer clear releases references outside the result prefix. `resumeFrame` restores the caller’s function and register windows. The top-level return at PC 7 takes another branch. The stack is empty, so the interpreter copies results out of those windows according to the function’s linked result layout and returns from `execute`.
+### 9.3 Executing comparisons, strings, loads, and extended ops
 
-### 9.3 Instructions that need more than a word
+Different opcode families plug into the same switch cleanly:
 
-A comparison illustrates how EVM uses the opcode to interpret the bits in a register. These cases read the same two slots and store a boolean word in the same destination:
+- **Typed comparisons** read identical register slots and let the opcode decide
+  signedness or IEEE-754 semantics:
 
 ```go
 case OpLtI64:
@@ -3267,9 +4473,8 @@ case OpEqF64:
     r[a] = boolWord(math.Float64frombits(r[b]) == math.Float64frombits(r[c]))
 ```
 
-With all bits set in the left operand and zero in the right, signed comparison asks whether −1 is less than zero. Unsigned comparison asks whether the largest unsigned word is less than zero. A float comparison first decodes each bit pattern. The opcode gives the raw bits their meaning.
-
-String operations read both banks. In `concat.str v4 v5 v3`, the length and data pointer for the left operand come from V5. V3 supplies the right operand. Here is how the interpreter reads the operands and writes the result, with the budget checks abbreviated:
+- **Strings** read and write both banks (`concat.str` charges the combined byte
+  length before concatenating):
 
 ```go
 x := (values.Value{R: r[b], P: p[b]}).AsString()
@@ -3279,7 +4484,8 @@ v := values.String(x + y)
 r[a], p[a] = v.R, v.P
 ```
 
-A load reads script memory. For `load r2 p1 shp0`, B selects the pointer register containing the address. C selects a *shape*, the linked description of how to read the value at that address. This is the full load case:
+- **Memory loads** check `nil`, snapshot aggregates via their shape, and write
+  to the shape's register bank(s):
 
 ```go
 case OpLoad:
@@ -3295,13 +4501,13 @@ case OpLoad:
     vm.write(cur, Operand{uint16(a), shape.Type.Repr()}, v)
 ```
 
-For an integer, the shape reads a word and `vm.write` places it in R2. For a struct value, `snapshot` copies its cells before the destination receives the pointer to the copy. Otherwise, assigning the loaded struct to another variable could make later changes to the original visible through that variable. A nil address takes the fault path before the read.
-
-Some instructions need more operands than fit in the word. For example, `v, ok := m[k]` needs two inputs and two outputs. The compiler records their slots and representations in an extended operation descriptor. The interpreter fetches the descriptor indexed by BC. Record operations have a separate handler for modeled access and mutable-editor scope checks. A map lookup goes through the ordinary extended handler:
+- **Extended operations** (`OpExtended`) handle anything needing extra operands
+  or shapes (like `v, ok := m[k]` or KVO record ops) by indexing
+  `vm.program.extendedOps[ins.BC()]`:
 
 ```go
 case OpExtended:
-    // ... a marked word re-enters a float loop plan (§10.9) ...
+    // ... a marked word re-enters a float loop plan (§10.6) ...
     op := &vm.program.extendedOps[ins.BC()]
     if op.Kind == ExtendedGetKey || op.Kind == ExtendedSetKey ||
         op.Kind == ExtendedGetChildKey /* ... or a record list kind ... */ {
@@ -3314,7 +4520,9 @@ case OpExtended:
     }
 ```
 
-For a lookup, `get(0)` reads the map from the first input slot and `get(1)` reads the key from the second. The handler uses the hash it computed for that key:
+Inside `ExtendedLookup`, both single-result and comma-ok forms share one
+implementation—writing zero on a miss and filling output 1 only when `ok` was
+requested:
 
 ```go
 case ExtendedLookup:
@@ -3333,11 +4541,11 @@ case ExtendedLookup:
     }
 ```
 
-A miss leaves `v` at its zero value. Both forms of lookup write that value to output zero. Only the comma-ok form has a second output for the boolean.
+### 9.4 Virtual dispatch, direct host calls, and unwinding
 
-### 9.4 Virtual calls, external calls and faults
-
-For `ctx.Credit(n)`, where `ctx` has interface type `h.Context`, the compiler puts the interface in outgoing slot zero, stages n in the next raw slot and emits `call.virt mth0`. The descriptor `mth0` identifies the method and its signature. The VM reads the concrete type ID from the raw slot to select an implementation. Here `r` and `p` already start at the caller’s bases. Its local counts give the two offsets to the outgoing window. The interpreter resolves the method and overwrites the packed interface with the concrete receiver (error handling omitted):
+- **Virtual calls (`call.virt`):** The caller stages the interface in outgoing
+  slot 0 (`r[rb]`, `p[pb]`). The VM resolves the concrete method from the
+  dynamic type ID and overwrites slot 0 with the concrete receiver in place:
 
 ```go
 rb, pb := f.RCount, f.PCount
@@ -3347,9 +4555,13 @@ ref, receiver, err = vm.resolveInvoke(
 r[rb], p[pb] = receiver.R, receiver.P
 ```
 
-If the resolved target is script code, `enterCode` sees its concrete receiver already in incoming slot zero. If the target is native, `invokeNative` exposes the outgoing window to the Go wrapper and returns to the current loop. A native method that no instruction calls is not among the imports that `call.host` indexes: the module lists it in `MethodImports`, and the program keeps it in a second table that only method tables refer to. Programs linked through one prepared link environment share that table. In both cases the caller resumes at the instruction following `call.virt`.
-
-For a concrete pointer receiver the compiler already knows the method. Take `call.host.method.su v3 p4 imp6`, a tag check returning a boolean. The linker binds import 6 to the wrapper and its operand description. In the interpreter’s private instruction stream the opcode becomes `opCallDirect`. `invokeDirect` reads the two inputs from the caller’s register arrays.
+  If the target is script code, `enterCode` sees the receiver already in slot
+  0; if it is native, `invokeNative` runs the Go wrapper (native methods only
+  referenced by method tables live in `MethodImports`, shared across programs
+  linked from one prepared link environment).
+- **Direct register calls (`opCallDirect`):** For concrete pointer methods like
+  `call.host.method.su v3 p4 imp6`, the linker rewrites the opcode to a single
+  private handler that reads inputs straight from `r` and `p` (even if `a == b`):
 
 ```go
 g := &vm.program.natives[ins.C()]
@@ -3359,78 +4571,161 @@ x = hostArg(h.receiver, b, r, p)
 y = hostArg(h.first, a, r, p)
 ```
 
-The wrapper gets X (the receiver) and Y (the complete string). After it returns successfully and the cancellation check passes, the VM writes the boolean to R3 and clears P3. If A and B coincide, the wrapper still sees both original inputs.
+- **Faults and unwinding:** Any `goto fault` checks `isLanguageError`, starts
+  panic unwinding, and enters `drain`, which runs deferred script calls one by
+  one. Because each frame stores both a `pc` and a drain `mode`, returning from
+  a deferred function sends control straight back to `drain` instead of normal
+  instruction fetch—until either `recover()` resumes the parent or the stack
+  unwinds cleanly out to the host.
 
-If `load` encounters a nil address, it jumps to the fault handler:
+> **Key takeaways — Chapter 9**
+> - `VM.execute` keeps the hot working set in local Go variables (`r`, `p`, `cur`, `remaining`, `f`) so the Go compiler keeps them in CPU registers across dispatches.
+> - Function calls and returns advance or restore `cur.rbase`/`cur.pbase` without copying arguments or results—the caller's outgoing window *is* the callee's register 0.
+> - Common scalar, branch, load, and direct-host ops execute inline in the main switch; heavier operations delegate to `OpExtended` (`ext*`) so the switch stays compact.
+> - Frame drain modes let `defer` and `recover` unwind through the exact same call stack without Go-level recursion.
 
+Now that you know how the whole evaluator works, Chapter 10 tells the story of
+how we made it fast—and the surprising lessons along the way.
+
+## 10. Compiler and VM optimizations
+
+Writing a fast interpreter in Go is an exercise in working with—rather than
+against—the Go compiler. You do not have C's computed `goto`, you cannot write
+portable assembly jump tables across the whole VM, and every bytecode
+instruction pays for a pass through a `switch` statement. Yet EVM runs 6–15×
+faster than Yaegi, 3–12× faster than GopherLua, and matches or beats native C
+Lua 5.5 on several compute workloads.
+
+That speed does not come from one magic trick. It comes from attacking the five
+places where an embedded VM actually spends its time:
+
+1. **Redundant work** (repeated expressions, tiny helper calls, repeated bounds
+   checks).
+2. **Dispatch count** (how many instructions the interpreter fetches per loop
+   iteration).
+3. **Memory layout and frame traffic** (register clearing, cell width, slice
+   stride).
+4. **Host boundary crossings** (staging arguments into call windows or going
+   through reflection).
+5. **Data decoding** (unpacking whole Go structs just to read two fields).
+
+This chapter walks through EVM's optimizations by technique—the same way a
+compiler book breaks down its pass pipeline—explaining the bottleneck, the
+analysis and transformation, the subtle edge cases, and the experiments that
+failed along the way.
+
+All measurements below come from November 2026 on an Apple M5 Max with Go
+1.27.3; [benchmarks.md](benchmarks.md) holds the full commit revisions, raw
+samples, and reproduction commands. Five workloads from
+`bench/internal/workload` recur throughout: **Price** (floating-point loan
+portfolio over 3,840 payments), **Scan** (128 sensors × 2 host calls), **Fib**
+(recursive Fibonacci), **Sieve** (prime sieve over ~5,000 flags), and
+**Mandelbrot** (floating-point orbit). Database and Bolt numbers come from EDB,
+the embedded database built on KVO.
+
+### 10.1 Local compiler optimizations: CSE, identities, inlining, and checked loads
+
+Before a single loop or instruction-fusion pass runs, the compiler cleans up
+redundant work inside each basic block. Watch what happens to a fee calculation
+that calls a tiny helper twice with the same arguments:
+
+<!-- listing: Invoice | Invoice(7, 3)==42 -->
 ```go
-if p[b] == nil {
-    failure = ErrNil
-    goto fault
+func charge(quantity, price int) int {
+    return quantity * price
+}
+
+func Invoice(quantity, price int) int {
+    first := charge(quantity, price)
+    return first + charge(quantity, price)
 }
 ```
 
-At `fault`, a language error starts script panic handling. The loop then enters `drain`, which advances deferred calls and unwinding. If a deferred script function must execute, the VM resumes fetching its code with that frame current. On its return the saved frame's drain mode sends control back to the unwinder. This is why a frame holds both a PC and a mode: after a call, ordinary execution resumes at a word, while unwinding resumes a piece of interpreter work. A failed budget checkpoint instead returns a trap directly, as described in chapter 8.
+<!-- bytecode -->
+```text
+fun1 Invoice   R=3 P=0
+     ; Invoice.go:2      return quantity * price
+  0  mul.i64       r2 r0 r1
+     ; Invoice.go:7      return first + charge(quantity, price)
+  1  add.i64       r0 r2 r2
+  2  ret
 
-## 10. What makes a script fast
+fun2 charge   R=2 P=0
+     ; Invoice.go:2      return quantity * price
+  0  mul.i64       r0 r0 r1
+  1  ret
+```
+<!-- /bytecode -->
 
-This chapter holds two kinds of statement. The mechanisms describe the
-current compiler, linker and evaluator. The timings are measurements from
-November 2026 on an Apple M5 Max with Go 1.27.3. Each shows what a mechanism
-bought when it was added, so the tables of later sections supersede earlier
-ones; §10.11 has the latest. The [benchmark report](benchmarks.md) keeps
-revisions, inputs and commands.
+Two calls, a helper frame, and two multiplications collapsed into three
+instructions—`mul.i64`, `add.i64`, `ret`—while `charge` still keeps its own
+compiled body for external callers or indirect references. Four small passes
+cooperate to make this happen:
 
-Five scripts recur, all in `bench/internal/workload`. **Price** values a
-portfolio of loans with floating-point arithmetic. **Scan** reads 128 sensors
-through 256 external calls. **Fib** is recursive Fibonacci. **Sieve** strikes
-multiples in a slice of flags. **Mandelbrot** iterates a floating-point orbit.
+- **Local value numbering (CSE):** Within a single basic block, the compiler
+  maintains a value-number table keyed by `(operation, Go type, ordered SSA
+  operands)`. Pure operations and calls to local, single-block scalar helpers
+  with identical arguments reuse the first result. Memory loads (`*p`) never
+  enter this table because an intervening call or aliased store could change
+  the pointee.
+- **Integer algebraic identities:** The same pass folds safe integer identities
+  with exact Go wraparound—for example, `z := x ^ x` feeding
+  `int8(z + 126) + 4` folds straight to `-126`. It is careful never to delete
+  side effects or potential traps: `effect() * 0` still calls `effect()`, and
+  `(3 / x) * 0` still checks `x == 0`. Integer identities are never applied to
+  floating-point values, where signed zero and `NaN` break ordinary algebra.
+- **Leaf scalar inlining:** A local function qualifies if it has a single basic
+  block, returns one scalar, has at most five body instructions before `ret`,
+  and contains only trap-free, side-effect-free arithmetic, comparisons, or
+  conversions. Each caller gets a conservative 64-word growth budget, literals
+  used inside the inlined body hoist into the caller's prologue (loading once
+  even inside a loop), and scratch slots die at the end of the inline site so
+  the next site can reuse them.
+- **Return-slot forwarding:** When the last scalar operation before `ret` has a
+  single use—the return itself—it writes straight into `R0` instead of a
+  temporary followed by `move.r r0 rX`. In Chapter 5's `uint8` addition, that
+  shrinks the function from four words to three and its frame from three raw
+  registers to two (verified across all 65,536 `uint8` input pairs).
 
-The record examples of §10.1 and §10.3, and every timing that mentions a
-database, a transaction or Bolt, come from EDB, a database built on KVO. Its
-benchmarks run scripts over stored rows and live in the edb repository, as do
-the commits this chapter names.
+#### Reusing checked slice reads
 
-### 10.1 Follow one row
+Numeric code often indexes the exact same slice element twice in one
+expression:
 
-A scan can score rows without building native customers:
-
+<!-- listing: Energy | Energy([]float64{2,3},1)==9 -->
 ```go
-for c := rows.Next(); c != nil; c = rows.Next() {
-    if c.active {
-        sum += c.profile.balance * c.profile.rate
-    }
+func Energy(a []float64, i int) float64 {
+    first := a[i]
+    return first * a[i]
 }
 ```
 
-The host advances a cursor and returns a typed record pair. The script reads only
-the selected fields. Local reads allocate nothing after metadata setup; opening
-a transaction/cursor can still allocate. Measure those costs separately.
-
-A fused `GetChildKey` can read a child and its scalar in one dispatch. Reusing the
-same child for adjacent reads can also share traversal. The model determines
-scalar interpretation; the record determines encoded/native access. This avoids
-full row decoding but does not make every format equally fast.
-
-No immutable read arena is involved. The compiler copies a record when it must
-survive an escape or invalidation boundary. Incorrect host effect declarations
-can leave a dangling borrow; read instructions do not repair that contract.
-
-For writes, a universal indexer can read the edited record directly:
-
-```go
-b.SetIndexer(func(key uint64, row kvo.Record, ib *edb.IndexBuilder) {
-    profile := row.Child(row2.Step{Key: 9})
-    ib.Add(byBalance, profile.GetValue(5).AsUint())
-})
+<!-- bytecode -->
+```text
+fun1 Energy   R=3 P=2
+     ; Energy.go:2      first := a[i]
+  0  load.index.r  r2 v0 r1
+     ; Energy.go:3      return first * a[i]
+  1  mul.f64       r0 r2 r2
+  2  ret
 ```
+<!-- /bytecode -->
 
-Save validates the row and updates its indexes atomically. An observer requesting native rows can require full decoding. Keep domain save helpers when they maintain
-additional state. Fast property reads do not remove that work.
+Because the slice header (`v0`) and index (`r1`) are identical SSA values with
+no intervening store or call, the second `a[i]` reuses `r2` without repeating
+the bounds check or memory load. A store through *any* slice or pointer, or any
+function call, clears the block-local read table conservatively so aliased
+writes are always observed—and an out-of-bounds index still faults at the first
+read.
 
-### 10.2 Remove work from every trip around a loop
+### 10.2 Loop optimizations: slot reuse, hoisting, fusion, and unrolling
 
-Consider a different loop, an iterative Fibonacci:
+Loops are where programs spend 90% of their time, so every redundant move or
+dispatch inside a loop body hurts disproportionately.
+
+#### Eliminating phi copies with loop-slot reuse
+
+Consider an iterative Fibonacci loop:
 
 ```go
 a, b := 0, 1
@@ -3439,7 +4734,10 @@ for ; n > 0; n-- {
 }
 ```
 
-The loop header needs three values from its predecessor: the new n, a and b. The old compiler copied all three into temporaries and then copied all three back. Here is the arithmetic and copy sequence in the current listing, with the header test and jump omitted:
+In SSA, the loop header merges `n`, `a`, and `b` from the entry edge and the
+back edge using three `phi` nodes. A naive lowerer copies all three updated
+values into temporaries and then copies all three back into the phi slots on
+every iteration. EVM's lowerer cuts the body to four instructions:
 
 ```text
 add.i64      r1 r4 r6   ; sum = old a + old b
@@ -3448,13 +4746,31 @@ move.r       r4 r6      ; a = old b
 move.r       r6 r1      ; b = sum
 ```
 
-Two decisions produce those four instructions. First, the use of old n ends at the subtraction. On a single-successor back edge, the lowerer lets scalar arithmetic write directly into the loop variable if later instructions and the other edge assignments no longer need its old value. The sum still needs a temporary: old b is needed for the assignment to a. Second, each simultaneous copy goes straight to its destination unless an earlier destination would clobber its source. For a real swap one source goes to scratch *before* either destination is written. The check distinguishes R, P and V: writing r2 can destroy the word of v2 without touching p2.
+Two rules do the work:
 
-The same emitter schedules returns and control transfers. A block with only one successor makes its edge copies inline. A branch can fall through to the next block, or reverse its sense to put the right successor there. If `a != b` is used only by that branch, the compiler emits equality and reverses the successors instead of computing a second boolean. Equal scalar or string literals of the same type share a prologue slot. Extracting one component of a tuple reuses the component's slot. A call still executes when the caller discards a result, but the caller need not copy that result home.
+1. **In-place loop-slot reuse (`reuseLoopSlots`):** On a single-successor back
+   edge, if a scalar update is the last read of its phi variable—and no other
+   phi's incoming value still needs the old value—the arithmetic writes straight
+   into the phi's register (`r3`). Here `a+b` must still use `r1` because `r6`
+   holds the old `b` needed by `move.r r4 r6`.
+2. **Conflict-free parallel copies (`parallelCopy`):** Remaining phi moves run
+   directly in order without scratch registers unless an earlier destination
+   would clobber a later source's bank (`R` and `P` are tracked separately).
+   For a true swap (`a, b = b, a`), one source saves to a temporary first.
 
-There is a second saving beneath these passes. The interpreter takes the R and P slices from the base of the active frame once. The implementing line for `add.i64` is simply `r[a] = r[b] + r[c]`. Entering or resuming a frame rebuilds the slices, since an intervening call can grow their backing arrays. We also tried keeping a second program counter local to the dispatch loop. It helped the arithmetic workload slightly, but gave no consistent advantage on the record workloads and had to be synchronized with the saved frame for calls and faults. The frame keeps the only program counter. The remaining instruction count stays local across frame changes. A general external call synchronizes the count so any guest callbacks spend the same allowance. On the M5, Go compiles the mask to an extraction of the low eight bits and a branch if they are nonzero. The previous meter loaded and stored a shared budget field on each instruction. Returning to the run driver also saves the count, so the entry uses whatever the package initializer left.
+The same idea extends to loops with an early `break`, like `Mandelbrot`'s orbit
+loop: if the compiler proves the early-exit path does not read the old
+coordinates, all four coordinate updates overwrite their phi registers in
+place—eliminating every phi copy so the back edge jumps straight back to the
+math.
 
-A counted loop can eliminate the separate increment, comparison and branches. Here is a complete example. An empty range still returns zero.
+#### Loop-bound hoisting and counted-loop fusion
+
+In a loop like `for i := base; i < base+128; i++`, SSA puts `base+128` inside
+the loop header. When both operands are already available in the unique
+pre-header block (no memory read, no call, no changing bound), the compiler
+hoists the addition out of the loop. That leaves the header with nothing but a
+single comparison—which unlocks **counted-loop fusion**:
 
 <!-- listing: SumRange | SumRange(1, 6) == 15 && SumRange(3, 2) == 0 -->
 ```go
@@ -3487,126 +4803,143 @@ fun1 SumRange   R=8 P=0
 ```
 <!-- /bytecode -->
 
-PCs 3–4 test the initial range. For `SumRange(1, 6)`, PC 5 adds 1 to the sum. At PC 6, `loop.lt.i64` increments R4 to 2, compares it with the signed limit in R1, and jumps back to PC 5. When R4 becomes 6, execution falls through to the return. The compiler requires the header to do only that comparison and the increment to be the last emitted operation on the back edge. A call in the loop condition, for example, must still run on every test. If the body is too far for the signed 16-bit branch, the compiler keeps the ordinary sequence.
+PCs 3–4 guard the empty-range case once before entry. Inside the loop, PC 6
+(`loop.lt.i64`) increments `r4`, compares `r4 < r1`, and branches back to PC 5
+in **one dispatch** instead of four (increment, jump, compare, branch). On
+`Price`, that alone cut loop overhead from four dispatches per payment down to
+one. `loop.le.i64` handles inclusive bounds, and `loop.add.lt.i64` /
+`loop.add.le.i64` handle non-unit steps (like striking multiples of prime `p`
+in `Sieve`).
 
-The pricing workload has six arithmetic operations per payment. Loop control used to add four dispatches: integer increment, backward jump, less-than, and conditional exit. With the fused back edge it adds one. A fused word consumes one instruction from the budget and keeps the first operation's source position.
+> **Subtle pass interaction:** Early on, CSE commoned an `i+1` inside a loop
+> body with the loop's own `i++`—accidentally hiding the trailing increment
+> from loop fusion and slowing the variance benchmark by **8.7%**! Keeping the
+> trailing induction add un-commoned on back edges restored fusion and recovered
+> the regression completely.
 
-### 10.3 Follow one write
+#### Bounded constant-trip unrolling
 
-```go
-edit := m.Customer.Edit(tx, c.id)
-edit.revision = revision
-edit.profile.balance = c.id*edit.profile.rate + revision
-tx.Put(c.id, edit)
-```
+For tiny fixed-trip arithmetic loops (`for lane := 0; lane < 4; lane++` with
+2–4 constant trips, unit step, ≤16 arithmetic words, no early exit, memory ops,
+or calls, capped at 48 words of growth per function), the compiler emits the
+unrolled copies directly, folding additions with `lane` into `add.imm.i64`
+literals while keeping the exit value of `lane` intact. Every unrolled word
+still consumes fuel and keeps its source position.
 
-The external Edit function opens a `row2.Editor` over the row in the transaction. The script sets two properties, calls Put, then reads back `balance` to compute the checksum. Each child handle carries its parent and key, so a saved handle finds the current contents even if a write rebuilt the root.
+### 10.3 Instruction fusion and superinstructions
 
-Consider the second transaction through the same Fast row. Both `revision` and `profile.balance` already have eight-byte cells. The first write copies the borrowed row into private storage. The second write finds the nested cell and replaces eight bytes in that same copy. On the first transaction, adding the missing revision changes the directory, so the writer emits a new root and copies the untouched profile span. Compact edits use the writer even when both properties already exist. The transaction reuses the writer's directory scratch across rows.
+Even outside loop headers, combining two or three adjacent hot operations into
+one 64-bit instruction word directly cuts dispatch overhead:
 
-```go
-_, err = h.tx.SaveRecord(origin.edit)
-```
-
-Save checks the stored row against the version that was opened. For a Fast or Compact edit, the KV indexer reads the edited bytes directly and EDB writes them into the normal row envelope. A MessagePack edit rewrites encoded maps along the changed path. Its KV indexer can read those bytes directly, and record notifications borrow the same encoded payload. Notifications requesting Go structs decode independently at the notification boundary. The edit remembers the saved version for a second Put. `Snapshot()` gives up the editor’s right to patch the previously returned bytes. A script can edit the same handle again after Put. Its next write must produce independent bytes.
-
-On the write benchmark each transaction visits 512 customers, edits 410, and commits once. Mutable editors, encoded output and storage-owned data can allocate. Scoped edit tokens prevent reuse after closure; immutable records use direct typed pairs. Count these costs separately from allocation-free property reads.
-
-### 10.4 What the benchmarks say
-
-Measure the work callers do: sparse reads, full decoding, repeated access,
-retention, writes and index maintenance. Include transaction setup for database
-claims. Exclude compilation only when the application reuses compiled programs.
-Report allocations and bytes alongside elapsed time.
-
-The [benchmark report](benchmarks.md) retains dated comparisons, source
-revisions, workload sizes and commands. Historical runs used older record
-adapters and sometimes disabled Bolt sync. Their times are not current durable
-write latency. Small local timing differences need repeated paired runs;
-allocation changes are often clearer.
-
-### 10.5 What a sieve asks of the machine
-
-The prime sieve creates a fresh slice, fills it with true, then strikes the multiples of each prime. Consider one assignment inside that last loop.
-
-```go
-flags[k-1] = false
-```
-
-Originally this emitted a subtraction, an `IndexAddr` descriptor and a typed store. The address only lives until the next instruction. The current compiler emits a checked `store.index.byte` for this local slice of flags. It compares the unsigned index with the 32-bit length, so a negative index and an index into spare capacity both fault. A cell-backed raw slice passed by the application uses `store.index.r` instead. Both implement the same Go assignment.
-
-The Mandelbrot loop computes the next real and imaginary coordinates and their squares. It can break before the increment. When the compiler sees a body entered only from the header and a latch entered only from that body, it can write a new coordinate into the old coordinate’s register after its last use. It checks the early exit too. If the exit returns the old coordinate, the values need distinct registers. On the benchmark all four copies disappear and the increment can branch straight back to the arithmetic.
-
-The recursive Fib benchmark exercises a different path. Each recursive call must save the caller’s PC, R/P bases and unwind state. `enterCode` used to receive the frame by value and return a new one by value. It saves the caller in the VM stack and installs the child through a pointer to the current frame. A warm register window skips the growth helper. For a direct call to a function with no pointer slots or captures, the dispatch loop can install the frame itself. It checks the depth and raw slot limits in force for this run, even if a previous run grew larger buffers. The linker can prove that incoming parameters suffice and skip the raw clear. A warm call advances the caller’s existing register slices and enters dispatch with the known callee. A cold call, a transparent recovery wrapper or a call requiring pointer storage takes the ordinary entry path.
-
-### 10.6 Built for small operands
-
-The price calculation used to send each floating-point multiply and add through dispatch separately. Consider one payment.
-
-```go
-total += (principal + balance*coupon) * factor
-```
-
-The compiler sees two single-use products. In the benchmark listing the expression takes two words.
+- **Four-register fused float arithmetic (`ABCD12`):** In `Price`,
+  `total += (principal + balance*coupon) * factor` has two single-use products
+  and lowers to just two 4-operand words:
 
 ```text
 add.mul.f64 r35 r18 r28 r24
 add.mul.f64 r27 r27 r35 r29
 ```
 
-The first produces `principal + balance*coupon` in R35. The second updates the total in R27. Each word encodes four registers in the ABCD12 layout. Both operations preserve intermediate rounding. With `x = 1 + 2⁻²⁷` and `y = 1 − 2⁻²⁷`, computing `x*y + (-1)` in two operations gives zero. A hardware FMA would give −2⁻⁵⁴. The interpreter explicitly converts the product to float64 before adding, which prevents Go from contracting the expression.
+  Crucially, the evaluator explicitly rounds the intermediate product to
+  `float64` before adding—preventing Go from contracting it into a hardware FMA
+  instruction, which would break exact Go IEEE-754 semantics (for
+  `x = 1 + 2⁻²⁷`, `y = 1 - 2⁻²⁷`, `x*y + (-1)` is `0` in Go, not `-2⁻⁵⁴`).
+- **Immediate offsets into outgoing slots:** Recursive calls like
+  `fibonacci(n-1)` compute an offset right before calling. `add.imm.i64`
+  encodes small signed 16-bit literals right in field `C` and—when the
+  subtraction is the last word before the call with no other user—writes
+  straight into outgoing slot 0, eliminating both a constant load and an
+  argument move.
+- **Link-time compare-and-branch fusion:** In its private copy of the bytecode,
+  the linker recognizes `lt.i64`, `le.i64`, `lt.f64`, or `eq.r` followed
+  immediately by a branch on that result (and likewise a direct external
+  predicate followed by a branch) and executes both in one dispatch. Because
+  the original PCs stay intact, a jump landing directly on the second word
+  still executes the standalone branch safely.
 
-For the sieve, the same four fields carry a different instruction. The inner loop uses register C for the step, which is the current prime. The compiler keeps the first test because the initial multiple can already exceed the limit. At the back edge it emits one instruction to add the step and test the inclusive bound. A zero step still exhausts the instruction budget.
+### 10.4 Memory layout and packed local slices
 
-The outer loop increments `count` only for a prime. The latch therefore receives either the old count or the incremented count. When the old value has no remaining reader, the compiler assigns the latch result the header’s register. The composite-number path has no copy left. It jumps straight to `loop.le.i64`, which increments the candidate and branches to the first instruction of the body. If another loop variable needs the old count, the compiler keeps separate slots.
+By default, every VM value lives in a 16-byte `(R, P)` cell—convenient for
+generic code, wasteful for a `[]bool` of 5,000 prime-sieve flags (80 KiB
+instead of 5 KiB!).
 
-A recursive call often computes its argument immediately before calling. In `fibonacci(n-1)`, the compiler puts −1 directly in C of `add.imm.i64`. When this subtraction has no other user and is the last word emitted, the destination can be the first outgoing slot. The caller skips both the constant load for this use and the move into the call window. Larger offsets use a pooled word.
+For local arrays and slices, the compiler runs an alias analysis across
+reslices, `phi` inputs, `append`, and `copy`. Whenever the entire alias group
+stays local to the function (never returned, never passed to another function,
+never stored in an aggregate, and no escaping `&s[i]`), the compiler switches
+the whole group to **packed storage**:
 
-Comparison and branch instructions keep separate PCs in the module. In its private copy the linker recognizes `lt.i64`, `le.i64`, `lt.f64` or `eq.r` immediately followed by a branch on the comparison result. The handler writes the boolean as before and consumes the following branch word in the same dispatch. A jump directly to that second PC still executes the ordinary branch. The fast pair costs one instruction from the budget.
+- `[]bool` and `[]byte` pack at **1 byte** per element.
+- Scalar integer and float slices pack at **8 bytes** per element.
+- `[]*T` packs at **8 bytes** per element using Go's write barrier:
 
-### 10.7 Passing external arguments in registers
+```go
+*(*unsafe.Pointer)(unsafe.Add(base, index*unsafe.Sizeof(base))) = value
+```
 
-A direct binding reads operands from the caller's registers and writes the result
-there. This avoids argument-window moves and reflective calls. Binary functions
-reuse A for the first input and result; the compiler copies a still-live input
-before the call. Pointer methods take their receiver from B.
+Paired with single-word checked indexing instructions (`load.index.byte`,
+`store.index.byte`, `load.index.word`, `store.index.ptr`), an assignment like
+`flags[k-1] = false` in `Sieve` drops from three steps (subtract, `IndexAddr`,
+`store`) to a single checked word—using one unsigned comparison against the
+32-bit length to catch both negative and out-of-bounds indices—and shrinks
+`Sieve`'s backing allocation from **81,920 bytes to 5,376 bytes** (a 15×
+reduction). Histogram and pointer-queue allocations dropped in half the same
+way.
 
-Generated native-pointer wrappers pass the actual Go address. VM-cell arguments
-may need temporary conversion/copyback. Immutable KVO returns use the pair
-convention; `RecordValue` constructs the value without an arena token.
+External and escaping slices stay cell-backed so callers sharing a buffer
+always agree on its layout, and two-bank elements like `string` keep cells
+(packing slices across the host boundary via a typed external slice API is
+**not yet done**). `len(text)` compiles to a raw move and `len(slice)` masks
+the low 32 bits of `R`.
 
-The linker stores operand descriptions with imports, so the interpreter can use
-one dispatch case for several public register forms. Imports beyond the 16-bit
-register-call range use ordinary window calls. Specialization must preserve
-cancellation, result ownership and aliases, not merely reduce instruction count.
+### 10.5 Frame management, liveness, and dispatch
 
-[Binding measurements](bindings.md#measurements) include void calls, predicates,
-record methods and unchanged controls. A wrapper's own work can dominate a call;
-compare generated and reflected bindings separately.
+A CPU profile of recursive `Fib` turned up a surprise: **5.4% of total CPU
+time** was spent just zeroing raw register slots on function entry, and another
+chunk went to passing `frame` structs by value in `enterCode`.
 
-### 10.8 Five scripts across interpreters
+Three runtime and link-time improvements removed that overhead:
 
-Price runs 3,840 loan payments. Scan makes 256 external calls. Fib visits both branches of a recursive Fibonacci tree. Sieve allocates about 5,000 flags and strikes multiples. Mandelbrot updates a floating-point orbit until it escapes or reaches the iteration limit. Each workload cycles through four checked inputs. All engines run the same algorithm. Compilation, linking and 32 warmup calls finish before timing.
+1. **Backward liveness for raw-slot clearing (`definedRaw`):** A warm raw
+   register may still hold bits from a previous call. At link time, the linker
+   walks each function's control-flow graph backwards computing which raw slots
+   can be read before they are written:
 
-These are median microseconds per script call over eight rounds on an Apple M5 Max. The eight configurations, including the old EVM, rotate through the first position. “Before” runs the original interpreter on the same fixtures. The native runs call Lua from C. EVM and the other Go embeddings call into Go.
+```go
+incoming := read | (next &^ def)
+```
 
-| Workload | EVM before | EVM after | Lunar (Go) | PUC Lua | LuaJIT off | LuaJIT on |
-|---|---:|---:|---:|---:|---:|---:|
-| Price | 36.68 | 28.07 | 53.75 | 29.62 | 27.02 | 5.00 |
-| Scan | 4.43 | 3.84 | 9.57 | 2.89 | 2.74 | 2.29 |
-| Fib | 90.89 | 53.43 | 60.31 | 21.26 | 16.09 | 3.43 |
-| Sieve | 396.69 | 118.67 | 298.05 | 101.80 | 124.47 | 13.67 |
-| Mandelbrot | 437.09 | 254.61 | 465.87 | 221.98 | 445.01 | 24.56 |
+   If parameters and captures cover every bit live at entry, the linker marks
+   `definedRaw = true` and `enterCode` skips `clear(vm.r[...])` completely.
+   (The proof conservatively falls back to clearing for recovery entries,
+   frames over 64 raw slots, functions over 4,096 words, or handwritten modules
+   without `StrictCallWindows`; pointer slots are always cleared for the GC.)
+2. **Inline warm-call fast path:** For direct calls to scalar functions with no
+   pointer slots or captures, `VM.execute` installs the child frame directly in
+   the dispatch loop through a pointer to `cur`—checking depth and raw-slot
+   limits and advancing `rb` without calling `enterCode`.
+3. **Frame-entry bank slicing and local fuel:** Slicing `r, p = vm.r[cur.rb:],
+   vm.p[cur.pb:]` once at `resumeFrame` turns `add.i64` into plain
+   `r[a] = r[b] + r[c]`. Keeping `remaining` in a local variable with the
+   `remaining&255 == 0` bitmask replaced a memory load/store on every single
+   instruction.
 
-EVM had the lowest median among the Go interpreters on all five, including Yaegi and GopherLua. Native PUC Lua still ran the recursive tree in two-fifths of EVM’s time. PUC Lua also led on Sieve and Mandelbrot. With tracing enabled, LuaJIT ran the four compute workloads 5.6–15.6× as fast as EVM. The ordinary sensor binding took 3.84 µs. Changing only the two bindings to the word-only specialization (declared with `DirectUnary`) brought that to 2.00 µs. LuaJIT took 2.29 µs with C callbacks. Four of the five EVM workloads did zero Go heap allocations after warmup. Sieve made one allocation on both versions.
+#### What we tried—and threw away
 
-Across the eight paired database rounds, reading 512 rows still took 15 allocations in memory and 24 on Bolt. The 4,096-row indexed KVO read still took 24. The median paired time on that larger read rose 3.1% in the first run and 0.7% in ten longer pairs. The Fast Bolt write and Compact memory write came out 1.8% and 0.6% slower in the longer pairs. These measurements resolve the much larger gains in script execution more clearly than small changes in a database transaction.
+Not every plausible optimization wins in Go:
 
-A second program counter, unchecked register addressing and a separate scalar dispatch loop each helped some measurements and lost the advantage on others. None earned a place in the interpreter. An offset operand for `flags[k-1]` also looked promising in short samples, but the longer trial coincided with a parallel build. That leaves its effect on an ordinary zero-based loop open.
+| Experiment | Outcome |
+| --- | --- |
+| **4-float / 2–4 integer scratch locals in `VM.execute`** | **Rejected:** bloated `execute` to 21–42 KiB, making `Scan` 25–34% slower and `Price` 2–4× slower (53–90 µs). |
+| **3 or 4 locals in the separate float helper** | **Rejected:** 4 locals grew the helper to 72 KiB (vs. 15 KiB for 2 locals) for only a small extra gain (`17.98 → 15.92 µs`). |
+| **Block-wide raw temporary reuse (`slots`)** | **Rejected:** shrank frames, yet slowed `Scan` by ~4% over 9 rounds; kept only result-slot forwarding, loop-phi reuse, and tied external args. |
+| **Second PC local, unchecked register addressing, separate scalar dispatch loop** | **Rejected:** each helped some measurements and lost on others; none earned its complexity. |
+| **Packing slices across the host boundary** | **Not yet done:** requires a typed external slice layout contract so aliases don't break. |
 
-### 10.9 Keeping two floats across loop iterations
+### 10.6 Float-loop acceleration: keeping two floats in Go locals
 
-Consider a filter with two accumulators. Each iteration reads the old values of both and leaves two new values for the next iteration.
+Could a pure-Go interpreter match or beat native C Lua on tight floating-point
+loops without building a JIT? Consider a two-stage smoothing filter:
 
 ```go
 var fast, slow float64
@@ -3617,7 +4950,8 @@ for i := 0; i < n; i++ {
 return slow
 ```
 
-The compiler gives `fast` and `slow` ordinary frame slots R4 and R6. The initial loop test handles `n <= 0`. On the first trip through the body the evaluator executes these five words.
+In ordinary bytecode, `fast` and `slow` live in `vm.r[4]` and `vm.r[6]`, so
+every iteration loads and stores them through the frame slice:
 
 ```text
  9  sub.f64       r10 r3 r4          ; x - fast
@@ -3627,7 +4961,21 @@ The compiler gives `fast` and `slow` ordinary frame slots R4 and R6. The initial
 13  loop.lt.i64   r7 r2 -5           ; ++i < n goes to PC 9
 ```
 
-At link time `linkFloatLoops` recognizes the back edge at PC 13. It replaces that word in the linked copy with a private entry into a small evaluator. PCs 9–12 still hold the original instructions. Here is the plan printed by `program.DisassembleFloatLoops()` for the same filter.
+**Why main-switch scratch registers failed:** Our first prototype added four
+float scratch locals straight into `VM.execute`'s main `switch` (16 destructive
+forms, 64 three-operand forms, 48 mixed forms per op). Inside the float case,
+Go emitted tidy arm64 `FADDD` instructions—yet the bloated switch destroyed
+instruction-cache locality for the entire VM, making `Scan` **25–34% slower**
+even though `Scan` never executed a single float op! Integer scratch registers
+in the main switch hurt `Sieve` and `Fib` the same way.
+
+**What worked—a separate two-local loop helper:** Instead of enlarging
+`VM.execute` (which grew by only 64 bytes), `linkFloatLoops` recognizes
+qualifying straight-line float loops at link time (2–32 ops, signed unit-step
+or slice `range`, optional break comparison, no calls or strided indices) and
+compiles a tiny private plan using just **two** local `float64` variables (`f0`
+and `f1`). Calling `program.DisassembleFloatLoops()` prints the plan for
+`Filter`:
 
 ```text
 Filter pc 9..13
@@ -3642,17 +4990,12 @@ Filter pc 9..13
   store.r.f1 r6
 ```
 
-Read `sub.r.r.f0 r10 r3` as `R10 = R3 - f0`. Each `.r` consumes a frame operand. Each `.f0` or `.f1` names a Go local in the evaluator. The next line updates `f0` directly. The product still rounds to float64 before the addition. Loads and final stores run once per batch of iterations. These transfers preserve every bit, including signed zero and NaN payloads. Arithmetic on two different NaNs returns a NaN. The selected payload can differ between the two Go dispatch loops.
-
-**Which loops qualify.** The linker starts at a signed unit-increment back edge, or at the saved-index copy and jump that Go slice `range` emits. It accepts a body of 2–32 straight-line operations with floating-point arithmetic. Operands may come from frame slots, constants already in those slots, or 64-bit slice cells indexed by the loop counter. A counted loop can also have one floating-point comparison that breaks out. A call, a second branch, or an index such as `xs[i-1]` keeps the loop on the ordinary interpreter. The decision uses instructions and register dependencies. Two functions with identical bytecode receive the same plan.
-
-**Where values live.** The linker counts uses, giving extra weight to writes, then assigns the two most useful slots first. A value read before its first write needs a stable home across iterations. Two write-first temporaries can share a local if their lifetimes do not overlap. Inputs are read before the destination is written, so one can die at the very operation that defines the other. When a shared local would lose the last value of a frame slot, the plan includes an explicit store. Every exit restores the ordinary frame. A script call, external call, or branch into the original body therefore sees the same registers as before.
-
-**Where a batch stops.** Suppose a slice holds 12 values and the loop asks for 20. The plan can run through index 11 after checking the base and length once. It returns to the original words for index 12. The normal bounds check reports the original PC, after the same preceding stores. Aliased source and destination slices still observe each store in program order. The other bound is fuel. For the filter, one iteration costs five linked instructions. If 18 remain before the next cancellation poll, the evaluator can do three complete iterations, charge 15, and let ordinary dispatch handle the last three. A range loop charges its header and saved-index copy as well. The original header evaluates its final failed comparison.
-
-**What the machine executes.** The four-float prototype expanded the main Go switch with 16 destructive forms per binary operation, then 64 three-operand forms, then another 48 forms mixing in one frame register. On arm64 the arithmetic itself looked good. A scratch-only add became an `FADDD` followed by a jump. But the big switch changed dispatch for *every* instruction. Even a scan that made external calls and used no scratch floats took 25–34% longer. Two- and four-integer variants also made Sieve and Fibonacci slower.
-
-The retained evaluator has a separate dense switch. In Go 1.27.3 on arm64 its dispatch includes these actual instructions, with operands abbreviated only on the jump-table load.
+Read `sub.r.r.f0 r10 r3` as `R10 = R3 - f0`. The helper loads `f0`/`f1` once,
+runs a whole batch of iterations up to the next slice-bounds limit or 256-step
+fuel checkpoint, and stores `f0`/`f1` back to `vm.r` on exit. If a slice is too
+short or fuel runs low, it stops early and hands the remaining iteration(s)
+back to ordinary bytecode so bounds errors and fuel traps report the exact
+original PC. On arm64 (`Go 1.27.3`), its compact jump table is:
 
 ```asm
 FMOVD F0, 24(RSP)        // save the current locals
@@ -3662,177 +5005,218 @@ JMP   (R27)
 FADDD F0, F1, F0         // one possible handler
 ```
 
-Go still spills the locals at the switch. The savings come from running several iterations outside general dispatch, selecting frame or local operands once at link time, and reusing floats between operations. With no scratch locals, batching alone cut Price by 6.5% in the arithmetic-only experiment. Resolving *four* locals made that trial faster still, but the private handler grew to 72,176 bytes. The two-local version with slice access occupies 16,672 bytes. The main evaluator grew by 64 bytes.
+Why two locals instead of four? Because two locals plus slice access takes
+**16,672 bytes** of code, whereas four locals exploded to **72,176 bytes** for
+only marginal extra speed.
 
-On the M5 Max, the final linker cut Price from 24.09 to 19.97 µs and Mandelbrot from 217.50 to 177.86 µs. In scenario 0 of Price, 19,798 metered instructions became 1,133 ordinary dispatches, 14,932 private arithmetic steps and 3,733 folded loop increments/tests. The count still adds to 19,798. The private evaluator loaded and saved its locals 212 times each across the call. Linking a twelve-kernel module grew from 7.01 to 10.75 µs. The warm math scripts still allocated zero.
+The payoff was decisive: `Price` dropped from 24.09 to **19.97 µs** (beating
+both PUC Lua's 27.74 µs and LuaJIT-off's 24.08 µs), `Mandelbrot` dropped from
+217.50 to **177.86 µs** (beating PUC Lua's 196.64 µs), and unmodified Gonum
+v0.16.0 kernels sped up by **56%** (`Sum`), **46%** (`DotUnitary`), and **23%**
+(`DivTo`). Honest caveat: tiny 8-iteration loops like `Midpoint` paid +8.9% for
+entry/exit setup, and strided or branch-heavy loops stay on ordinary dispatch
+(see [benchmarks.md#scalar-scratch-registers-2026-11-04](benchmarks.md#scalar-scratch-registers-2026-11-04)).
 
-A broader test compiled twelve other kernels and fifteen unmodified Gonum routines. The linker selected six local kernels and five from Gonum. At 512 elements, Horner took 50% less time, the two-stage filter 43%, Gonum's sum 56%, dot product 46%, and elementwise division 23%. The strided dot product and branch-heavy norms followed their original instruction streams. At eight iterations the midpoint integration loop took 9% longer. Its plan writes several short-lived results back to the frame, and there are few iterations to pay for entry and exit. Sieve took 2.7% longer. The paired medians for the database reads and writes moved by at most 1.1%. [Full corpus, allocations and per-round measurements](benchmarks.md#scalar-scratch-registers-2026-11-04)
+### 10.7 Host boundary optimizations
 
-In six rounds with the native Lua runners, Price took 19.94 µs in EVM, 27.74 in PUC Lua, 24.08 in LuaJIT with tracing off, and 4.66 with tracing on. For Mandelbrot the same four times were 176.25, 196.64, 405.84 and 21.59 µs. PUC Lua still led EVM on Fibonacci, Sieve and the ordinary external scan.
+For scripts that spend most of their time calling into Go (like `Scan`, GoX
+templates, or database callbacks), host-call overhead is the real bottleneck.
+EVM optimizes the boundary in three layers:
 
-### 10.10 From repeated source to three instructions
+1. **Overlapping register windows** eliminate argument-array allocation on
+   general calls (`call.host`), reusing one embedded `vm.call` struct.
+2. **Move-fusing (`call.host.rr` / `call.host.rp`)** collapses staging and
+   result moves for unary calls into one dispatch.
+3. **Generated `DirectBinding` and `DirectUnary` register calls** bypass both
+   reflection and the outgoing call window altogether—reading words, strings,
+   and live Go pointers straight from local registers (and folding forwarding
+   script wrappers directly into the void host call).
 
-Suppose two pieces of a fee calculation ask for the same subtotal.
+On `Scan` (256 sensor calls), switching just the two sensor bindings to
+`DirectUnary` cut total runtime from **3.84 µs to 2.00 µs**—faster than
+LuaJIT's 2.29 µs with C callbacks—while keeping cancellation checks, string
+allocation charging, and ownership analysis intact (see
+[bindings.md#measurements](bindings.md#measurements)).
 
-<!-- listing: Invoice | Invoice(7, 3)==42 -->
+### 10.8 Zero-decode KVO reads and batched record writes
+
+All the bytecode speed in the world will not save you if every database row
+decodes a 20-field Go struct just to check one boolean:
+
 ```go
-func charge(quantity, price int) int {
-    return quantity * price
-}
-
-func Invoice(quantity, price int) int {
-    first := charge(quantity, price)
-    return first + charge(quantity, price)
-}
-```
-
-<!-- bytecode -->
-```text
-fun1 Invoice   R=3 P=0
-     ; Invoice.go:2      return quantity * price
-  0  mul.i64       r2 r0 r1
-     ; Invoice.go:7      return first + charge(quantity, price)
-  1  add.i64       r0 r2 r2
-  2  ret
-
-fun2 charge   R=2 P=0
-     ; Invoice.go:2      return quantity * price
-  0  mul.i64       r0 r0 r1
-  1  ret
-```
-<!-- /bytecode -->
-
-The first pass sees two calls to the same local, single-block scalar function with the same SSA arguments. It rewrites the second use to the first result. The inliner lowers the multiply with the caller's operand registers. The final add writes into return slot R0 after reading both inputs. The callee still has its own executable body for public entry or another call site. A literal used by an inlined expression gets a slot in the caller’s prologue. It loads once even when the call site is in a loop.
-
-The value-number table lives for one basic block. Its key includes the operation, Go type and ordered SSA operands. A load from `*p` has no entry. A call might change the pointee between two loads. Integer identities also fold here. When `z := x ^ x` feeds `int8(z + 126) + 4`, the compiler can fold the result to −126 using eight-bit wraparound. Replacing `effect() * 0` with zero still leaves the instruction that calls `effect`. The compiler retains `3 / x` in `(3 / x) * 0` for the same reason. Integer algebra does not apply to floating-point signed zero or NaN.
-
-Inlining accepts a single scalar result and at most five body instructions before return. Each body operation must be a supported arithmetic, comparison or conversion with no side effects or traps. Each caller has an allowance of 64 words, charged conservatively before adding a body. Scratch slots die at the end of an inline site and can serve the next site. A final scalar operation with a single use at the adjacent return can use the result slot directly. In the `uint8` addition in chapter 5 this cuts four words to three and the frame from three raw registers to two. The two schedules agree on all 65,536 input pairs.
-
-**Loop bounds.** In `for i := base; i < base+128; i++`, SSA puts the add in the header. The compiler emits it in the unique block that enters the loop. Both operands must already be available there. The header contains only its comparison, so `loop.lt.i64` handles the increment and the next test in one word. A changing bound, memory read or external call stays in the header. A loop can also use `i+1` in an expression before its own `i++`. Commoning those two adds hid the increment from instruction selection. The compiler keeps the trailing add on a back edge so it can become `loop.lt.i64`. The cheaper schedule executes a fused increment and branch in place of a move, jump and repeated header test.
-
-A fixed trip count admits a different schedule. Consider `for lane := 0; lane < 4; lane++` with a single arithmetic block. Once the compiler verifies both incoming values of the counter, it can emit four copies of the body. An add with `lane` becomes an `add.imm.i64` with that iteration’s literal. Other uses receive the counter in its ordinary register. The exit still sees the final value of `lane`. The pass accepts two to four trips, small constant bounds, a unit step, and at most 16 arithmetic words in the body. It caps growth at 48 words per function. An early exit, memory access or call instruction keeps the original back edge. Each emitted word still consumes fuel and retains its source position.
-
-**Reusing a checked read.** A numeric slice read can repeat even in a two-line calculation.
-
-<!-- listing: Energy | Energy([]float64{2,3},1)==9 -->
-```go
-func Energy(a []float64, i int) float64 {
-    first := a[i]
-    return first * a[i]
+for c := rows.Next(); c != nil; c = rows.Next() {
+    if c.active {
+        sum += c.profile.balance * c.profile.rate
+    }
 }
 ```
 
-<!-- bytecode -->
-```text
-fun1 Energy   R=3 P=2
-     ; Energy.go:2      first := a[i]
-  0  load.index.r  r2 v0 r1
-     ; Energy.go:3      return first * a[i]
-  1  mul.f64       r0 r2 r2
-  2  ret
-```
-<!-- /bytecode -->
-
-The first load checks the index and reads the element. The compiler can reuse that word for the second load because the slice header and index are the same SSA values. A store through `b` could change `a[i]` if `a` and `b` overlap. An external call could change the backing array too. The table of checked reads is local to a basic block. A store, call or other possible memory effect empties it. A bad index still fails at the first read.
-
-**Which raw slots need zeroes?** A warm raw register may contain a previous caller’s value. The linker walks the control-flow graph backwards. For each word it forms a bitset of the slots that must have a value on entry.
-
-```go
-incoming := read | (next &^ def)
-```
-
-`read` and `def` name this word’s inputs and assignments. At a conditional branch, `next` is the union from both successors. A function can skip its raw clear only if its parameters and captures supply every bit live at entry. An iterator’s exhausted path writes its success flag alone. The other outputs remain live if later code reads them. The proof falls back to clearing for recovery entries, unsupported instructions, frames over 64 raw slots, functions over 4,096 words or lack of convergence in eight passes. Compiled calls share only declared results. Handwritten modules keep cleared frames unless they explicitly promise that same calling convention through `StrictCallWindows`. Pointer cleanup still releases Go references.
-
-**Slice stride.** The R half of a slice holds its length and capacity in either layout. For a local array or slice, the compiler follows aliases in both directions through reslices, phi inputs, append and copy. If the entire group permits packed storage, booleans and unsigned bytes occupy one byte, other scalar integer and float elements occupy one word, and `[]*T` stores GC-visible pointers. For example, a write to a packed pointer slice ends in the Go equivalent of
+- **Zero-decode reads:** Each `rows.Next()` returns a 16-byte `kvo.Record`
+  pair. The script reads only the three fields it touches—zero per-row
+  allocations once metadata is warm. A fused `GetChildKey` reads a child and
+  its scalar in one dispatch, and adjacent reads through the same child
+  (`balance` and `rate`) share the child traversal. Because compiler ownership
+  analysis inserts copies only when a record escapes, reads need no runtime
+  read arena or expiry checks.
+- **Direct indexing and batched writes:** On writes (`edit.revision = rev;
+  edit.profile.balance = ...; tx.Put(c.id, edit)`), a `Fast2` editor copies the
+  borrowed row on the first scalar change and patches subsequent 8-byte cells
+  in place (reusing writer scratch when a new property rebuilds the directory).
+  A universal KV indexer reads the edited bytes directly without decoding a
+  struct:
 
 ```go
-*(*unsafe.Pointer)(unsafe.Add(base, index*unsafe.Sizeof(base))) = value
+b.SetIndexer(func(key uint64, row kvo.Record, ib *edb.IndexBuilder) {
+    profile := row.Child(row2.Step{Key: 9})
+    ib.Add(byBalance, profile.GetValue(5).AsUint())
+})
 ```
 
-The bounds check runs first. Go applies the write barrier, and overlapping copies use Go’s typed `copy`. A locally used `&s[i]` points into that same buffer. Returning the slice, passing it to another function, storing it in an aggregate, or letting an element address escape keeps the entire group cell-backed. Two callers that share an externally supplied buffer must still observe each other’s writes. Strings and other two-bank elements also keep cells. The compiler emits a raw move for `len(text)` and takes the low 32 bits for `len(slice)`.
+  Calling `Snapshot()` hands off ownership of the encoded bytes so any later
+  edit on the same handle produces an independent copy.
 
-**Two linked fusions.** Consecutive scalar reads such as `row.profile.balance` and `row.profile.rate` can share traversal to the immutable child. The second key still decodes using its own type. A direct external predicate followed immediately by a branch on its result can also execute in one dispatch. It still checks cancellation before and after the external call. In both cases a jump directly to the second word executes that word alone. Each fused pair costs one instruction when entered at the first word.
+### 10.9 Benchmarks, methodology, and trade-offs
 
-For a raw listing or a differential test, use the same source and external packages with the debug compiler.
+#### Cross-interpreter comparison
 
-```go
-options := evmcompiler.Options{NoOptimization: true}
-module, err := options.Compile("invoice.go", source)
-if err != nil {
-    return err
-}
-program, err := evm.Link(module)
-```
-
-The module carries the choice through linking. Both modes run Go type checking and build SSA, including Go’s evaluation of constant expressions. Debug mode preserves script calls, uses the general external-call convention, keeps slice elements in cells and clears raw locals at frame entry. Time, allocation budgets, call depth and instruction counts can therefore differ between modes.
-
-### 10.11 Measuring the optimizer
-
-The reference build is `f819d12`. The optimized build is `493ee9f`. Both ran on the same M5 Max with Go 1.27.3. The five cross-interpreter scripts cycle through four inputs. The database tests include the cursor and transaction. Each harness checks the result. Each timing below is the median of eight alternating pairs, one Go benchmark thread at a time. The change column is the median of the eight individual ratios.
-
-| Workload | Before, µs | After, µs | Paired change |
-|---|---:|---:|---:|
-| 256 external calls | 3.24 | 2.94 | -9.7% |
-| 256 pointer getters | 4.89 | 4.29 | -12.1% |
-| 256 cached context lookups | 5.98 | 4.54 | -24.1% |
-| 512 Fast KVO rows, read | 46.72 | 42.37 | -9.2% |
-| 512 Fast KVO rows, update 410 | 535.46 | 539.49 | +0.5% |
-| 512 Compact KVO rows, read | 55.03 | 49.23 | -11.0% |
-| 4,096 indexed rows, read | 381.68 | 354.10 | -7.5% |
-| 4,096 indexed rows, update 3,277 | 13,458.28 | 13,749.60 | +2.3% |
-| Recursive Fibonacci | 45.38 | 39.24 | -13.4% |
-| 512-element autocorrelation | 4.60 | 3.51 | -23.1% |
-| Sieve | 102.60 | 92.65 | -9.8% |
-| Integer histogram | 7.82 | 6.38 | -18.5% |
-| Pointer queue | 24.43 | 15.80 | -35.5% |
-| Hash with a leaf helper | 14.28 | 4.92 | -65.5% |
-| Tariff calculation | 27.77 | 6.25 | -77.5% |
-
-The histogram allocated 1,152 bytes per call, down from 2,304. The pointer queue went from 9,552 to 4,944. Sieve went from 81,920 to 5,376. Each kept its original Go allocation count. The 512-row in-memory read still allocated 1,352 bytes in 15 allocations for the whole transaction. A CPU profile of the original recursive Fibonacci run attributed 5.4% of samples to clearing memory. Register setup also appeared on the hot path. The raw-slot proof and the warm-call path remove work on each descent.
-
-The external scan with input zero made 256 callbacks in both builds. An untimed counter recorded 1,117 evaluator dispatches before and 734 after. The bound `base+128` moved out of the loop, which also allowed the increment and test to fuse. On the same input, Fibonacci went from 8,534 dispatches to 7,925. Sieve stayed at 68,938. Its saving came from reading and writing a smaller array.
-
-The four transaction writes got a second run of ten 600 ms pairs. Fast, Compact and Bolt write times changed by +1.3%, +0.5% and +0.2% respectively. The indexed 4,096-row write changed by +2.8%. A separate twelve-pair run fixed the number of transactions at 40, so each database went through the same sequence of revisions. The EVM writer took 1.4% longer and the native Go writer took 2.3% longer across the same two binaries. The runs show a small end-to-end write cost. They do not isolate a VM-specific cause.
-
-An experiment reused raw temporaries at their last use throughout each block. It reduced some frames but made the external scan about 4% slower than the preceding allocator in a nine-round comparison. The retained allocator forwards the final scalar result. It also keeps the earlier loop-phi and tied-external-argument rules. Eight paired trials of bounded unrolling alone saved about 15% on four-channel accumulation, 6% on a three-round word mix and 10% on a three-point stencil. The stencil ended close to its original runtime once all passes were combined. The larger loop and control-flow cases retain their original bodies.
-
-The wider math suite caught a pass interaction. In a six-round four-way comparison, commoning the variance loop’s induction update had cost 8.7% against the reference. Preserving the back edge and reusing checked slice reads brought that loop back within 1%. The same two changes cut autocorrelation time by 22.9%. Gonum’s unit-stride dot product changed by -0.4% in the final comparison. Its L2 distance changed by +4.0%. Both still allocate zero.
-
-Compiling twelve numerical kernels took 601.1 → 625.7 µs. Linking them took 10.35 → 12.06 µs. A compiled program can serve many VM sessions. On arm64 the main dispatch function grew from 17,248 to 18,704 bytes.
+How does EVM stack up against other embeddable interpreters? Across six
+interleaved rounds on Apple M5 Max (Go 1.27.3, medians in µs; EVM keeps fuel
+and cancellation active; native Lua `Scan` calls C while Go engines call Go;
+see [benchmarks.md](benchmarks.md) and [per-round data](../bench/optimizer.tsv)):
 
 | Workload (µs) | EVM | PUC Lua | LuaJIT off | LuaJIT on | Lunar | GopherLua | Yaegi |
-|---|---:|---:|---:|---:|---:|---:|---:|
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Price | 19.87 | 27.81 | 24.15 | 4.66 | 48.45 | 229.31 | 155.04 |
 | Scan | 2.92 | 2.75 | 2.51 | 2.10 | 8.51 | 14.06 | 37.14 |
 | Fib | 39.20 | 20.17 | 12.96 | 3.06 | 53.36 | 111.90 | 587.09 |
 | Sieve | 92.50 | 93.36 | 109.17 | 11.99 | 248.77 | 666.10 | 527.73 |
 | Mandelbrot | 175.90 | 193.68 | 401.75 | 21.61 | 429.39 | 1,510.61 | 2,181.59 |
 
-These are six interleaved rounds. PUC Lua is 5.5.1. Both LuaJIT columns use the same 2.1.1792588164 binary with tracing switched off or on. The external scan calls Go from EVM and C from native Lua. The quota and cancellation checks remain enabled in EVM. LuaJIT tracing leads all five workloads. The transaction benchmarks have no cross-language counterpart. [Per-round times and allocations](../bench/optimizer.tsv)
+EVM runs **5–15× faster than Yaegi** and **3–12× faster than GopherLua**, and
+matches or beats native C **PUC Lua** on pricing, sieve, and Mandelbrot while
+enforcing Go type safety, step budgets, and context cancellation. All of the
+compiler passes in this chapter stay cheap at compile time too—compiling twelve
+math kernels takes ~625 µs (~12 µs to link), keeping compile-on-demand
+practical for per-account scripts and templates.
 
-### 10.12 Where a different VM design would help
+#### Measurement discipline
 
-The interpreter pays for dispatch, type-directed operations and host boundaries.
-A JIT can remove more of that work, at the cost of compilation and a larger
-runtime. Wider packed values or more fusion can trade code size for fewer
-instructions. Measure complete workloads before adding either.
+When benchmarking embedded scripts, always measure the **whole operation**
+callers actually perform—including transaction setup for database workloads—and
+report heap bytes and allocation counts beside elapsed time. Whenever you want
+to inspect raw bytecode or run differential tests against the optimizer,
+compile with `evmcompiler.Options{NoOptimization: true}` (note that step
+budgets, call depth, and allocations can differ between unoptimized and
+optimized builds).
 
-Batching host operations can save calls but changes when scripts can stop, write
-or observe state. Borrowed payloads must remain valid for every consumer. These
-are API and ownership constraints, not only instruction-count problems.
+#### Where a different VM design would help
 
-## 11. Templates on the same machine
+An interpreter written in Go will always pay for dispatch, type-directed
+operations, and host crossings. Two natural alternatives each make a very
+different trade-off:
 
-A GoX template is a script. No instruction in chapter 4 knows about HTML. GoX
-rewrites markup into ordinary Go before the compiler reads it, and supplies
-one external package that the rewritten code calls. Everything else in this
-book applies unchanged: the type checker, the calling convention, budgets,
-source positions.
+- **A JIT compiler** (like LuaJIT's trace compiler, which leads EVM by 1.4–13×
+  on pure compute) can remove much of that dispatch overhead, at the cost of
+  platform-specific machine code, larger runtime complexity, and longer warmup
+  on short-lived per-account scripts.
+- **WebAssembly** gives strong OS-like memory isolation, but its separate
+  linear memory forces every Go struct, string, and database row to be
+  serialized across the boundary—giving up direct Go pointer sharing and
+  zero-decode KVO reads.
 
-### 11.1 What markup becomes
+Within an interpreter, more superinstructions trade code size for fewer
+dispatches, and batching host operations cuts crossings but changes when
+scripts can stop, write, or invalidate borrowed storage—API and ownership
+trade-offs, not purely compiler problems.
 
-Here are three components. `Card` prints its name in three places, each with
-different escaping rules.
+> **Key takeaways — Chapter 10**
+> - Most of EVM's speed comes from doing less work per iteration: local CSE/inlining, loop slot reuse and invariant hoisting, fused compare-and-branch and counted-loop superinstructions, and packed local slices.
+> - Keeping `VM.execute`'s working set in Go locals, splitting `R`/`P` banks, and clearing only live pointer slots cuts GC and frame-transition overhead dramatically.
+> - For tight float loops, the evaluator runs a validated bytecode slice in Go float64 locals while preserving exact step budgets and side-exit behavior.
+> - At the boundary, direct-call opcodes (`call.host.d*`), zero-decode KVO reads, and batched record writes keep real application workloads fast—not just microbenchmarks.
+
+Now let's close the book by seeing how an entire HTML templating language—GoX—
+runs on top of this exact same VM without adding a single HTML instruction.
+
+## 11. GoX: typed HTML templates compiled to Go
+
+Here is the clearest proof of EVM's generality: **not a single opcode in
+Chapter 4 knows anything about HTML.** GoX is a typed templating language built
+entirely on top of EVM—its preprocessor rewrites HTML markup into ordinary Go
+calls against one external package (`gox`), and then hands the result to the
+exact same type checker, compiler, calling convention, and budget meters you
+just read about.
+
+### 11.1 Why GoX, and how the syntax works
+
+Go's built-in `html/template` has great contextual escaping, but its
+string-typed mini-language breaks down as soon as you build real component UIs:
+component props are untyped maps, control flow is awkward, and you cannot pass
+typed callbacks or write ordinary Go helpers alongside markup.
+
+GoX flips that around: **write ordinary Go functions, and drop HTML tags
+right where you want output.** Because GoX runs on EVM, you get compile-time
+type checking of every component call and slot, automatic `html/template`
+contextual escaping, *and* live template recompilation at run time without
+rebuilding your Go server.
+
+Every GoX file is a Go file with a `package` clause and `import`s (plus an
+optional `---` frontmatter block). Any function whose first parameter is
+`b *gox.Builder` can contain markup:
+
+- **Elements and fragments:** `<div class="card">...</div>` emits HTML;
+  `<>...</>` is a fragment that emits output without a wrapper element. Tags
+  act as statement separators, and every `if` branch, `for` body, and
+  component must hold balanced elements (`return`, `break`, and `continue`
+  close open elements automatically).
+- **Quoted text vs. expressions:** Source indentation and newlines emit
+  nothing—put literal text in Go quotes (`<p>"Hello, "; name</p>`). Inside an
+  element, any standalone expression renders, while assignments and `if`/`for`
+  do not (`_ = f()` discards a return value). Parenthesize `<` comparisons so
+  they are not parsed as tags: `if (a < b) { ... }`.
+- **Attributes and embedded JS/CSS:** Static (`class="card"`), interpolated
+  (`href="/c/{id}"`), or whole dynamic (`disabled={off}`). False HTML boolean
+  attributes (`disabled`, `hidden`, `checked`) are omitted; others like
+  `aria-disabled` print `"false"`. Inside `<script>` and `<style>`, `{=expr}`
+  inserts Go data escaped for JavaScript or CSS.
+- **Typed output by position and pipelines:** Text is for people, attributes
+  are for browsers—so text positions accept only strings, trusted content
+  (`gox.HTML`, etc.), and `gox.Content` (never silently formatting an `int`).
+  Whole attributes take strings, integers, and `bool`; interpolated attributes
+  take strings and integers; CSS takes strings, integers, and floats; JS takes
+  JSON-compatible values. Format values cleanly with left-to-right pipelines:
+  `price | app.FormatMoney` (calls `app.FormatMoney(price)`) or
+  `count | fmt.Sprintf("%d items", _)`.
+- **Components and typed slots:** Any Go function (`<Card name={name} />`),
+  selector (`<ui.Button>`), function value (`<chosen />`), or local closure is
+  a component whose attributes are type-checked named arguments. `func(...)`
+  parameters are typed slots: `<slot-footer>...</slot-footer>` fills `footer`,
+  direct children fill `body`, and a slot like `row func(item Item)` brings
+  `item` into scope inside `<slot-row>`.
+- **Implicit, optional, map, and ambient inputs:** Mark parameters with
+  `//gox:arg theme implicit` (or `Options.ImplicitTypes`; `*gox.Builder` and
+  `*evmruntime.Ambient` are always implicit), `optional` (plus
+  `gox.Optional[T]` when presence matters), or `ambient="key"`. Build map
+  arguments inline with `extras:attrs:type="email"`, and override inherited
+  ambient values with `ambient:color="blue"`.
+
+Now let's watch what the preprocessor actually turns this syntax into.
+
+### 11.2 Lowering HTML markup and components into Go
+
+```mermaid
+flowchart LR
+    SRC["GoX template source"] --> PRE["gox.Preprocess"]
+    PRE --> GO["Generated Go calls<br/>(gox.Step, gox.String, ...)"]
+    PRE --> PLAN["Static rendering plan<br/>(HTML chunks + escaping filters)"]
+    GO --> EVM["Standard EVM compiler & linker"]
+    EVM --> PROG["gox.Program<br/>(evm.Program + plan)"]
+    PLAN --> PROG
+    PROG --> RENDER["Pooled VM + gox.Builder -> HTML"]
+```
+
+Take three small components where `Card` renders `name` in three different
+contexts (an HTML attribute, element text, and a `<script>` tag):
 
 ```gox
 package views
@@ -3860,8 +5244,8 @@ func Wrap(b *gox.Builder, body func()) {
 }
 ```
 
-`gox.Preprocess` returns the Go that the compiler receives, in
-`GeneratedSources`. This is that output with its `//line` directives removed:
+Run `gox.Preprocess` and look at `GeneratedSources` (with `//line` directives
+trimmed):
 
 ```go
 func Card(b *gox.Builder, name string, url string, vip bool) {
@@ -3892,58 +5276,46 @@ func Wrap(b *gox.Builder, body func()) {
 }
 ```
 
-The markup is gone. What remains is two kinds of call with a number in each.
-The numbers index the template's **rendering plan**, a table of operations
-that the preprocessor builds beside the Go source. `Step` runs operations that
-need no script value: open a tag with its constant attributes, write literal
-text, close an element. `String` writes one script value through the operation
-that says where the value lands. `Value` and `Bool` do the same for the other
-value types that a position accepts.
+Everything clicks into place at a glance:
 
-The `if` stayed an `if`. The whole `<em>" VIP"</em>` element has no dynamic
-part, so it became the single step 34. Adjacent constant operations merge into
-one batch step the same way: the tail of the link, `</a>`, and the head of
-the script, `<script>track(`, are both inside step 31.
+- **Static markup collapses into batched `Step` calls** indexing the template's
+  **rendering plan**—for example, `<em>" VIP"</em>` becomes a single `Step(b,
+  34)`, and `</a><script>track(` merges into `Step(b, 31)`.
+- **Dynamic values become typed `String` / `Value` / `Bool` calls** carrying
+  their plan operation number.
+- **Components and slots are plain Go:** `<Card ... />` becomes a type-checked
+  function call, `<Wrap>`'s children become a closure for `body`, and `b` is
+  threaded automatically as an implicit argument.
 
-`Page` shows the component rules. A component call is a function call. The
-attributes of `<Card>` became arguments in parameter order, checked by the Go
-type checker like any other call. The children of `<Wrap>` became a closure
-for its `body` parameter, and `Wrap` decides when to call it. The builder is
-an implicit argument: the preprocessor passes the caller's `b`. Chapter 6
-already showed what the compiler does with a closure and an indirect call.
+### 11.3 Compile-time contextual escaping and type safety
 
-### 11.2 Escaping is decided before the program runs
-
-For `Page("A&B <x>")` the program prints:
+Call `Page("A&B <x>")` and you get:
 
 ```html
 <main><a class="card" href="/c/1" title="Open A&amp;B &lt;x&gt;">A&amp;B &lt;x&gt;<em> VIP</em></a><script>track("A\u0026B \u003cx\u003e");</script></main>
 ```
 
-The three uses of `name` are operations 10, 13 and 22. The preprocessor walks
-the markup with the context analyzer of Go's `html/template`. It knows that
-operation 10 sits inside a quoted attribute, 13 in element text and 22 in a
-JavaScript expression, and it records a filter in each operation. At run time
-`String` looks up the operation and applies its filter. Nothing parses HTML
-during a render, and no filter is chosen from the value.
+At preprocess time, GoX walks the markup with Go's `html/template` context
+analyzer and records the exact escaping filter inside operations 10 (quoted
+attribute), 13 (HTML text), and 22 (JavaScript expression), while the Go type
+checker enforces each position's allowed types. At render time, `gox.String`
+just looks up the operation, verifies the builder is still in the expected
+context, and runs its preselected filter—no HTML parsing at run time.
 
-The same pass enforces the typing rules of each position. Text takes strings,
-an attribute takes strings and integers, JavaScript takes values that have
-a JSON form.
-A value of another type is a compile error with the position of the markup,
-because the preprocessor type-checks the lowered Go against the same package
-declarations the compiler will use.
+> **Why this way? (Reasonable default, clear trade-off & not yet done)**
+> Reusing Go's `html/template` context analyzer and running GoX on EVM were
+> **reasonable defaults that worked fine** (native GoX-to-Go compilation
+> without EVM is **not yet done**). Narrowing implicit arguments was a **clear
+> trade-off**: early prototypes inherited any same-named local variable
+> automatically, which was later restricted to explicit `//gox:arg ...
+> implicit` annotations and host-registered `Options.ImplicitTypes` so
+> component data flow stays predictable.
 
-A plan operation also records the context it expects to start in. A helper
-that receives the builder cannot write element text while an attribute is
-being built: the builder compares its current context with the operation's
-and fails the render.
+### 11.4 Batched rendering plans in bytecode
 
-### 11.3 The calls in bytecode
-
-`gox.Step` and `gox.String` are external functions of package
-`github.com/andreyvit/evm/gox`, declared like the `meter` package of chapter
-7. The first lines of `Card` compile to:
+In bytecode, `gox.Step` (pointer + word, void result) compiles to a single
+direct register call, while three-argument `gox.String` uses the outgoing
+window:
 
 ```text
   0  const         r4 wrd0  ; word 0x1c
@@ -3958,48 +5330,119 @@ and fails the render.
  16  call.host     imp9  ; github.com/andreyvit/evm/gox.String
 ```
 
-`Step` takes a pointer and a word and returns nothing, so it fits a register
-call: `call.host.puv` passes the builder from P0 and the operation number from
-R4 in one dispatch (§4, external calls with register operands). `String` has
-three arguments and uses the general window: PCs 11–15 stage the builder, the
-operation number and both halves of `url`. The builder is a native Go pointer
-in a P register. The script cannot look inside it.
+Every batch of static HTML costs one direct dispatch; every dynamic value costs
+one external call; and every loop, branch, and component call is the exact same
+bytecode from Chapters 5–10.
 
-A static page costs one dispatch per batch of constant markup. A value costs
-one external call. Loops, conditions and component calls are the script code
-of the earlier chapters.
+### 11.5 Concurrent rendering and pooled sessions
 
-### 11.4 One render
+`Link` pairs the linked `*evm.Program` with the rendering plan in a
+`*gox.Program`. Each concurrent render borrows a pooled session (a VM plus a
+`*gox.Builder` with reusable buffers), runs the entry function with the builder
+in argument 0, checks that every element closed cleanly, copies out the final
+string, resets the VM so package globals never leak between requests, and
+returns the session to the pool. Budgets, output caps, and nil-pointer guards
+all apply automatically. (See [gox/README.md](../gox/README.md) for the full
+template language.)
 
-`Link` produces a `gox.Program`: the linked EVM program plus the plan. A
-render takes a session from a pool. The session holds a VM and a builder with
-its output buffer, element stack and attribute scratch space. The builder is
-argument zero of the entry function.
+> **Key takeaways — Chapter 11**
+> - GoX adds zero HTML-aware opcodes to EVM: `gox.Preprocess` turns markup and components into ordinary Go calls against one host package (`gox`) plus a static rendering plan.
+> - Static markup collapses into batched `gox.Step` calls (direct register host calls), while contextual escaping filters are chosen once at preprocess time—no HTML parsing at run time.
+> - Components, props, and typed slots are ordinary Go functions and closures checked by `go/types`, and concurrent requests borrow pooled `(VM, gox.Builder)` sessions with full budget and reset guarantees.
 
-When the entry returns, the builder checks that every element is closed and
-copies the buffer to the result string. Then the session resets its VM, so
-package variables of one render never reach the next, and returns to the
-pool. Concurrent renders use separate sessions over the one immutable
-program. A failed render returns an error and no partial output.
+## 12. Putting it all together
 
-`RenderOptions.Budget` is the budget of chapter 8. Output has its own cap,
-checked on every append. A nil pointer in an output expression is a separate
-case: the preprocessor wraps such expressions in a guard that reports the
-problem and skips that output, or fails the render under `Strict`.
+Throughout this book we isolated one mechanism at a time with small functions.
+To see every layer working together in a real program, look at the runnable
+[`examples/kvo-basic`](../examples/kvo-basic) example from the repository.
 
-The [GoX guide](../gox/README.md) describes the language. This chapter's
-example is not regenerated by the book builder; reproduce it with
-`gox.PreprocessFiles` and `Template.Module.Disassemble`.
+The host defines a `Customer` KVO model (`model.go`) and a helper function
+`PointBalance(c kvo.Record) int64`, then registers them as script package `m`
+with `evmbind.BorrowOnly` (promising `PointBalance` never retains the record or
+invalidates borrows). The script ([`_script/rules.go`](../examples/kvo-basic/_script/rules.go))
+is just 32 lines of ordinary Go:
 
-## Appendix. Maintaining the book
+```go
+package rules
 
-Explain current behavior. Keep source and bytecode together. Preserve opcode
-numbers, representation rules, ownership limits and benchmark qualifications.
-Use short prose; move repeated setup instructions to package guides. When a
-rebuild changes a listing, reread the prose after it: PC and register numbers
-in sentences are not checked.
+import (
+	"fmt"
+	"m"
+	"time"
+)
 
-From the repository root:
+func Describe(c *m.Customer, now time.Time) string {
+	status := "member"
+	for _, tag := range c.tags {
+		if tag == "vip" {
+			status = "VIP"
+		}
+	}
+	days := int(now.Sub(c.joined).Hours() / 24)
+	return fmt.Sprintf("%s: %s for %d days, %d points", c.name, status, days, c.PointBalance())
+}
+
+func Redeem(c *m.CustomerEdit, points int64) bool {
+	if points <= 0 || points > c.points_earned-c.points_redeemed {
+		return false
+	}
+	c.points_redeemed += points
+	return true
+}
+```
+
+Trace what happens under the hood when the host runs `Describe` on three
+different representations of a customer—a live Go `*Customer` struct, a `Fast2`
+encoded byte slice, and a `MessagePack` row—and then runs `Redeem` inside a
+record scope:
+
+1. **Setup (Chapters 1, 3, 5, 7):** `evm.ModelPackage("m", Schema)` generates
+   the script-facing `*m.Customer` and `*m.CustomerEdit` types from the shared
+   KVO schema. `evmbind.RegisterMethods` binds `PointBalance` with
+   `BorrowOnly`. `evmcompiler.Compile` type-checks `rules.go` against `m` and
+   `evmstd.Packages()` (`fmt`, `time`), lowers SSA to 64-bit register bytecode,
+   and `evm.Link` resolves every import and validates every operand once into
+   an immutable `*evm.Program`.
+2. **Zero-copy entry (Chapters 2, 3, 4):** `vm.RunEntryNative(ctx, "Describe",
+   []any{c, now}, result[:], budget)` places `c` straight into the entry
+   register window as a 16-byte `(R, P)` pair—whether `c` points to a Go struct
+   or an encoded database row—without decoding a single field.
+3. **In-place reads and list iteration (Chapters 3, 4, 10):** `for _, tag :=
+   range c.tags` lowers to `RecordList` / `RecordListLen` / `RecordListIndex`,
+   walking the encoded tags in place without allocating a Go `[]string`. Field
+   reads (`c.joined`, `c.name`) use `RecordField` extended descriptors directly
+   on the backing representation.
+4. **Host calls and borrow analysis (Chapters 4, 7):** `now.Sub(c.joined)` and
+   `fmt.Sprintf` cross into `evmstd` through the overlapping register window.
+   `c.PointBalance()` is declared `BorrowOnly`, so the compiler's ownership
+   analysis proves `c` never escapes and inserts **zero** `Own` copies.
+5. **Scoped edits and budgets (Chapters 3, 8, 9):** For `Redeem`, the host
+   opens `ctx, scope := evm.WithRecords(ctx)` and hands in
+   `scope.EditRecord(CustomerModel, edit)`. `c.points_redeemed += points`
+   mutates the Go struct directly for Ada, or builds a fresh encoded row for
+   Bob and Cyd—all while `VM.execute` counts down `Budget.Steps` and polls
+   `ctx` every 256 instructions.
+
+If you want to run and experiment with complete host + script setups yourself,
+all three runnable examples in the repository use the exact patterns from this
+book:
+
+- [`examples/evm-basic`](../examples/evm-basic) — binding a plain Go host
+  package (`shop.go`) with `evmbind` and running a per-order loyalty plugin.
+- [`examples/kvo-basic`](../examples/kvo-basic) — reading and editing Go
+  structs, `Fast2` rows, and `MessagePack` rows through one KVO script.
+- [`examples/gox-basic`](../examples/gox-basic) — compiling and rendering typed
+  GoX HTML templates on the same VM.
+
+## Appendix. Maintaining this book
+
+Keep explanations aligned with current behavior, keep source and bytecode
+listings paired, and preserve opcode numbers, representation rules, ownership
+limits, and benchmark qualifications. Whenever a rebuild updates a bytecode
+listing, re-read the prose right below it—PC and register numbers mentioned in
+sentences are not checked automatically.
+
+Rebuild and verify from the repository root:
 
 ```sh
 go run ./EVMBook-rebuild.go
@@ -4007,10 +5450,10 @@ go test . -run TestArithmeticSchedules
 go test . -run '^$' -bench ArithmeticSchedules -benchmem
 ```
 
-Each `<!-- listing: ... -->` gives source and an executable check. The builder
-compiles, links and runs all marked examples, then refreshes adjacent bytecode.
-`raw |` disables optimization for a calling-convention walkthrough. The endless
-loop checks fuel exhaustion. The builder also validates the instruction table
-and linked filter plan. Unmarked snippets need separate source review: the
-excerpts quoted from the implementation, the `h` example of chapter 7 and the
-template of chapter 11. passing the builder does not validate every sentence or snippet.
+`EVMBook-rebuild.go` compiles, links, and executes every `<!-- listing: ... -->`
+example, refreshes its adjacent `<!-- bytecode -->` block, verifies every row
+of Chapter 4's instruction table against `evm.Opcode`, and verifies Chapter
+10's `Filter` float-loop plan. (`raw |` disables optimization for
+calling-convention walkthroughs, and `Spin` tests fuel exhaustion.) Unmarked
+excerpts—implementation quotes, Chapter 7's `h` example, and Chapter 11's GoX
+example—require manual review when the code changes.

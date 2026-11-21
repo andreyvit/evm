@@ -30,7 +30,7 @@ func must[T any](v T, e error) T {
 // Check both directions: a new instruction needs a row, and a retired or
 // renumbered instruction must not survive unnoticed in the reader's manual.
 func checkManual(book string) {
-	_, section, ok := strings.Cut(book, "\n## 4. Instruction set\n")
+	_, section, ok := strings.Cut(book, "\n## 4. Instruction set and calling convention\n")
 	if !ok {
 		panic("missing instruction set chapter")
 	}

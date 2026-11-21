@@ -10,6 +10,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/kvo/codec/row2"
 	"github.com/andreyvit/evm/values"
@@ -71,19 +72,19 @@ func TestSelectedNativeCollectionFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(program).Run(context.Background(), "Run", []values.Value{arg}, out[:]); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", []values.Value{arg}, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if out[0].AsString() != "changed" || panel.Named["second"] != item || panel.Named["third"] != item || panel.Named["first"] != nil || item.Title != "changed" || panel.Styles["card"]["color"] != "blue" {
 		t.Fatalf("native collection writes or aliasing lost: result=%q panel=%+v", out[0].AsString(), panel)
 	}
-	if err := evm.New(program).Run(context.Background(), "Format", []values.Value{arg}, out[:]); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Format", []values.Value{arg}, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if out[0].AsString() != "map[card:map[color:blue]]" {
 		t.Fatal(out[0].AsString())
 	}
-	if err := evm.New(program).Run(context.Background(), "JSON", []values.Value{arg}, out[:]); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "JSON", []values.Value{arg}, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	encoded, err := program.EncodeJSON(context.Background(), out[0], 1024)
@@ -141,7 +142,7 @@ func TestSelectedNativeSliceFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(program).Run(context.Background(), "Run", []values.Value{arg}, out[:]); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", []values.Value{arg}, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if out[0].AsString() != "changed" || len(panel.Items) != 4 || panel.Items[1] != item || panel.Items[2] != nil || panel.Items[3] != nil {
@@ -186,7 +187,7 @@ func TestNativeScalarSliceWidthsAndConversions(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(program).Run(context.Background(), "Run", []values.Value{arg}, out[:]); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", []values.Value{arg}, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if out[0].AsString() != "!bc/Hé/293" || string(panel.Bytes) != "!bc" || string(panel.Runes) != "Hé" || !reflect.DeepEqual(panel.Small, []int16{-7, 300}) {
@@ -217,8 +218,8 @@ func TestNativeCollectionsInRecordFields(t *testing.T) {
 	edit := kvo.EditEncoded(row2.Edit(row2.Empty(row2.Compact2))).WithModel(model)
 	db := evm.Package{Path: "db", Records: []*evm.RecordType{evm.NewRecordType("Row", model, true)}}
 	db.Functions = []evm.ExternalFunction{
-		{Name: "Save", Signature: evm.Signature{}, Call: func(c *evm.Call) error { return c.FlushRecord(edit) }},
-		{Name: "Flush", Signature: evm.Signature{Params: []*values.Type{db.Record(model, true).Pointer}}, Call: func(c *evm.Call) error { return c.FlushMutableRecord(c.Argument(0), model) }},
+		{Name: "Save", Signature: evm.Signature{}, Call: func(c *evm.VM) error { return c.FlushRecord(edit) }},
+		{Name: "Flush", Signature: evm.Signature{Params: []*values.Type{db.Record(model, true).Pointer}}, Call: func(c *evm.VM) error { return c.FlushMutableRecord(c.CallArgument(0), model) }},
 	}
 	pkg := schema.Package()
 	mod, err := evmcompiler.Compile("record.go", `import("db";"host/fields")
@@ -241,7 +242,7 @@ func TestNativeCollectionsInRecordFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(program)
+	vm := evmtest.New(program)
 	ctx, scope := evm.WithRecords(context.Background())
 	held := scope.EditRecord(model, edit)
 	if err := vm.Run(ctx, "Write", []values.Value{held}, nil); err != nil {
@@ -263,7 +264,7 @@ func Update(r *db.Row){if r.extra.(map[string]any)["items"].([]any)[1].(map[stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(otherProgram).Run(context.Background(), "Update", []values.Value{held}, nil); err != nil {
+	if err := evmtest.New(otherProgram).Run(context.Background(), "Update", []values.Value{held}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := vm.Run(context.Background(), "Shared", []values.Value{held}, nil); err != nil {
@@ -277,7 +278,7 @@ func Update(r *db.Row){if r.extra.(map[string]any)["items"].([]any)[1].(map[stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(flushProgram).Run(context.Background(), "Flush", []values.Value{held}, nil); err != nil {
+	if err := evmtest.New(flushProgram).Run(context.Background(), "Flush", []values.Value{held}, nil); err != nil {
 		t.Fatal(err)
 	}
 	ctx, scope = evm.WithRecords(context.Background())
@@ -317,8 +318,8 @@ func TestNativeAnyPreservesTypesAndAliases(t *testing.T) {
 		t.Fatal(err)
 	}
 	var nativeSeen bool
-	bridge := evm.Package{Path: "bridge", Functions: []evm.ExternalFunction{{Name: "Echo", Signature: evm.Signature{Params: []*values.Type{values.AnyType}, Results: []*values.Type{values.AnyType}}, Call: func(c *evm.Call) error {
-		x, err := c.NativeAny(c.Argument(0))
+	bridge := evm.Package{Path: "bridge", Functions: []evm.ExternalFunction{{Name: "Echo", Signature: evm.Signature{Params: []*values.Type{values.AnyType}, Results: []*values.Type{values.AnyType}}, Call: func(c *evm.VM) error {
+		x, err := c.NativeAny(c.CallArgument(0))
 		if err != nil {
 			return err
 		}
@@ -330,7 +331,7 @@ func TestNativeAnyPreservesTypesAndAliases(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		c.SetResult(0, v)
+		c.SetCallResult(0, v)
 		return nil
 	}}}}
 	pkg := schema.Package()
@@ -354,7 +355,7 @@ func TestNativeAnyPreservesTypesAndAliases(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if out[0].R != 1 || !nativeSeen {
@@ -382,8 +383,8 @@ func TestNativeAnyAcrossPackages(t *testing.T) {
 	}
 	a := makeSchema("a", "NativeAnyA", reflect.TypeFor[NativeAnyA]())
 	z := makeSchema("z", "NativeAnyZ", reflect.TypeFor[NativeAnyZ]())
-	bridge := evm.Package{Path: "bridge", Functions: []evm.ExternalFunction{{Name: "Echo", Signature: evm.Signature{Params: []*values.Type{values.AnyType}, Results: []*values.Type{values.AnyType}}, Call: func(c *evm.Call) error {
-		x, err := c.NativeAny(c.Argument(0))
+	bridge := evm.Package{Path: "bridge", Functions: []evm.ExternalFunction{{Name: "Echo", Signature: evm.Signature{Params: []*values.Type{values.AnyType}, Results: []*values.Type{values.AnyType}}, Call: func(c *evm.VM) error {
+		x, err := c.NativeAny(c.CallArgument(0))
 		if err != nil {
 			return err
 		}
@@ -391,7 +392,7 @@ func TestNativeAnyAcrossPackages(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		c.SetResult(0, v)
+		c.SetCallResult(0, v)
 		return nil
 	}}}}
 	for _, pkgs := range [][]evm.Package{{a.Package(), z.Package(), bridge}, {z.Package(), a.Package(), bridge}} {
@@ -410,7 +411,7 @@ func TestNativeAnyAcrossPackages(t *testing.T) {
 			t.Fatal(err)
 		}
 		var out [1]values.Value
-		if err := evm.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
+		if err := evmtest.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
 			t.Fatal(err)
 		}
 		if out[0].R != 1 {
@@ -422,11 +423,11 @@ func TestNativeAnyAcrossPackages(t *testing.T) {
 func TestNativeAnyRejectsAnotherProgram(t *testing.T) {
 	var retained any
 	pkg := evm.Package{Path: "bridge", Functions: []evm.ExternalFunction{
-		{Name: "Save", Signature: evm.Signature{Params: []*values.Type{values.AnyType}}, Call: func(c *evm.Call) error { var err error; retained, err = c.NativeAny(c.Argument(0)); return err }},
-		{Name: "Load", Signature: evm.Signature{Results: []*values.Type{values.AnyType}}, Call: func(c *evm.Call) error {
+		{Name: "Save", Signature: evm.Signature{Params: []*values.Type{values.AnyType}}, Call: func(c *evm.VM) error { var err error; retained, err = c.NativeAny(c.CallArgument(0)); return err }},
+		{Name: "Load", Signature: evm.Signature{Results: []*values.Type{values.AnyType}}, Call: func(c *evm.VM) error {
 			v, err := c.AnyValue(retained)
 			if err == nil {
-				c.SetResult(0, v)
+				c.SetCallResult(0, v)
 			}
 			return err
 		}},
@@ -443,22 +444,22 @@ func TestNativeAnyRejectsAnotherProgram(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(owner).Run(context.Background(), "Save", nil, nil); err != nil {
+	if err := evmtest.New(owner).Run(context.Background(), "Save", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(owner).Run(context.Background(), "Load", nil, out[:]); err != nil {
+	if err := evmtest.New(owner).Run(context.Background(), "Load", nil, out[:]); err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(other).Run(context.Background(), "Load", nil, out[:]); err == nil || !strings.Contains(err.Error(), "another program") {
+	if err := evmtest.New(other).Run(context.Background(), "Load", nil, out[:]); err == nil || !strings.Contains(err.Error(), "another program") {
 		t.Fatalf("foreign handle: %v", err)
 	}
 }
 
 func TestNativeAnyTimestamp(t *testing.T) {
 	var want time.Time
-	bridge := evm.Package{Path: "bridge", Functions: []evm.ExternalFunction{{Name: "Echo", Signature: evm.Signature{Params: []*values.Type{values.AnyType}, Results: []*values.Type{values.AnyType}}, Call: func(c *evm.Call) error {
-		x, err := c.NativeAny(c.Argument(0))
+	bridge := evm.Package{Path: "bridge", Functions: []evm.ExternalFunction{{Name: "Echo", Signature: evm.Signature{Params: []*values.Type{values.AnyType}, Results: []*values.Type{values.AnyType}}, Call: func(c *evm.VM) error {
+		x, err := c.NativeAny(c.CallArgument(0))
 		if err != nil {
 			return err
 		}
@@ -470,7 +471,7 @@ func TestNativeAnyTimestamp(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		c.SetResult(0, v)
+		c.SetCallResult(0, v)
 		return nil
 	}}}}
 	module, err := evmcompiler.Compile("timestamp.go", `import("time";"bridge");func Run(t time.Time)bool{return bridge.Echo(t).(time.Time)==t}`, bridge)
@@ -484,11 +485,99 @@ func TestNativeAnyTimestamp(t *testing.T) {
 	for _, stamp := range []time.Time{{}, time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC), time.Unix(-1, 999999999), time.Date(2500, 1, 1, 0, 0, 0, 123, time.UTC), time.Now(), time.Date(2026, 11, 14, 18, 0, 0, 0, time.FixedZone("shop", 14400))} {
 		want = stamp
 		var out [1]values.Value
-		if err := evm.New(program).Run(context.Background(), "Run", []values.Value{values.NativeTime(stamp)}, out[:]); err != nil {
+		if err := evmtest.New(program).Run(context.Background(), "Run", []values.Value{values.NativeTime(stamp)}, out[:]); err != nil {
 			t.Fatal(err)
 		}
 		if out[0].R != 1 {
 			t.Fatalf("timestamp round trip changed %v", stamp)
 		}
+	}
+}
+
+func TestValueCodecs(t *testing.T) {
+	files := fstest.MapFS{"types.go": {Data: []byte(`package native
+	type CollectionItem struct{Title string}
+	type CollectionPanel struct {
+		Items []*CollectionItem
+		Named map[string]*CollectionItem
+		Styles map[string]map[string]string
+	}`)}}
+	schema, err := New("native", files, Options{Only: []string{"CollectionPanel"}, Types: []reflect.Type{reflect.TypeFor[CollectionPanel](), reflect.TypeFor[CollectionItem]()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	panels, err := Codec[CollectionPanel](schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := Codec[*CollectionItem](schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	styles, err := Codec[map[string]map[string]string](schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Codec[chan int](schema); err == nil {
+		t.Fatal("unbound type accepted")
+	}
+	pkg := schema.Package()
+	m, err := evmcompiler.Compile("echo.go", `import "native"; func Echo(x native.CollectionPanel) native.CollectionPanel{return x}`, pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := evm.Link(m, pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vm := p.AcquireVM(t.Context())
+	defer vm.Release()
+	fn, err := p.LookupFunction("Echo", &evm.Signature{Params: []*values.Type{panels.Type()}, Results: []*values.Type{panels.Type()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := &CollectionItem{Title: "VIP"}
+	if n := testing.AllocsPerRun(100, func() {
+		out, e := items.Unpack(items.Pack(item))
+		if e != nil || out != item {
+			t.Fatal(out, e)
+		}
+	}); n != 0 {
+		t.Fatalf("pointer round trip: %v allocations", n)
+	}
+	if out, err := items.Unpack(items.Pack(nil)); err != nil || out != nil {
+		t.Fatal(out, err)
+	}
+	input := CollectionPanel{Items: []*CollectionItem{item}, Named: map[string]*CollectionItem{"first": item}, Styles: map[string]map[string]string{"card": {"color": "blue"}}}
+	var slots [2]values.Value
+	slots[0], err = panels.PackIn(vm, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = vm.Run(fn, slots[:]); err != nil {
+		t.Fatal(err)
+	}
+	out, err := panels.UnpackIn(vm, slots[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Items) != 1 || out.Items[0] != item || out.Named["first"] != item || out.Styles["card"]["color"] != "blue" {
+		t.Fatalf("%+v", out)
+	}
+	v, err := styles.PackIn(vm, input.Styles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outStyles, err := styles.UnpackIn(vm, v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outStyles["card"]["color"] = "red"
+	if input.Styles["card"]["color"] != "red" {
+		t.Fatal("native map lost identity")
+	}
+	vm.SetBudget(evm.Limits{AllocationBytes: 1})
+	if _, err := panels.PackIn(vm, input); err == nil {
+		t.Fatal("struct packing ignored allocation limit")
 	}
 }

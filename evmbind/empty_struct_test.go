@@ -9,6 +9,7 @@ import (
 	"github.com/andreyvit/evm/evmbind"
 	"github.com/andreyvit/evm/evmbind/internal/emptydata"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -52,14 +53,14 @@ func New()*sets.SetHolder{return &sets.SetHolder{Set:map[string]struct{}{"guest"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(program).Run(context.Background(), "Run", []values.Value{arg}, nil); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", []values.Value{arg}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !host.Has("new") || host.Has("old") || len(host.Items) != 3 {
 		t.Fatal("native collection mutation lost", host)
 	}
 	out := make([]values.Value, 1)
-	if err := evm.New(program).Run(context.Background(), "New", nil, out); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "New", nil, out); err != nil {
 		t.Fatal(err)
 	}
 	if out[0].R != values.NativeAddress {
@@ -71,7 +72,7 @@ func New()*sets.SetHolder{return &sets.SetHolder{Set:map[string]struct{}{"guest"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(program).Run(context.Background(), "Share", []values.Value{out[0], carg}, nil); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Share", []values.Value{out[0], carg}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !created.Has("shared") || c.Marker != created.Marker || len(c.Items) != 2 {

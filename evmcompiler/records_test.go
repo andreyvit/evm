@@ -9,6 +9,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/kvo/codec/row2"
 	"github.com/andreyvit/evm/values"
@@ -33,13 +34,13 @@ func TestKVOProperties(t *testing.T) {
 	hostEdit := kvo.EditEncoded(row2.Edit(row2.Empty(row2.Compact2))).WithModel(cm)
 	backing := new(int)
 	pkg.Functions = []evm.ExternalFunction{
-		{Name: "Open", Signature: evm.Signature{Results: []*values.Type{pkg.Record(cm, true).Pointer}}, Call: func(c *evm.Call) error { return c.SetBackedEditRecordResult(cm, hostEdit, backing) }},
-		{Name: "Check", Signature: evm.Signature{Params: []*values.Type{pkg.Record(cm, true).Pointer}, Results: []*values.Type{values.Boolean}}, Call: func(c *evm.Call) error {
-			e, b, err := c.MutableRecord(c.Argument(0), cm)
+		{Name: "Open", Signature: evm.Signature{Results: []*values.Type{pkg.Record(cm, true).Pointer}}, Call: func(c *evm.VM) error { return c.SetBackedEditRecordResult(cm, hostEdit, backing) }},
+		{Name: "Check", Signature: evm.Signature{Params: []*values.Type{pkg.Record(cm, true).Pointer}, Results: []*values.Type{values.Boolean}}, Call: func(c *evm.VM) error {
+			e, b, err := c.MutableRecord(c.CallArgument(0), cm)
 			if err != nil {
 				return err
 			}
-			c.SetResult(0, values.Bool(e == hostEdit && b == backing && e.GetValue(total).AsInt() == 19))
+			c.SetCallResult(0, values.Bool(e == hostEdit && b == backing && e.GetValue(total).AsInt() == 19))
 			return nil
 		}},
 	}
@@ -70,7 +71,7 @@ func Keep(a,b *db.Edit) int64 {
 }
 func Pair(c *db.Customer)int64 {return c.bar.boz+c.bar.units}
 var held *db.EditBar
-func Hold(c *db.Edit){copy:=*c;held=copy.bar}
+func Hold(c *db.Edit)func()int64{copy:=*c;child:=copy.bar;return func()int64{child.boz++;return child.boz}}
 func Held()int64{held.boz++;return held.boz}
 func Native()bool{r:=db.Open();r.total=19;return db.Check(r)}
 `, pkg)
@@ -84,7 +85,7 @@ func Native()bool{r:=db.Open();r.total=19;return db.Check(r)}
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	ctx, scope := evm.WithRecords(context.Background())
 	defer scope.Close()
 	edit := row2.Edit(row2.Empty(row2.Compact2))
@@ -125,7 +126,7 @@ func Native()bool{r:=db.Open();r.total=19;return db.Check(r)}
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err = evm.New(test).Run(ctx, "Pair", args, result[:]); err != nil || result[0].AsInt() != -12 {
+		if err = evmtest.New(test).Run(ctx, "Pair", args, result[:]); err != nil || result[0].AsInt() != -12 {
 			t.Fatalf("branch to second read: %v %v", result, err)
 		}
 	}
@@ -147,14 +148,14 @@ func Native()bool{r:=db.Open();r.total=19;return db.Check(r)}
 	empty := row2.Edit(row2.Empty(row2.Compact2))
 	empty.Set([]row2.Step{{Key: total}}, values.Int(1), row2.Signed)
 	missing := []values.Value{scope.Read(cm, empty.Snapshot())}
-	if err := evm.New(p).Run(ctx, "Pair", missing, result[:]); err == nil || !strings.Contains(err.Error(), "missing Bar record") {
+	if err := evmtest.New(p).Run(ctx, "Pair", missing, result[:]); err == nil || !strings.Contains(err.Error(), "missing Bar record") {
 		t.Fatalf("missing common child: %v", err)
 	}
 	for _, tc := range []struct {
 		name string
 		line int
 	}{{"Fused", 6}, {"Split", 9}, {"Twice", 14}} {
-		err := evm.New(p).Run(ctx, tc.name, missing, result[:])
+		err := evmtest.New(p).Run(ctx, tc.name, missing, result[:])
 		var e *evm.ExecutionError
 		if !errors.As(err, &e) || e.Position.Line != tc.line || e.Err.Error() != "missing Bar record" {
 			t.Fatalf("%s: %v", tc.name, err)
@@ -186,14 +187,19 @@ func Native()bool{r:=db.Open();r.total=19;return db.Check(r)}
 	if got, err := foreign.Mutable(originalEdit, cm); err != nil || got != edit {
 		t.Fatal("mutable handle lost across scopes", got, err)
 	}
-	if err := vm.Run(ctx, "Hold", []values.Value{originalEdit}, nil); err != nil {
+	var held [1]values.Value
+	if err := vm.Run(ctx, "Hold", []values.Value{originalEdit}, held[:]); err != nil {
 		t.Fatal(err)
 	}
 	scope.Close()
 	if got, err := scope.Mutable(originalEdit, cm); err != nil || got != edit {
 		t.Fatal("mutable handle lost after scope close", got, err)
 	}
-	if err := vm.Run(context.Background(), "Held", nil, result[:]); err != nil || result[0].AsInt() != 9 {
+	fn, err := vm.Program().Callable(held[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vm.RunFunction(context.Background(), &fn, nil, result[:]); err != nil || result[0].AsInt() != 9 {
 		t.Fatal("retained child failed without scope", result, err)
 	}
 	if err := vm.Run(ctx, "Read", args, result[:]); err != nil {
@@ -250,7 +256,7 @@ func Read(r *m.Row) (int64,uint64) {
 		t.Fatal(err)
 	}
 	for _, layout := range []row2.Layout{row2.Fast2, row2.Compact2} {
-		vm := evm.New(linked)
+		vm := evmtest.New(linked)
 		ctx, scope := evm.WithRecords(context.Background())
 		root := row2.Edit(row2.Empty(layout))
 		edit := scope.Edit(model, root)
@@ -288,8 +294,8 @@ func TestDirectRecordScope(t *testing.T) {
 		delta = row2.Edit(row2.Empty(row2.Fast2))
 	}
 	pkg := evm.Package{Path: "m", Records: []*evm.RecordType{row}, Functions: []evm.ExternalFunction{
-		{Name: "Get", Signature: signature, Direct: evm.DirectBinding{Op: evm.OpCallHostUS, Call: func(c *evm.Call, i, _ values.Value) (values.Value, error) { return c.RecordValue(model, rows[i.R%2]) }}},
-		{Name: "Saved", Signature: evm.Signature{Results: signature.Results}, Direct: evm.DirectBinding{Op: evm.OpCallHostS, Call: func(*evm.Call, values.Value, values.Value) (values.Value, error) { return saved, nil }}},
+		{Name: "Get", Signature: signature, Direct: evm.DirectBinding{Op: evm.OpCallHostUS, Call: func(c *evm.VM, i, _ values.Value) (values.Value, error) { return c.RecordValue(model, rows[i.R%2]) }}},
+		{Name: "Saved", Signature: evm.Signature{Results: signature.Results}, Direct: evm.DirectBinding{Op: evm.OpCallHostS, Call: func(*evm.VM, values.Value, values.Value) (values.Value, error) { return saved, nil }}},
 	}}
 	m, err := evmcompiler.Compile("scoped.go", `import "m"
 func Sum() uint64 {
@@ -306,7 +312,7 @@ func Saved()*m.Account{return m.Saved()}`, pkg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	ctx, scope := evm.WithRecords(context.Background())
 	var out [1]values.Value
 	if err := vm.Run(ctx, "Sum", nil, out[:]); err != nil || out[0].R != 480 {

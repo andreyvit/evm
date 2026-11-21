@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 	"reflect"
 	"testing"
@@ -27,7 +28,7 @@ func TestNativeEntryArgumentWithoutMethods(t *testing.T) {
 	}
 	data := &EntryData{Count: 4}
 	var arg values.Value
-	if err := evm.New(p).RunNative(context.Background(), func(c *evm.Call) error {
+	if err := evmtest.New(p).RunNative(context.Background(), func(c *evm.VM) error {
 		packed, err := c.AnyValue(data)
 		if err != nil {
 			return err
@@ -48,7 +49,7 @@ func TestNativeEntryArgumentWithoutMethods(t *testing.T) {
 	}, evm.Budget{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(p).Run(context.Background(), "Run", []values.Value{arg}, nil); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", []values.Value{arg}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if data.Count != 5 {

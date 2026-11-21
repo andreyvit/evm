@@ -46,13 +46,13 @@ func (c *MapCodec[K, V]) fromMessagePack(p *nativePlan, v msgpack.View) V {
 	if c.messagePack != nil {
 		return c.messagePack(p, v)
 	}
-	return c.value.Decode(mapMessagePackValue(p, v))
+	return c.value.Unpack(mapMessagePackValue(p, v))
 }
 func (c *MapCodec[K, V]) fromNative(p *nativePlan, v reflect.Value) V {
 	if c.native != nil {
 		return c.native(p, v)
 	}
-	return c.value.Decode(nativeValue(p, v, row2.Fast2))
+	return c.value.Unpack(nativeValue(p, v, row2.Fast2))
 }
 func (c *MapCodec[K, V]) view(l ListValue) Map[K, V] { return Map[K, V]{c.access.wrap(l)} }
 
@@ -80,7 +80,7 @@ func (c *MapCodec[K, V]) encode(m Map[K, V]) values.Value {
 func (c *MapCodec[K, V]) encodeEntries(entries func(func(K, V) bool)) values.Value {
 	type entry struct{ k, v values.Value }
 	var all []entry
-	entries(func(k K, v V) bool { all = append(all, entry{c.key.Encode(k), c.value.Encode(v)}); return true })
+	entries(func(k K, v V) bool { all = append(all, entry{c.key.Pack(k), c.value.Pack(v)}); return true })
 	slices.SortFunc(all, func(a, b entry) int {
 		if c.text {
 			return strings.Compare(a.k.AsString(), b.k.AsString())
@@ -132,7 +132,7 @@ func NewRecordMapCodec[K comparable](typ *MapType, key values.Codec[K]) *MapCode
 	if !ok {
 		panic("record: record map requires an entity item type")
 	}
-	value := values.Codec[Record]{Type: reflect.TypeFor[Record](), Decode: func(v values.Value) Record { return Encoded(row2.Trusted(v.AsBytes())).WithModel(entity.Model()) }, Encode: func(r Record) values.Value {
+	value := values.Codec[Record]{Type: reflect.TypeFor[Record](), Unpack: func(v values.Value) Record { return Encoded(row2.Trusted(v.AsBytes())).WithModel(entity.Model()) }, Pack: func(r Record) values.Value {
 		if !r.Missing() && r.Model() != entity.Model() {
 			panic("record: incorrect map entry model")
 		}
@@ -169,9 +169,9 @@ func NewRecordMapProp[K comparable](schema *Schema, code uint64, name string, ty
 // NewNestedMapCodec builds an outer map whose values are borrowed typed maps.
 func NewNestedMapCodec[K comparable, K2 comparable, V any](keyType AnyType, key values.Codec[K], inner *MapCodec[K2, V]) *MapCodec[K, Map[K2, V]] {
 	typ := MapOf(keyType, inner.typ)
-	value := values.Codec[Map[K2, V]]{Type: reflect.TypeFor[Map[K2, V]](), Decode: func(v values.Value) Map[K2, V] {
+	value := values.Codec[Map[K2, V]]{Type: reflect.TypeFor[Map[K2, V]](), Unpack: func(v values.Value) Map[K2, V] {
 		return inner.view(ListValue{data: v, encoding: Encoding(inner.typ.ItemType()), kind: compactRepresentation})
-	}, Encode: inner.encode}
+	}, Pack: inner.encode}
 	c := newMapCodec(typ, key, value)
 	c.messagePack = func(p *nativePlan, v msgpack.View) Map[K2, V] {
 		return inner.view(messagePackCollection(p, v, Encoding(inner.typ.ItemType())))

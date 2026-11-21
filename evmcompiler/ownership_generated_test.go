@@ -24,7 +24,7 @@ func borrowingPackage() evm.Package {
 		}
 		return effects
 	}
-	nothing := func(*evm.Call) error { return nil }
+	nothing := func(*evm.VM) error { return nil }
 	return evm.Package{Path: "borrow", Functions: []evm.ExternalFunction{
 		{Name: "Read", Signature: text, Ownership: lend("test.buffer"), Call: nothing},
 		{Name: "Other", Signature: text, Ownership: lend("test.other"), Call: nothing},

@@ -65,7 +65,7 @@ func decodeModel(f *Frame, n *node, v values.Value) reflect.Value {
 	if n.model.row.Mutable {
 		record, err = evm.NativeMutableRecord(v, n.model.row.Model)
 	} else {
-		record, err = f.Call.Record(v, n.model.row.Model)
+		record, err = f.VM.Record(v, n.model.row.Model)
 	}
 	if err != nil {
 		panic(err)

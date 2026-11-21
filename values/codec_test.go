@@ -10,11 +10,11 @@ type codecName string
 
 func checkCodec[T comparable](t *testing.T, c Codec[T], want T) {
 	t.Helper()
-	if got := c.Decode(c.Encode(want)); got != want {
+	if got := c.Unpack(c.Pack(want)); got != want {
 		t.Fatalf("got %v want %v", got, want)
 	}
 	if n := testing.AllocsPerRun(100, func() {
-		if c.Decode(c.Encode(want)) != want {
+		if c.Unpack(c.Pack(want)) != want {
 			t.Fatal("round trip")
 		}
 	}); n != 0 {
@@ -39,12 +39,12 @@ func TestCodecs(t *testing.T) {
 	checkCodec(t, StringCodec[codecName](), "borrowed")
 	c := BytesCodec[[]byte]()
 	b := []byte{1, 2, 3}
-	out := c.Decode(c.Encode(b))
+	out := c.Unpack(c.Pack(b))
 	out[0] = 9
 	if b[0] != 9 {
 		t.Fatal("bytes unexpectedly copied")
 	}
-	if c.Decode(c.Encode(nil)) != nil {
+	if c.Unpack(c.Pack(nil)) != nil {
 		t.Fatal("nil bytes")
 	}
 }
@@ -53,7 +53,7 @@ func BenchmarkCodecRoundTrip(b *testing.B) {
 	var n int64
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		n = c.Decode(c.Encode(int64(i)))
+		n = c.Unpack(c.Pack(int64(i)))
 	}
 	if n != int64(b.N-1) {
 		b.Fatal(n)

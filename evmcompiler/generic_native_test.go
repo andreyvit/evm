@@ -10,6 +10,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -20,7 +21,7 @@ func First[T comparable](a, b T) T
 		if len(args) != 1 {
 			return evm.ExternalFunction{}, fmt.Errorf("First needs one type argument")
 		}
-		return evm.ExternalFunction{Signature: evm.Signature{Params: []*values.Type{args[0], args[0]}, Results: args}, Call: func(c *evm.Call) error { c.SetResult(0, c.Argument(0)); return nil }}, nil
+		return evm.ExternalFunction{Signature: evm.Signature{Params: []*values.Type{args[0], args[0]}, Results: args}, Call: func(c *evm.VM) error { c.SetCallResult(0, c.CallArgument(0)); return nil }}, nil
 	}}}}
 	for _, expr := range []string{"host.First(42, 8)", "host.First[int](42, 8)", "func() int { f:=host.First[int];return f(42,8) }()"} {
 		t.Run(expr, func(t *testing.T) {
@@ -35,7 +36,7 @@ func Run() int { if host.First("first","second")!="first" {return -1};if host.Fi
 				t.Fatal(err)
 			}
 			out := make([]values.Value, 1)
-			if err := evm.New(p).Run(context.Background(), "Run", nil, out); err != nil {
+			if err := evmtest.New(p).Run(context.Background(), "Run", nil, out); err != nil {
 				t.Fatal(err)
 			}
 			if out[0].AsInt() != 42 {
@@ -71,12 +72,12 @@ func (t Table) First[T comparable](a,b T) T
 		if len(args) != 1 {
 			return evm.ExternalFunction{}, fmt.Errorf("First needs one type argument")
 		}
-		return evm.ExternalFunction{Signature: evm.Signature{Params: []*values.Type{args[0], args[0]}, Results: args}, Call: func(c *evm.Call) error {
-			v := c.Argument(1)
-			if c.Argument(0).R == 0 {
-				v = c.Argument(2)
+		return evm.ExternalFunction{Signature: evm.Signature{Params: []*values.Type{args[0], args[0]}, Results: args}, Call: func(c *evm.VM) error {
+			v := c.CallArgument(1)
+			if c.CallArgument(0).R == 0 {
+				v = c.CallArgument(2)
 			}
-			c.SetResult(0, v)
+			c.SetCallResult(0, v)
 			return nil
 		}}, nil
 	}}}}
@@ -91,7 +92,7 @@ func (t Table) First[T comparable](a,b T) T
 				t.Fatal(err)
 			}
 			out := make([]values.Value, 1)
-			if err := evm.New(p).Run(context.Background(), "Run", nil, out); err != nil {
+			if err := evmtest.New(p).Run(context.Background(), "Run", nil, out); err != nil {
 				t.Fatal(err)
 			}
 			if out[0].AsInt() != 42 {
@@ -102,7 +103,7 @@ func (t Table) First[T comparable](a,b T) T
 }
 
 func TestNativeSourceSignatureMismatch(t *testing.T) {
-	pkg := evm.Package{Path: "host", Source: `package host;func First(a,b int) int`, Functions: []evm.ExternalFunction{{Name: "First", Signature: evm.Signature{Params: []*values.Type{values.StringType}, Results: []*values.Type{values.StringType}}, Call: func(*evm.Call) error { return nil }}}}
+	pkg := evm.Package{Path: "host", Source: `package host;func First(a,b int) int`, Functions: []evm.ExternalFunction{{Name: "First", Signature: evm.Signature{Params: []*values.Type{values.StringType}, Results: []*values.Type{values.StringType}}, Call: func(*evm.VM) error { return nil }}}}
 	if _, err := evmcompiler.Compile("bad.go", `import "host";func Run()int{return host.First(1,2)}`, pkg); err == nil || !strings.Contains(err.Error(), "native source signature mismatch") {
 		t.Fatal(err)
 	}
@@ -113,12 +114,12 @@ func TestGenericNativeDeclarationValidation(t *testing.T) {
 		if len(args) != 1 {
 			return evm.ExternalFunction{}, fmt.Errorf("one type argument required")
 		}
-		return evm.ExternalFunction{Signature: evm.Signature{Params: args, Results: args}, Call: func(c *evm.Call) error { c.SetResult(0, c.Argument(0)); return nil }}, nil
+		return evm.ExternalFunction{Signature: evm.Signature{Params: args, Results: args}, Call: func(c *evm.VM) error { c.SetCallResult(0, c.CallArgument(0)); return nil }}, nil
 	}
 	base := evm.Package{Path: "host", Source: `package host;func Identity[T any](v T) T`, Functions: []evm.ExternalFunction{{Name: "Identity", Instantiate: factory}}}
 	for _, modify := range []func(*evm.Package){
 		func(p *evm.Package) { p.Source = "" },
-		func(p *evm.Package) { p.Functions[0].Call = func(*evm.Call) error { return nil } },
+		func(p *evm.Package) { p.Functions[0].Call = func(*evm.VM) error { return nil } },
 		func(p *evm.Package) { p.Functions[0].Signature.Params = []*values.Type{values.IntType} },
 	} {
 		p := base
@@ -148,7 +149,7 @@ func TestGenericNativeDeclarationValidation(t *testing.T) {
 			t.Fatal(err)
 		}
 		out := make([]values.Value, 1)
-		if err := evm.New(program).Run(context.Background(), "Run", nil, out); err != nil {
+		if err := evmtest.New(program).Run(context.Background(), "Run", nil, out); err != nil {
 			t.Fatal(err)
 		}
 		if out[0].AsInt() != 42 {
@@ -196,9 +197,9 @@ package host
 type Table uint64
 func (t Table) Read[T any](key T) string
 func End()
-`, SharedTypes: []evm.SharedType{{Name: "Table", Type: table, Native: reflect.TypeFor[uint64]()}}, Functions: []evm.ExternalFunction{{Name: "End", Ownership: &evm.OwnershipEffects{NoRetain: true, Ends: []evm.ScopeEnd{{Domain: "buffer"}}}, Call: func(*evm.Call) error { copy(data, "dead"); return nil }}}, Methods: []evm.ExternalMethod{{Name: "Read", Receiver: table, Instantiate: func(args []*values.Type) (evm.ExternalFunction, error) {
-		return evm.ExternalFunction{Signature: evm.Signature{Params: args, Results: []*values.Type{values.StringType}}, Ownership: &evm.OwnershipEffects{NoRetain: true, NoInvalidate: true, Borrowed: []evm.BorrowSource{{Result: 0, Domain: "buffer"}}}, Call: func(c *evm.Call) error {
-			c.SetResult(0, values.String(unsafe.String(unsafe.SliceData(data), len(data))))
+`, SharedTypes: []evm.SharedType{{Name: "Table", Type: table, Native: reflect.TypeFor[uint64]()}}, Functions: []evm.ExternalFunction{{Name: "End", Ownership: &evm.OwnershipEffects{NoRetain: true, Ends: []evm.ScopeEnd{{Domain: "buffer"}}}, Call: func(*evm.VM) error { copy(data, "dead"); return nil }}}, Methods: []evm.ExternalMethod{{Name: "Read", Receiver: table, Instantiate: func(args []*values.Type) (evm.ExternalFunction, error) {
+		return evm.ExternalFunction{Signature: evm.Signature{Params: args, Results: []*values.Type{values.StringType}}, Ownership: &evm.OwnershipEffects{NoRetain: true, NoInvalidate: true, Borrowed: []evm.BorrowSource{{Result: 0, Domain: "buffer"}}}, Call: func(c *evm.VM) error {
+			c.SetCallResult(0, values.String(unsafe.String(unsafe.SliceData(data), len(data))))
 			return nil
 		}}, nil
 	}}}}
@@ -214,7 +215,7 @@ func End()
 				t.Fatal(err)
 			}
 			out := make([]values.Value, 1)
-			if err := evm.New(p).Run(context.Background(), "Run", nil, out); err != nil {
+			if err := evmtest.New(p).Run(context.Background(), "Run", nil, out); err != nil {
 				t.Fatal(err)
 			}
 			if out[0].AsString() != "live" {

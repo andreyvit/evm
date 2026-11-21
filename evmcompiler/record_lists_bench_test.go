@@ -8,6 +8,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/kvo/codec/msgpack"
 	"github.com/andreyvit/evm/kvo/codec/row2"
@@ -73,7 +74,7 @@ func Reverse(c *db.Customer,n int) int {
 				b.Run(format.name, func(b *testing.B) {
 					for _, fn := range []string{"Range", "Len", "Index", "Reverse"} {
 						b.Run(fn, func(b *testing.B) {
-							vm := evm.New(prog)
+							vm := evmtest.New(prog)
 							const repeats = 16
 							args := [2]values.Value{{}, values.Int(repeats)}
 							var out [1]values.Value

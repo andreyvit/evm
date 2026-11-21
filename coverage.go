@@ -195,4 +195,4 @@ func coverageBranch(op Opcode) bool {
 }
 
 // Coverage returns the enclosing invocation collector, or nil when disabled.
-func (c *Call) Coverage() *Coverage { return c.vm.coverage }
+func (c *VM) Coverage() *Coverage { return c.coverage }

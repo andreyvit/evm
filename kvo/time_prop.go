@@ -42,8 +42,8 @@ func NewLegacyTimeProp(schema *Schema, code uint64, name string) LegacyTimePropR
 func LegacyTimeCodec() values.Codec[time.Time] {
 	return values.Codec[time.Time]{
 		Type:   reflect.TypeFor[time.Time](),
-		Decode: func(v values.Value) time.Time { return Uint64ToTime(v.AsUint()) },
-		Encode: func(t time.Time) values.Value { return values.Uint(TimeToUint64(t)) },
+		Unpack: func(v values.Value) time.Time { return Uint64ToTime(v.AsUint()) },
+		Pack: func(t time.Time) values.Value { return values.Uint(TimeToUint64(t)) },
 	}
 }
 

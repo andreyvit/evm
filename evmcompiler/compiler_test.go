@@ -8,6 +8,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -27,7 +28,7 @@ func TestCompileGenericEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pkg.Functions[0].Call = func(c *evm.Call) error {
+	pkg.Functions[0].Call = func(c *evm.VM) error {
 		runtime.GC()
 		n := int64(c.R[layout.Slots[0]])
 		if (len(seen) == 0 && n != -9223372036854775808) || (len(seen) == 1 && n != 9) {
@@ -46,7 +47,7 @@ func TestCompileGenericEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	if err := vm.Run(context.Background(), "Start", nil, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +66,7 @@ func TestCompileGenericEnvironment(t *testing.T) {
 func BenchmarkCompileAndInitialize(b *testing.B) {
 	typ := values.NewStructShape("h.Item", values.Field{Name: "Text", Shape: &values.Shape{Type: values.StringType, Kind: values.StringKind, Cells: 1}})
 	typPtr := values.NewPointerShape(typ)
-	pkg := evm.Package{Path: "h", Types: []evm.TypeDecl{{Name: "Item", Shape: typ}, {Shape: typPtr}}, Functions: []evm.ExternalFunction{{Name: "Add", Signature: evm.Signature{Params: []*values.Type{typPtr.Type}}, Call: func(c *evm.Call) error { _ = typ.GetField(c.P[0], 0).AsString(); return nil }}}}
+	pkg := evm.Package{Path: "h", Types: []evm.TypeDecl{{Name: "Item", Shape: typ}, {Shape: typPtr}}, Functions: []evm.ExternalFunction{{Name: "Add", Signature: evm.Signature{Params: []*values.Type{typPtr.Type}}, Call: func(c *evm.VM) error { _ = typ.GetField(c.P[0], 0).AsString(); return nil }}}}
 	source := `import "h"
 func Init(){h.Add(&h.Item{Text:"one"});h.Add(&h.Item{Text:"two"})}`
 	b.Run("Compile", func(b *testing.B) {
@@ -84,7 +85,7 @@ func Init(){h.Add(&h.Item{Text:"one"});h.Add(&h.Item{Text:"two"})}`
 	if err != nil {
 		b.Fatal(err)
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	b.Run("Run", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
@@ -97,7 +98,7 @@ func Init(){h.Add(&h.Item{Text:"one"});h.Add(&h.Item{Text:"two"})}`
 }
 
 func TestCompileNumericAndWindowBounds(t *testing.T) {
-	pkg := evm.Package{Path: "h", Functions: []evm.ExternalFunction{{Name: "Numbers", Signature: evm.Signature{Params: []*values.Type{values.Int64, values.Uint64, values.Float64}}, Call: func(c *evm.Call) error {
+	pkg := evm.Package{Path: "h", Functions: []evm.ExternalFunction{{Name: "Numbers", Signature: evm.Signature{Params: []*values.Type{values.Int64, values.Uint64, values.Float64}}, Call: func(c *evm.VM) error {
 		if c.R[0] != uint64(1)<<63 || c.R[1] != ^uint64(0) || (values.Value{R: c.R[2]}).AsFloat() != -1.5 {
 			t.Fatal("lost full-width constant")
 		}
@@ -112,7 +113,7 @@ func Init(){h.Numbers(-9223372036854775808,18446744073709551615,-1.5)}`, pkg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(p).Run(context.Background(), "Init", nil, nil); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Init", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, args := range []string{"9223372036854775808,0,1", "0,18446744073709551616,1", "0,-1,1", "0,0,1e10000", "1.5,0,1"} {

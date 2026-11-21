@@ -9,6 +9,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 )
 
 type AggregateCell struct {
@@ -107,7 +108,7 @@ func TestNativeFieldsInGuestAggregates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(program).Run(context.Background(), "Run", nil, nil); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 }

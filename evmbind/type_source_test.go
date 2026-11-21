@@ -9,6 +9,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -74,7 +75,7 @@ func TestSelectedNativeTypeSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(p).Run(context.Background(), "Run", []values.Value{arg}, out[:]); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", []values.Value{arg}, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if out[0].R != 6 || native.Child.Permission != 4 {

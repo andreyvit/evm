@@ -6,6 +6,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -40,7 +41,7 @@ func TestLoopInvariantBound(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		vm := evm.New(p)
+		vm := evmtest.New(p)
 		var out [1]values.Value
 		for n := -1; n <= 8; n++ {
 			for _, name := range []string{"Work", "Changing"} {

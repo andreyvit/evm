@@ -82,21 +82,21 @@ var Bindings = evmbind.Static{Fingerprint: "59a9c24579161a425dea27eb0f7f7d85a47c
 	},
 	Calls: map[string]evmbind.Wrapper{
 		"*Runner.Call": func(f *evmbind.Frame) {
-			r0 := readPtrRunner(f, f.Argument(0)).Call(f.DecodeNativeCallback("func(int) error", f.Argument(1)).(func(int) error))
-			f.SetResult(0, writeScalarError(f, r0))
+			r0 := readPtrRunner(f, f.CallArgument(0)).Call(f.DecodeNativeCallback("func(int) error", f.CallArgument(1)).(func(int) error))
+			f.SetCallResult(0, writeScalarError(f, r0))
 		},
 		"*Runner.Suppress": func(f *evmbind.Frame) {
-			readPtrRunner(f, f.Argument(0)).Suppress(f.DecodeNativeCallback("func(int) error", f.Argument(1)).(func(int) error))
+			readPtrRunner(f, f.CallArgument(0)).Suppress(f.DecodeNativeCallback("func(int) error", f.CallArgument(1)).(func(int) error))
 		},
 		"*Runner.Store": func(f *evmbind.Frame) {
-			readPtrRunner(f, f.Argument(0)).Store(f.DecodeNativeCallback("func(int) error", f.Argument(1)).(func(int) error))
+			readPtrRunner(f, f.CallArgument(0)).Store(f.DecodeNativeCallback("func(int) error", f.CallArgument(1)).(func(int) error))
 		},
 		"*Runner.Echo": func(f *evmbind.Frame) {
-			r0 := readPtrRunner(f, f.Argument(0)).Echo(f.DecodeNativeCallback("func(int) error", f.Argument(1)).(func(int) error))
-			f.SetResult(0, writeNativeFunction3(f, r0))
+			r0 := readPtrRunner(f, f.CallArgument(0)).Echo(f.DecodeNativeCallback("func(int) error", f.CallArgument(1)).(func(int) error))
+			f.SetCallResult(0, writeNativeFunction3(f, r0))
 		},
 		"*Runner.OnThread": func(f *evmbind.Frame) {
-			r0 := readPtrRunner(f, f.Argument(0)).OnThread(f.DecodeNativeCallback("func(int) error", f.Argument(1)).(func(int) error))
-			f.SetResult(0, writeScalarError(f, r0))
+			r0 := readPtrRunner(f, f.CallArgument(0)).OnThread(f.DecodeNativeCallback("func(int) error", f.CallArgument(1)).(func(int) error))
+			f.SetCallResult(0, writeScalarError(f, r0))
 		},
 	}}

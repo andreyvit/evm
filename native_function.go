@@ -28,17 +28,17 @@ const nativeFunctionValue = math.MaxUint64
 const nativeFunctionIndex = math.MaxUint32
 
 type nativeFunction struct {
-	program *Program
-	typ     *NativeFunctionType
-	call    Native
-	data    any
+	target callTarget
+	typ    *NativeFunctionType
+	call   Native
+	data   any
 }
 
 // NativeFunction binds a native closure to the current program. The closure may
-// retain owned host state, but must not capture Call or its borrowed registers.
-// Calls from guest code and RunCallbackArgs share the active execution budget.
+// retain owned host state, and may borrow the VM only while the binding runs.
+// Guest calls and nested VM.Run calls share the active execution budget.
 // Host code remains responsible for validating captured transaction lifetimes.
-func (c *Call) NativeFunction(typ *NativeFunctionType, fn Native) (values.Value, error) {
+func (c *VM) NativeFunction(typ *NativeFunctionType, fn Native) (values.Value, error) {
 	if fn == nil {
 		return values.Value{}, nil
 	}
@@ -54,7 +54,7 @@ func (c *Call) NativeFunction(typ *NativeFunctionType, fn Native) (values.Value,
 // NativeFunction prepares a host-owned callable for an argument to Run. The
 // caller owns allocation accounting for this input. Calls from the VM share
 // its active execution limits; host code must honor cancellation and meter
-// any work or result allocations it performs. Use Call.NativeFunction for
+// any work or result allocations it performs. Use VM.NativeFunction for
 // values created during a VM invocation so the holder allocation is metered.
 func (p *Program) NativeFunction(typ *NativeFunctionType, fn Native) (values.Value, error) {
 	if fn == nil {
@@ -63,7 +63,7 @@ func (p *Program) NativeFunction(typ *NativeFunctionType, fn Native) (values.Val
 	if p == nil || typ == nil {
 		return values.Value{}, ErrFunction
 	}
-	f := &nativeFunction{program: p, typ: typ, call: fn}
+	f := &nativeFunction{typ: typ, call: fn, target: callTarget{p, -1, nativeFunctionValue, &typ.native.Signature}}
 	return values.Value{R: nativeFunctionValue, P: unsafe.Pointer(f)}, nil
 }
 
@@ -72,7 +72,7 @@ func (p *Program) nativeFunction(v values.Value) (*nativeFunction, error) {
 		return nil, ErrFunction
 	}
 	f := (*nativeFunction)(v.P)
-	if f.program != p || f.typ == nil || f.call == nil {
+	if f.target.program != p || f.typ == nil || f.call == nil {
 		return nil, ErrFunction
 	}
 	return f, nil
@@ -80,7 +80,7 @@ func (p *Program) nativeFunction(v values.Value) (*nativeFunction, error) {
 
 // NativeFunctionWithData retains immutable host metadata with a callable.
 // Bindings use it to preserve the original native function across round trips.
-func (c *Call) NativeFunctionWithData(typ *NativeFunctionType, fn Native, data any) (values.Value, error) {
+func (c *VM) NativeFunctionWithData(typ *NativeFunctionType, fn Native, data any) (values.Value, error) {
 	v, err := c.NativeFunction(typ, fn)
 	if err != nil || v.P == nil {
 		return v, err

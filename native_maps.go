@@ -25,7 +25,7 @@ func (vm *VM) nativeMapOperation(op *ExtendedOp, b *executionBudget, get func(in
 		if err != nil {
 			return nil, err
 		}
-		err = storeNative(&vm.call, keyShape, p, get(1), &b.allocated, b.limits)
+		err = storeNative(vm, keyShape, p, get(1), &b.allocated, b.limits)
 		return p, err
 	}
 	switch op.Kind {
@@ -50,7 +50,7 @@ func (vm *VM) nativeMapOperation(op *ExtendedOp, b *executionBudget, get func(in
 		ok := m.Lookup(get(0).P, k, v)
 		result := values.Value{}
 		if ok {
-			result, err = loadNative(&vm.call, elemShape, v, &b.allocated, b.limits)
+			result, err = loadNative(vm, elemShape, v, &b.allocated, b.limits)
 			if err != nil {
 				return true, err
 			}
@@ -75,7 +75,7 @@ func (vm *VM) nativeMapOperation(op *ExtendedOp, b *executionBudget, get func(in
 		if err := charge(128, &b.allocated, b.limits); err != nil {
 			return true, err
 		}
-		if err := storeNative(&vm.call, elemShape, v, get(2), &b.allocated, b.limits); err != nil {
+		if err := storeNative(vm, elemShape, v, get(2), &b.allocated, b.limits); err != nil {
 			return true, err
 		}
 		m.Update(get(0).P, k, v)
@@ -103,11 +103,11 @@ func (vm *VM) nativeMapOperation(op *ExtendedOp, b *executionBudget, get func(in
 		ok := it.native.Next(it.nativeKey, it.nativeValue)
 		put(0, values.Bool(ok))
 		if ok {
-			k, err := loadNative(&vm.call, keyShape, it.nativeKey, &b.allocated, b.limits)
+			k, err := loadNative(vm, keyShape, it.nativeKey, &b.allocated, b.limits)
 			if err != nil {
 				return true, err
 			}
-			v, err := loadNative(&vm.call, elemShape, it.nativeValue, &b.allocated, b.limits)
+			v, err := loadNative(vm, elemShape, it.nativeValue, &b.allocated, b.limits)
 			if err != nil {
 				return true, err
 			}

@@ -18,6 +18,7 @@ import (
 	"github.com/andreyvit/evm/evmbind/internal/modeldata"
 	"github.com/andreyvit/evm/evmbind/internal/modelhost"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/kvo/codec/row2"
 	"github.com/andreyvit/evm/values"
@@ -63,11 +64,11 @@ func TestGeneratedModelSignatures(t *testing.T) {
 		}
 		binding := kvo.Bind(reflect.TypeFor[BoundModel](), models.Records[0].Model)
 		encoded := binding.Encoded(row2.Trusted(binding.Encode(nil, reflect.ValueOf(instance.row).Elem(), row2.Fast2)))
-		records := evm.Package{Path: "records", Functions: []evm.ExternalFunction{{Name: "Get", Signature: evm.Signature{Results: []*values.Type{models.Records[0].Pointer}}, Call: func(c *evm.Call) error { c.SetResult(0, encoded.Value()); return nil }}}}
+		records := evm.Package{Path: "records", Functions: []evm.ExternalFunction{{Name: "Get", Signature: evm.Signature{Results: []*values.Type{models.Records[0].Pointer}}, Call: func(c *evm.VM) error { c.SetCallResult(0, encoded.Value()); return nil }}}}
 		records.Functions = append(records.Functions, evm.ExternalFunction{
 			Name: "ToNative", Signature: evm.Signature{Params: []*values.Type{models.Records[0].Pointer}, Results: []*values.Type{models.Records[0].Pointer}},
-			Call: func(c *evm.Call) error {
-				row, err := c.Record(c.Argument(0), models.Records[0].Model)
+			Call: func(c *evm.VM) error {
+				row, err := c.Record(c.CallArgument(0), models.Records[0].Model)
 				if err != nil {
 					return err
 				}
@@ -75,7 +76,7 @@ func TestGeneratedModelSignatures(t *testing.T) {
 				if err := binding.TryDecodeRecord(row, reflect.ValueOf(x).Elem()); err != nil {
 					return err
 				}
-				c.SetResult(0, binding.Record(reflect.ValueOf(x)).Value())
+				c.SetCallResult(0, binding.Record(reflect.ValueOf(x)).Value())
 				return nil
 			},
 		})
@@ -205,16 +206,16 @@ func TestGeneratedModelSignatures(t *testing.T) {
 			t.Fatal(err)
 		}
 		var out [1]values.Value
-		if err = evm.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil || out[0].R != 1 {
+		if err = evmtest.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil || out[0].R != 1 {
 			t.Fatal(out, err)
 		}
-		if err = evm.New(p).Run(context.Background(), "Convert", nil, out[:]); err != nil || out[0].R != 1 {
+		if err = evmtest.New(p).Run(context.Background(), "Convert", nil, out[:]); err != nil || out[0].R != 1 {
 			t.Fatal(out, err)
 		}
-		if err = evm.New(p).Run(context.Background(), "Slices", nil, out[:]); err != nil || out[0].R != 1 {
+		if err = evmtest.New(p).Run(context.Background(), "Slices", nil, out[:]); err != nil || out[0].R != 1 {
 			t.Fatal(out, err)
 		}
-		vm := evm.New(p)
+		vm := evmtest.New(p)
 		err = vm.Run(context.Background(), "PanicSlice", nil, nil)
 		if err == nil || !strings.Contains(err.Error(), "host panic") {
 			t.Fatalf("expected host failure: %v", err)
@@ -222,14 +223,14 @@ func TestGeneratedModelSignatures(t *testing.T) {
 		if instance.rows[1] != instance.row || instance.rows[:4][2].Name != "original" || instance.rows[:4][3].Name != "other" {
 			t.Fatal("slice aliasing lost")
 		}
-		if err = evm.New(p).Run(context.Background(), "StoreEncoded", nil, nil); err == nil || !strings.Contains(err.Error(), "explicit conversion") {
+		if err = evmtest.New(p).Run(context.Background(), "StoreEncoded", nil, nil); err == nil || !strings.Contains(err.Error(), "explicit conversion") {
 			t.Fatalf("encoded row store accepted: %v", err)
 		}
 		if instance.rows[0] != instance.row {
 			t.Fatal("failed store changed destination")
 		}
 		for _, name := range []string{"RejectEncodedPointer", "RejectOtherPointer", "RejectEncodedValue"} {
-			if err := evm.New(p).Run(context.Background(), name, nil, nil); err == nil || !strings.Contains(err.Error(), "explicit conversion") {
+			if err := evmtest.New(p).Run(context.Background(), name, nil, nil); err == nil || !strings.Contains(err.Error(), "explicit conversion") {
 				t.Fatalf("%s: expected explicit conversion error, got %v", name, err)
 			}
 		}
@@ -321,7 +322,7 @@ func Index()int{rows:=host.Rows();n:=0;for i:=0;i<len(rows);i++{n+=len(rows[i].n
 			}
 			for _, fn := range []string{"Roundtrip", "Read", "Index"} {
 				b.Run(fn, func(b *testing.B) {
-					vm := evm.New(program)
+					vm := evmtest.New(program)
 					vm.Limits.Allocations = ^uint64(0)
 					vm.Limits.AllocationBytes = ^uint64(0)
 					var out [1]values.Value

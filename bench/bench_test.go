@@ -7,6 +7,7 @@ import (
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/bench/internal/workload"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -22,7 +23,7 @@ func sensorVM(t testing.TB, name string, raw bool) workload.Runner {
 		if raw {
 			return evm.ExternalFunction{Name: name, Signature: sig, Direct: evm.DirectUnary(func(i uint64) uint64 { return uint64(data[i]) })}
 		}
-		return evm.ExternalFunction{Name: name, Signature: sig, Call: func(c *evm.Call) error {
+		return evm.ExternalFunction{Name: name, Signature: sig, Call: func(c *evm.VM) error {
 			c.R[0] = uint64(data[c.R[0]])
 			return nil
 		}}
@@ -36,7 +37,7 @@ func sensorVM(t testing.TB, name string, raw bool) workload.Runner {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	// Each Sieve call drops its backing array. Keep the per-call budget but
 	// allow a long benchmark to outlive the default cumulative session quota.
 	var budget evm.Budget

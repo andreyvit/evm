@@ -9,6 +9,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -39,7 +40,7 @@ func Run(n int)(int,int) {
 		t.Fatal(err)
 	}
 	out := make([]values.Value, 2)
-	if err := evm.New(p).Run(context.Background(), "Run", []values.Value{values.Int(10)}, out); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", []values.Value{values.Int(10)}, out); err != nil {
 		t.Fatal(err)
 	}
 	if out[0].AsInt() != 21 || out[1].AsInt() != 45 {
@@ -72,7 +73,7 @@ func TestGoScalarsAndConversions(t *testing.T) {
 				t.Fatal(err)
 			}
 			out := make([]values.Value, 1)
-			if err := evm.New(p).Run(context.Background(), "Run", nil, out); err != nil {
+			if err := evmtest.New(p).Run(context.Background(), "Run", nil, out); err != nil {
 				t.Fatal(err)
 			}
 			if out[0] != tc.want {
@@ -83,7 +84,7 @@ func TestGoScalarsAndConversions(t *testing.T) {
 }
 
 func TestGoRequiresImportsAndTypes(t *testing.T) {
-	pkg := evm.Package{Path: "h", Functions: []evm.ExternalFunction{{Name: "Ping", Call: func(*evm.Call) error { return nil }}}}
+	pkg := evm.Package{Path: "h", Functions: []evm.ExternalFunction{{Name: "Ping", Call: func(*evm.VM) error { return nil }}}}
 	for _, source := range []string{`func Run(){h.Ping()}`, `package p;import "h";func Run(){}`, `package p;import "unknown";func Run(){unknown.Ping()}`, `func Run(){x:=1;x="wrong"}`, `func Run(){x:=true;if x+1>0{}}`, `func Run(){var x int8=128;_ =x}`, `func Run(){ch:=make(chan int);go func(){ch<-1}();select{case <-ch:default:}}`, `func Run(){if false{go Run()}}`} {
 		if m, err := evmcompiler.Compile("main.go", source, pkg); err == nil || m != nil {
 			t.Fatalf("accepted %s", source)
@@ -97,7 +98,7 @@ func TestGoRequiresImportsAndTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	_, err = evmcompiler.Compile("main.go", "//line fake.go:999\nfunc Run(){\n x:=unknown\n _=x\n}")
@@ -127,7 +128,7 @@ func Compare(x float64)bool{return x<=x}
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	out := make([]values.Value, 3)
 	if err := vm.Run(context.Background(), "Run", []values.Value{values.String("first"), values.Int(7)}, out); err != nil {
 		t.Fatal(err)
@@ -162,7 +163,7 @@ func Compare(x float64)bool{return x<=x}
 
 func TestGoHostSignaturesAreSnapshots(t *testing.T) {
 	params := []*values.Type{values.IntType}
-	pkg := evm.Package{Path: "h", Functions: []evm.ExternalFunction{{Name: "Take", Signature: evm.Signature{Params: params}, Call: func(c *evm.Call) error {
+	pkg := evm.Package{Path: "h", Functions: []evm.ExternalFunction{{Name: "Take", Signature: evm.Signature{Params: params}, Call: func(c *evm.VM) error {
 		if c.R[0] != 42 {
 			t.Fatalf("argument: %d", c.R[0])
 		}
@@ -181,7 +182,7 @@ func TestGoHostSignaturesAreSnapshots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -199,7 +200,7 @@ func FuzzTypedCompile(f *testing.F) {
 			t.Fatalf("invalid compiled bytecode: %v", err)
 		}
 		for _, fn := range m.Functions {
-			vm := evm.New(p)
+			vm := evmtest.New(p)
 			vm.Limits = evm.Limits{Steps: 1000, Depth: 32, AllocationBytes: 4096}
 			args := make([]values.Value, len(fn.Signature.Params))
 			out := make([]values.Value, len(fn.Signature.Results))
@@ -226,7 +227,7 @@ func TestGoFloat32ConversionRoundsOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	out := make([]values.Value, 1)
 	// Just above a float32 midpoint which float64 rounds back to the midpoint.
 	x := uint64(1)<<63 | uint64(1)<<39 | 1
@@ -247,7 +248,7 @@ func BenchmarkGoScalarRun(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	args := []values.Value{values.Int(10)}
 	out := make([]values.Value, 1)
 	if err := vm.Run(context.Background(), "Run", args, out); err != nil {
@@ -272,7 +273,7 @@ func Unsigned(x,y uint64) (uint64,uint64,uint64,uint64,uint64){return x+y,x-y,x*
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	out := make([]values.Value, 5)
 	bits := []uint64{0, 1, 2, 127, 128, 255, 256, 1 << 31, 1 << 32, 1<<63 - 1, 1 << 63, 1<<63 + 1, ^uint64(0)}
 	for _, x := range bits {

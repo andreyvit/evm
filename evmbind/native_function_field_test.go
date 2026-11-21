@@ -11,6 +11,7 @@ import (
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmbind"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -18,8 +19,8 @@ type NativeUnary func(int) int
 type NativeFunctionBox struct{ Apply NativeUnary }
 type nativeFunctionFieldHost struct{ box NativeFunctionBox }
 
-func (h *nativeFunctionFieldHost) Box(_ *evm.Call) *NativeFunctionBox { return &h.box }
-func (h *nativeFunctionFieldHost) Apply(_ *evm.Call, n int) int       { return h.box.Apply(n) }
+func (h *nativeFunctionFieldHost) Box(_ *evm.VM) *NativeFunctionBox { return &h.box }
+func (h *nativeFunctionFieldHost) Apply(_ *evm.VM, n int) int       { return h.box.Apply(n) }
 
 // A native page's ViewFunc must remain callable after its producer returns.
 func TestNativeFunctionFieldRetainsGuestClosure(t *testing.T) {
@@ -50,7 +51,7 @@ func TestNativeFunctionFieldRetainsGuestClosure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(program)
+	vm := evmtest.New(program)
 	if err := vm.Run(context.Background(), "Install", nil, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +59,7 @@ func TestNativeFunctionFieldRetainsGuestClosure(t *testing.T) {
 	if host.box.Apply == nil {
 		t.Fatal("missing retained function")
 	}
-	if err := vm.RunNative(context.Background(), func(*evm.Call) error {
+	if err := vm.RunNative(context.Background(), func(*evm.VM) error {
 		if got := host.box.Apply(2); got != 42 {
 			t.Fatalf("first call: %d", got)
 		}
@@ -102,8 +103,8 @@ func TestNativeFunctionFieldRetainsGuestClosure(t *testing.T) {
 		}()
 		saved(1)
 	}()
-	limited := evm.New(program)
-	scope, err := limited.OpenCallbackScope(context.Background(), evm.Budget{Steps: 10})
+	limited := evmtest.New(program)
+	scope, err := limited.OpenCallbackScope()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,9 +119,10 @@ func TestNativeFunctionFieldRetainsGuestClosure(t *testing.T) {
 				t.Fatalf("idle callback budget: %v", err)
 			}
 		}()
+		limited.SetBudget(evm.Limits{Steps: 10})
 		host.box.Apply(1)
 	}()
-	if err := limited.Run(context.Background(), "Clear", nil, nil); !errors.Is(err, evm.ErrInvalidState) {
+	if err := limited.Run(context.Background(), "Clear", nil, nil); err != nil {
 		t.Fatalf("failed idle session: %v", err)
 	}
 
@@ -149,17 +151,17 @@ func TestNativeFunctionFieldSharesCallingVMGlobals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(p)
-	if err := vm.Run(context.Background(), "Run", nil, nil); err != nil {
-		t.Fatal(err)
-	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	scope, err := vm.OpenCallbackScope(ctx, evm.Budget{Steps: 10000})
+	vm := evmtest.New(p)
+	if err := vm.Run(ctx, "Run", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	scope, err := vm.OpenCallbackScope()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := vm.RunNative(context.Background(), func(*evm.Call) error {
+	if err := vm.RunNative(ctx, func(*evm.VM) error {
 		if err := scope.Close(); !errors.Is(err, evm.ErrReentry) {
 			t.Fatalf("close running scope: %v", err)
 		}
@@ -167,7 +169,7 @@ func TestNativeFunctionFieldSharesCallingVMGlobals(t *testing.T) {
 	}, evm.Budget{}); err != nil {
 		t.Fatal(err)
 	}
-	if got := host.box.Apply(1); got != 43 {
+	if got := host.box.Apply(1); got != 1 {
 		t.Fatalf("idle callback globals: %d", got)
 	}
 	cancel()
@@ -220,7 +222,7 @@ func BenchmarkNativeFunctionField100Calls(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			vm := evm.New(p)
+			vm := evmtest.New(p)
 			vm.Limits.AllocationBytes, vm.Limits.Allocations = ^uint64(0), ^uint64(0)
 			if mode != "native" {
 				if err := vm.Run(context.Background(), "Install", nil, nil); err != nil {

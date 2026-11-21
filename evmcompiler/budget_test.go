@@ -10,6 +10,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -28,14 +29,14 @@ func TestRunBudgets(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, n := range []int{4, 7, 2} {
-		if err := run("Allocate", n, evm.Budget{Allocations: uint64(n)}, nil); err != nil {
+		if err := run("Allocate", n, evm.Budget{Allocations: uint64(n + 3)}, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if err := run("Allocate", 5, evm.Budget{Allocations: 4}, nil); !errors.Is(err, evm.ErrAllocations) {
 		t.Fatalf("small objects: %v", err)
 	}
-	if err := run("Allocate", 0, evm.Budget{}, nil); !errors.Is(err, evm.ErrInvalidState) {
+	if err := run("Allocate", 0, evm.Budget{}, nil); err != nil {
 		t.Fatal(err)
 	}
 	_ = vm.Reset()
@@ -60,10 +61,14 @@ func TestRunBudgets(t *testing.T) {
 func TestPerCallBudgetCannotBypassSessionAllocationLimit(t *testing.T) {
 	vm := compileGoVM(t, `var keep *int
  func Run(){keep=new(int)}`)
-	vm.Limits.Allocations = 20
+	vm.SetBudget(evm.Limits{Allocations: 20})
+	fn, err := vm.Program().LookupFunction("Run", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var completed int
 	for i := 0; i < 25; i++ {
-		err := vm.RunWithBudget(context.Background(), "Run", nil, nil, evm.Budget{Allocations: 100})
+		err := vm.VM.Run(fn, nil)
 		if errors.Is(err, evm.ErrAllocations) {
 			break
 		}
@@ -120,7 +125,7 @@ func TestCancelGuestLoopInFlight(t *testing.T) {
 }
 
 func TestNativeAllocationLimitIsFatal(t *testing.T) {
-	pkg := evm.Package{Path: "host", Functions: []evm.ExternalFunction{{Name: "Work", Call: func(c *evm.Call) error {
+	pkg := evm.Package{Path: "host", Functions: []evm.ExternalFunction{{Name: "Work", Call: func(c *evm.VM) error {
 		for range 16 {
 			_, _ = c.AllocCells(1)
 		}
@@ -134,7 +139,7 @@ func TestNativeAllocationLimitIsFatal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = evm.New(p).RunWithBudget(context.Background(), "Run", nil, nil, evm.Budget{Allocations: 8})
+	err = evmtest.New(p).RunWithBudget(context.Background(), "Run", nil, nil, evm.Budget{Allocations: 8})
 	if !errors.Is(err, evm.ErrAllocations) {
 		t.Fatalf("got %v, want ErrAllocations", err)
 	}

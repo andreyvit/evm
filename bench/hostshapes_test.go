@@ -8,6 +8,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -53,7 +54,7 @@ func benchmarkHostShape(b *testing.B, op evm.Opcode, direct bool) {
 		target = "cell.F"
 		n++
 	}
-	callback := func(_ *evm.Call, x, y values.Value) (values.Value, error) {
+	callback := func(_ *evm.VM, x, y values.Value) (values.Value, error) {
 		// Reading R observes the scalar or length. A pointer contributes one.
 		sum := x.R + y.R
 		if x.P != nil {
@@ -77,13 +78,13 @@ func benchmarkHostShape(b *testing.B, op evm.Opcode, direct bool) {
 			return values.Uint(sum), nil
 		}
 	}
-	general := func(c *evm.Call) error {
+	general := func(c *evm.VM) error {
 		var x, y values.Value
 		if n > 0 {
-			x = c.Argument(0)
+			x = c.CallArgument(0)
 		}
 		if n > 1 {
-			y = c.Argument(1)
+			y = c.CallArgument(1)
 		}
 		v, err := callback(c, x, y)
 		if err != nil {
@@ -95,7 +96,7 @@ func benchmarkHostShape(b *testing.B, op evm.Opcode, direct bool) {
 			}
 		}
 		if result != 'v' {
-			c.SetResult(0, v)
+			c.SetCallResult(0, v)
 		}
 		return nil
 	}
@@ -128,7 +129,7 @@ func Run(cell *h.Cell,word uint64,name string) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	vm.Limits.Allocations = ^uint64(0)
 	vm.Limits.AllocationBytes = ^uint64(0)
 	inputs := []values.Value{ptr, values.Uint(7), values.String("word")}

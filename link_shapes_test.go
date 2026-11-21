@@ -13,7 +13,7 @@ import (
 func TestLinkEnvironmentFingerprintDetectsWrites(t *testing.T) {
 	text := &values.Shape{Type: values.StringType, Kind: values.StringKind, Cells: 1, Native: nativebind.Layout(reflect.TypeFor[string](), nil, true)}
 	row := values.NewStructShape("demo.Row", values.Field{Name: "Text", Shape: text})
-	pkg := Package{Path: "demo", Types: []TypeDecl{{Name: "Row", Shape: row}}, Functions: []ExternalFunction{{Name: "F", Signature: Signature{Params: []*values.Type{values.StringType}}, Call: func(*Call) error { return nil }}}}
+	pkg := Package{Path: "demo", Types: []TypeDecl{{Name: "Row", Shape: row}}, Functions: []ExternalFunction{{Name: "F", Signature: Signature{Params: []*values.Type{values.StringType}}, Call: func(*VM) error { return nil }}}}
 	env, err := LinkOptions{Shapes: []*values.Shape{row}}.NewEnvironment(pkg)
 	if err != nil {
 		t.Fatal(err)

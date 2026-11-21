@@ -10,11 +10,12 @@ import (
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmbind"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 )
 
 type variadicHost struct{}
 
-func (*variadicHost) Sum(_ *evm.Call, initial int, values ...int) int {
+func (*variadicHost) Sum(_ *evm.VM, initial int, values ...int) int {
 	for _, value := range values {
 		initial += value
 	}
@@ -41,14 +42,14 @@ func TestVariadicHostFunction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	generated, err := evmbind.Generate("host", "example/host", "bindings", source, evmbind.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(generated), "Sum(*evm.Call, int, ...int)") {
+	if !strings.Contains(string(generated), "Sum(*evm.VM, int, ...int)") {
 		t.Fatalf("generated host signature lost variadic argument:\n%s", generated)
 	}
 }

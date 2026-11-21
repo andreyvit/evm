@@ -7,6 +7,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -29,7 +30,7 @@ func TestPackageSourceFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if out[0].AsString() != "NATIVE42" {
@@ -66,7 +67,7 @@ func TestNativeGenericSourceFiles(t *testing.T) {
 		{Name: "types.go", Text: `package host;type Count int`},
 		{Name: "functions.go", Text: `package host;func Echo[T any](v T)T`},
 	}, Functions: []evm.ExternalFunction{{Name: "Echo", Instantiate: func(args []*values.Type) (evm.ExternalFunction, error) {
-		return evm.ExternalFunction{Signature: evm.Signature{Params: args, Results: args}, Call: func(c *evm.Call) error { c.SetResult(0, c.Argument(0)); return nil }}, nil
+		return evm.ExternalFunction{Signature: evm.Signature{Params: args, Results: args}, Call: func(c *evm.VM) error { c.SetCallResult(0, c.CallArgument(0)); return nil }}, nil
 	}}}}
 	m, err := evmcompiler.Compile("generic.go", `import "host";func Run()int{return int(host.Echo(host.Count(42)))}`, pkg)
 	if err != nil {
@@ -77,7 +78,7 @@ func TestNativeGenericSourceFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if out[0].AsInt() != 42 {

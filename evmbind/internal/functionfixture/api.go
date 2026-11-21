@@ -2,10 +2,10 @@ package functionfixture
 
 import "github.com/andreyvit/evm"
 
-func Register(fn *evm.NamedFunctionOf[func(int) int])           { panic("host") }
-func RegisterText(fn *evm.NamedFunctionOf[func(string) string]) { panic("host") }
+func Register(fn *evm.FunctionOf[func(int) int])           { panic("host") }
+func RegisterText(fn *evm.FunctionOf[func(string) string]) { panic("host") }
 
-func RegisterValue(fn *evm.NamedFunctionOf[func(int) any]) { panic("host") }
+func RegisterValue(fn *evm.FunctionOf[func(int) any]) { panic("host") }
 
 func Keep(fn *evm.FunctionOf[func(int) int])         { panic("host") }
 func Get() *evm.FunctionOf[func(int) int]            { panic("host") }
@@ -18,7 +18,7 @@ type FunctionSlot struct {
 func Slot() *FunctionSlot                  { panic("host") }
 func EchoSlot(s FunctionSlot) FunctionSlot { panic("host") }
 
-func RegisterRows(fn *evm.NamedFunctionOf[func(func([]string), func([]any))]) { panic("host") }
+func RegisterRows(fn *evm.FunctionOf[func(func([]string), func([]any))]) { panic("host") }
 
 func Strings(values []string) { panic("host") }
 

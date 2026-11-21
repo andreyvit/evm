@@ -14,14 +14,15 @@ import (
 	"github.com/andreyvit/evm/evmbind/internal/collectionbindings"
 	"github.com/andreyvit/evm/evmbind/internal/collectionfixture"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
 type collectionHost struct{ panel collectionfixture.Panel }
 
-func (h *collectionHost) GetAny(_ *evm.Call) any { return uint8(37) }
+func (h *collectionHost) GetAny(_ *evm.VM) any { return uint8(37) }
 
-func (h *collectionHost) Roundtrip(_ *evm.Call, p collectionfixture.Panel) collectionfixture.Panel {
+func (h *collectionHost) Roundtrip(_ *evm.VM, p collectionfixture.Panel) collectionfixture.Panel {
 	if p.Metadata["item"] != p.Items[0] {
 		panic("lost map any identity")
 	}
@@ -85,17 +86,17 @@ func TestNativeCollectionCallRoundtrip(t *testing.T) {
 				t.Fatal(err)
 			}
 			var out [1]values.Value
-			if err := evm.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
+			if err := evmtest.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
 				t.Fatal(err)
 			}
-			if err := evm.New(program).Run(context.Background(), "Get", nil, out[:]); err != nil {
+			if err := evmtest.New(program).Run(context.Background(), "Get", nil, out[:]); err != nil {
 				t.Fatal(err)
 			}
 			shape, value, err := program.UnpackInterface(out[0])
 			if err != nil || shape.Type != values.Uint8 || value.R != 37 {
 				t.Fatal("unmentioned native scalar", shape, value, err)
 			}
-			if err := evm.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
+			if err := evmtest.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
 				t.Fatal(err)
 			}
 			if out[0].AsString() != "host" || host.panel.Named["third"] != host.panel.Items[0] {

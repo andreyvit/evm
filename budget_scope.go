@@ -22,7 +22,7 @@ type BudgetScope struct {
 
 // NarrowBudget starts a scope at the current external call. Zero leaves that
 // limit alone. All work still counts against the enclosing budgets.
-func (c *Call) NarrowBudget(steps uint64, duration time.Duration) *BudgetScope {
+func (c *VM) NarrowBudget(steps uint64, duration time.Duration) *BudgetScope {
 	b := c.budget
 	s := &BudgetScope{owner: b, parent: b.scope, previous: b.ctx}
 	// Specialized external calls can run between meter checkpoints.
@@ -44,7 +44,7 @@ func (c *Call) NarrowBudget(steps uint64, duration time.Duration) *BudgetScope {
 }
 
 // BorrowRecords opens a transaction-local record scope inside this budget.
-func (s *BudgetScope) BorrowRecords(c *Call) *RecordScope {
+func (s *BudgetScope) BorrowRecords(c *VM) *RecordScope {
 	b := c.budget
 	if s.owner != b || b.scope != s || s.records != nil {
 		panic("inactive or already bound record scope")
@@ -57,7 +57,7 @@ func (s *BudgetScope) BorrowRecords(c *Call) *RecordScope {
 
 // End checks the section before restoring the parent limits. Call it before
 // committing external effects. An exhausted scope also fails the invocation.
-func (s *BudgetScope) End(c *Call) error {
+func (s *BudgetScope) End(c *VM) error {
 	b := c.budget
 	if s == nil || s.owner != b || b.scope != s {
 		return errors.New("budget scopes must end in reverse order on the same invocation")
@@ -106,7 +106,7 @@ func deadlineErr(ctx context.Context) error {
 
 // NarrowCPUBudget starts an adjustable time scope. Enclosing limits still apply.
 // Memory is charged to the invocation, including across transaction scopes.
-func (c *Call) NarrowCPUBudget(soft, hard time.Duration) *BudgetScope {
+func (c *VM) NarrowCPUBudget(soft, hard time.Duration) *BudgetScope {
 	if soft <= 0 || hard < soft {
 		panic("invalid CPU budgets")
 	}
@@ -116,7 +116,7 @@ func (c *Call) NarrowCPUBudget(soft, hard time.Duration) *BudgetScope {
 }
 
 // IncreaseCPUBudget adds wall time to the current scope, capped by the host.
-func (c *Call) IncreaseCPUBudget(ms uint64) error {
+func (c *VM) IncreaseCPUBudget(ms uint64) error {
 	b := c.budget
 	if err := b.contextErr(); err != nil {
 		return err
@@ -138,7 +138,7 @@ func (c *Call) IncreaseCPUBudget(ms uint64) error {
 }
 
 // IncreaseMemBudget raises the invocation allowance without resetting usage.
-func (c *Call) IncreaseMemBudget(bytes, allocs uint64) error {
+func (c *VM) IncreaseMemBudget(bytes, allocs uint64) error {
 	b := c.budget
 	if err := b.contextErr(); err != nil {
 		return err

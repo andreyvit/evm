@@ -10,6 +10,7 @@ import (
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmbind/internal/interfacedep"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 )
 
 type Problem interface{ Error() string }
@@ -103,19 +104,19 @@ func TestNativeInterfaceStorage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if tree.Root != nil || tree.Children[1].Read() != 23 || tree.Named["second"] != tree.Children[0] {
 		t.Fatal("native interface storage diverged")
 	}
 	for _, name := range []string{"RejectGuest", "RejectGuestError"} {
-		err = evm.New(p).Run(context.Background(), name, nil, nil)
+		err = evmtest.New(p).Run(context.Background(), name, nil, nil)
 		if err == nil || !strings.Contains(err.Error(), "does not implement") {
 			t.Fatalf("%s: guest-only implementation must be rejected explicitly: %v", name, err)
 		}
 	}
-	err = evm.New(p).Run(context.Background(), "RejectUnregistered", nil, nil)
+	err = evmtest.New(p).Run(context.Background(), "RejectUnregistered", nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "unregistered native type") {
 		t.Fatalf("unregistered native interface value must be rejected: %v", err)
 	}
@@ -165,7 +166,7 @@ func TestImportedNativeInterfaceStorage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if tree.Root.Label() != "guest" {

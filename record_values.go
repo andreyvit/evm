@@ -207,12 +207,12 @@ func (vm *VM) recordField(f frame, op *ExtendedOp, r *borrowedRecord, mutable bo
 	return nil
 }
 
-func (cv recordConverter) call() *Call           { return &Call{Context: cv.b.ctx, program: cv.p, budget: cv.b} }
+func (cv recordConverter) call() *VM             { return &VM{Context: cv.b.ctx, program: cv.p, budget: cv.b} }
 func (cv recordConverter) charge(n uint64) error { return charge(n, &cv.b.allocated, cv.b.limits) }
 
 // FlushRecord applies edits made through Go map and slice aliases before the
 // external database saves this one row. Repeated saves see subsequent edits.
-func (c *Call) FlushRecord(editor *kvo.Editor) error {
+func (c *VM) FlushRecord(editor *kvo.Editor) error {
 	scope := c.budget.recordScope()
 	if scope == nil || scope.closed {
 		return nil
@@ -221,7 +221,7 @@ func (c *Call) FlushRecord(editor *kvo.Editor) error {
 }
 
 // FlushMutableRecord applies alias edits retained by this row handle.
-func (c *Call) FlushMutableRecord(v values.Value, model *kvo.Model) error {
+func (c *VM) FlushMutableRecord(v values.Value, model *kvo.Model) error {
 	r := mutableRecord(v)
 	if r == nil || r.model != model || r.state == nil || r.parent != nil {
 		return fmt.Errorf("expected a mutable root record")

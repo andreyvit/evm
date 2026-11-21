@@ -54,7 +54,7 @@ func NewMap[K comparable, K2 comparable, V any](outer *MapEditor[K, Map[K2, V]],
 		panic("record: dictionary entry already exists")
 	}
 	key = ownCodecValue(outer.codec.key, key)
-	v := outer.codec.value.Decode(values.Value{})
+	v := outer.codec.value.Unpack(values.Value{})
 	l, c := v.parts()
 	if outer.native.IsValid() || outer.plan != nil && outer.plan.elem.msgFallback {
 		if outer.native.IsValid() && outer.native.IsNil() {

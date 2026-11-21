@@ -20,7 +20,8 @@ import (
 // The packages must not change while the environment or its programs are in
 // use.
 type LinkEnvironment struct {
-	packages []Package // with the time package
+	defaultLimits Limits
+	packages      []Package // with the time package
 
 	// The first error of each stage of preparing the packages. A link
 	// reports them in the order a link from a package list always has,
@@ -71,6 +72,9 @@ type resolveErrors struct{ ownership, layout error }
 
 // LinkOptions configures a prepared link environment.
 type LinkOptions struct {
+	// DefaultLimits supplies the initial budget for each VM. Nil selects the
+	// built-in limits. An explicit empty Limits disables the optional quotas.
+	DefaultLimits *Limits
 	// Shapes lists storage shapes that the modules to link name: usually
 	// every shape of the compile environment that produces the modules. The
 	// environment snapshots them once and its programs share the snapshots.
@@ -84,6 +88,25 @@ type LinkOptions struct {
 	Methods []MethodTables
 }
 
+// Link links one module using these options.
+func (o LinkOptions) Link(m *Module, packages ...Package) (*Program, error) {
+	if len(o.Shapes) == 0 && len(o.Methods) == 0 {
+		e := newLinkEnvironment(packages, false)
+		if o.DefaultLimits != nil {
+			if err := o.DefaultLimits.validate(); err != nil {
+				return nil, err
+			}
+			e.defaultLimits = *o.DefaultLimits
+		}
+		return e.Link(m)
+	}
+	e, err := o.NewEnvironment(packages...)
+	if err != nil {
+		return nil, err
+	}
+	return e.Link(m)
+}
+
 // NewLinkEnvironment validates and binds the packages. It fails where every
 // link against them would fail.
 func NewLinkEnvironment(packages ...Package) (*LinkEnvironment, error) {
@@ -93,6 +116,12 @@ func NewLinkEnvironment(packages ...Package) (*LinkEnvironment, error) {
 // NewEnvironment prepares the packages for linking; see [NewLinkEnvironment].
 func (o LinkOptions) NewEnvironment(packages ...Package) (*LinkEnvironment, error) {
 	e := newLinkEnvironment(packages, true)
+	if o.DefaultLimits != nil {
+		if err := o.DefaultLimits.validate(); err != nil {
+			return nil, err
+		}
+		e.defaultLimits = *o.DefaultLimits
+	}
 	if err := cmp.Or(e.packagesErr, e.codecsErr, e.bindingsErr, e.nativeSlicesErr); err != nil {
 		return nil, err
 	}
@@ -122,7 +151,7 @@ func (e *LinkEnvironment) LinkWithHostData(m *Module, hostData any) (*Program, e
 // report. A prepared environment resolves every binding now; a throwaway one,
 // built for a single link, resolves only what its module imports.
 func newLinkEnvironment(packages []Package, prepared bool) *LinkEnvironment {
-	e := &LinkEnvironment{}
+	e := &LinkEnvironment{defaultLimits: defaultExecutionLimits}
 	e.packages, e.packagesErr = WithTimePackage(packages)
 	if e.packagesErr != nil {
 		return e

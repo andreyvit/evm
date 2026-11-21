@@ -11,6 +11,7 @@ import (
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmbind"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -74,7 +75,7 @@ func Run() string {
 	valueUTC.offset = 7
 	t.Cleanup(func() { valueUTC.Name, valueUTC.offset = "UTC", 0 })
 	var out [1]values.Value
-	if err := evm.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := out[0].AsString(), "Zulu 7 4 limit reached same"; got != want {

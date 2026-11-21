@@ -49,7 +49,6 @@ const (
 	nodeFloat64
 	nodeString
 	nodeCallback
-	nodeFunctionHandle
 	nodeRetainedFunction
 	nodeNativeFunction
 	nodeSlice
@@ -97,8 +96,6 @@ func (k nodeKind) String() string {
 		return "float64"
 	case nodeString:
 		return "string"
-	case nodeFunctionHandle:
-		return "functionHandle"
 	case nodeRetainedFunction:
 		return "retainedFunction"
 	case nodeNativeFunction:
@@ -487,8 +484,8 @@ func parseOptions(path string, files fs.FS, selected []string, typesOnly bool, o
 					fail("generic native alias %s requires an instantiated declaration", name)
 				}
 				target := alias.Rhs()
-				if aliasesFunctionHandle(target) {
-					fail("alias %s of an EVM function handle is not supported", name)
+				if aliasesFunctionOf(target) {
+					fail("alias %s of an EVM callable is not supported", name)
 				}
 				target = canonicalAliasType(target)
 				n := s.node(target)
@@ -786,7 +783,7 @@ var basics = map[nodeKind]*values.Type{
 }
 
 func (n *node) inputOnly() bool {
-	return n.kind == nodeCallback || n.kind == nodeFunctionHandle || n.kind == nodeRetainedFunction && n.boxedFunction
+	return n.kind == nodeCallback || n.kind == nodeRetainedFunction && n.boxedFunction
 }
 
 var errorMethodShape = &values.Shape{
@@ -933,24 +930,18 @@ func (s *source) node(t types.Type) *node {
 		return n
 	}
 	if ptr, ok := t.(*types.Pointer); ok {
-		if alias, ok := ptr.Elem().(*types.Alias); ok && alias.Obj().Pkg() != nil && alias.Obj().Pkg().Path() == "github.com/andreyvit/evm" && (alias.Obj().Name() == "NamedFunctionOf" || alias.Obj().Name() == "FunctionOf") {
+		if alias, ok := ptr.Elem().(*types.Alias); ok && alias.Obj().Pkg() != nil && alias.Obj().Pkg().Path() == "github.com/andreyvit/evm" && alias.Obj().Name() == "FunctionOf" {
 			if types.Identical(alias.TypeArgs().At(0), types.Universe.Lookup("any").Type()) {
-				n.kind = nodeFunctionHandle
-				if alias.Obj().Name() == "FunctionOf" {
-					n.kind = nodeRetainedFunction
-				}
+				n.kind = nodeRetainedFunction
 				n.boxedFunction = true
 				n.shape = s.node(types.Universe.Lookup("any").Type()).shape
 				return n
 			}
 			sig, ok := alias.TypeArgs().At(0).Underlying().(*types.Signature)
 			if !ok || sig.Variadic() {
-				fail("function handle requires a nonvariadic function signature: %s", name)
+				fail("FunctionOf requires a nonvariadic function signature: %s", name)
 			}
-			n.kind = nodeFunctionHandle
-			if alias.Obj().Name() == "FunctionOf" {
-				n.kind = nodeRetainedFunction
-			}
+			n.kind = nodeRetainedFunction
 			sh.Kind, sh.Type = values.FunctionKind, values.NewType(name, values.Pair)
 			if sig.Params().Len() == 0 && sig.Results().Len() == 0 {
 				sh.Type = voidFunctionType
@@ -969,7 +960,7 @@ func (s *source) node(t types.Type) *node {
 			}
 			n.functionSignatureReady = true
 			for _, other := range s.nodes {
-				if other != n && other.functionSignatureReady && !other.boxedFunction && (other.kind == nodeCallback || other.kind == nodeFunctionHandle || other.kind == nodeRetainedFunction) && slices.Equal(other.functionSignature.Params, n.functionSignature.Params) && slices.Equal(other.functionSignature.Results, n.functionSignature.Results) {
+				if other != n && other.functionSignatureReady && !other.boxedFunction && (other.kind == nodeCallback || other.kind == nodeRetainedFunction) && slices.Equal(other.functionSignature.Params, n.functionSignature.Params) && slices.Equal(other.functionSignature.Results, n.functionSignature.Results) {
 					n.shape = other.shape
 					return n
 				}
@@ -1138,7 +1129,7 @@ func (s *source) node(t types.Type) *node {
 	if n.kind == nodeCallback {
 		n.functionSignatureReady = true
 		for _, other := range s.nodes {
-			if other != n && other.functionSignatureReady && !other.boxedFunction && (other.kind == nodeFunctionHandle || other.kind == nodeRetainedFunction) && len(other.functionSignature.Params) == 0 && len(other.functionSignature.Results) == 0 {
+			if other != n && other.functionSignatureReady && !other.boxedFunction && (other.kind == nodeRetainedFunction) && len(other.functionSignature.Params) == 0 && len(other.functionSignature.Results) == 0 {
 				n.shape = other.shape
 				return n
 			}

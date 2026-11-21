@@ -17,6 +17,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/kvo/codec/row2"
 	"github.com/andreyvit/evm/nativebind"
@@ -60,9 +61,9 @@ func newEnvironmentFixture() *environmentFixture {
 	entry := f.entry
 	demo := evm.Package{Path: "example.test/demo", Types: []evm.TypeDecl{{Name: "Mode", Shape: modeShape}, {Name: "Entry", Shape: f.entry}, {Shape: f.entryPtr}, {Name: "Child", Shape: childShape}, {Shape: childPtr}},
 		Constants: []evm.ExternalConstant{{Name: "On", Type: mode, Value: values.Uint(2)}},
-		Functions: []evm.ExternalFunction{{Name: "Describe", Signature: evm.Signature{Params: []*values.Type{f.entryPtr.Type}, Results: []*values.Type{values.StringType}}, Call: func(c *evm.Call) error {
-			p := c.Argument(0).P
-			c.SetResult(0, values.String(fmt.Sprintf("%s/%d/%d", entry.GetField(p, 0).AsString(), entry.GetField(p, 1).AsInt(), entry.GetField(p, 2).R)))
+		Functions: []evm.ExternalFunction{{Name: "Describe", Signature: evm.Signature{Params: []*values.Type{f.entryPtr.Type}, Results: []*values.Type{values.StringType}}, Call: func(c *evm.VM) error {
+			p := c.CallArgument(0).P
+			c.SetCallResult(0, values.String(fmt.Sprintf("%s/%d/%d", entry.GetField(p, 0).AsString(), entry.GetField(p, 1).AsInt(), entry.GetField(p, 2).R)))
 			return nil
 		}}}}
 
@@ -70,7 +71,7 @@ func newEnvironmentFixture() *environmentFixture {
 		if len(args) != 1 {
 			return evm.ExternalFunction{}, fmt.Errorf("First needs one type argument")
 		}
-		return evm.ExternalFunction{Signature: evm.Signature{Params: []*values.Type{args[0], args[0]}, Results: args}, Call: func(c *evm.Call) error { c.SetResult(0, c.Argument(0)); return nil }}, nil
+		return evm.ExternalFunction{Signature: evm.Signature{Params: []*values.Type{args[0], args[0]}, Results: args}, Call: func(c *evm.VM) error { c.SetCallResult(0, c.CallArgument(0)); return nil }}, nil
 	}}}}
 
 	util := evm.Package{Path: "example.test/util", Source: `package util
@@ -119,8 +120,8 @@ func Unbox(g Getter[string]) string { return g.Get() }
 	indexPtr.Type = values.NewType("*nat.Index[string]", values.Pair)
 	indexPtr.Native = nativebind.Layout(reflect.PointerTo(nativeType), nil, true)
 	shared := &fixtureIndex[string]{Key: "original"}
-	nat := evm.Package{Path: "nat", Source: "package nat\ntype Index[K any] struct { Key K }\n", Types: []evm.TypeDecl{{SourceName: "Index", TypeArgs: []*values.Type{values.StringType}, Shape: index}, {Shape: indexPtr}}, Values: []evm.ExternalValue{{Name: "ByName", Type: indexPtr.Type, Read: func(c *evm.Call) error {
-		c.SetResult(0, values.Value{R: values.NativeAddress, P: unsafe.Pointer(shared)})
+	nat := evm.Package{Path: "nat", Source: "package nat\ntype Index[K any] struct { Key K }\n", Types: []evm.TypeDecl{{SourceName: "Index", TypeArgs: []*values.Type{values.StringType}, Shape: index}, {Shape: indexPtr}}, Values: []evm.ExternalValue{{Name: "ByName", Type: indexPtr.Type, Read: func(c *evm.VM) error {
+		c.SetCallResult(0, values.Value{R: values.NativeAddress, P: unsafe.Pointer(shared)})
 		return nil
 	}}}}
 	f.packages = []evm.Package{db, demo, host, util, nat}
@@ -265,7 +266,7 @@ func runEnvironmentProgram(t interface {
 	Fatal(...any)
 }, f *environmentFixture, m *evm.Module, p *evm.Program) string {
 	t.Helper()
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	out := make([]values.Value, 1)
 	if err := vm.Run(context.Background(), "Run", nil, out); err != nil {
 		t.Fatal(err)
@@ -639,7 +640,7 @@ func TestEnvironmentFileSet(t *testing.T) {
 // environment resolves it up front and must keep it just as unnameable.
 func TestEnvironmentLateDynamicTypes(t *testing.T) {
 	token := values.NewType("host.Token", values.Raw)
-	host := evm.Package{Path: "host", Functions: []evm.ExternalFunction{{Name: "Make", Signature: evm.Signature{Results: []*values.Type{values.AnyType}}, DynamicTypes: []*values.Type{token}, Call: func(c *evm.Call) error {
+	host := evm.Package{Path: "host", Functions: []evm.ExternalFunction{{Name: "Make", Signature: evm.Signature{Results: []*values.Type{values.AnyType}}, DynamicTypes: []*values.Type{token}, Call: func(c *evm.VM) error {
 		return c.SetInterface(0, token, values.Int(7))
 	}}}}
 	env, err := evmcompiler.NewEnvironment(host)
@@ -673,7 +674,7 @@ func TestEnvironmentLateDynamicTypes(t *testing.T) {
 				t.Fatal(err)
 			}
 			out := make([]values.Value, 1)
-			if err := evm.New(p).Run(context.Background(), "Run", nil, out); err != nil || out[0].R != 1 {
+			if err := evmtest.New(p).Run(context.Background(), "Run", nil, out); err != nil || out[0].R != 1 {
 				t.Fatalf("Run = %v, %v", out[0], err)
 			}
 		}

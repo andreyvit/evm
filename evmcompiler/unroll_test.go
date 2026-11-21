@@ -7,6 +7,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -24,7 +25,7 @@ func TestFixedTrips(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		vm := evm.New(p)
+		vm := evmtest.New(p)
 		for seed := -3; seed <= 6; seed++ {
 			args := []values.Value{values.Int(int64(seed))}
 			var out [2]values.Value

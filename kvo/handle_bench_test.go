@@ -8,6 +8,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/internal/statrow"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/kvo/codec/msgpack"
@@ -185,7 +186,7 @@ func Retain() uint64 {
 		pkg.Functions = append(pkg.Functions, evm.ExternalFunction{
 			Ownership: &evm.OwnershipEffects{NoRetain: true, NoInvalidate: true},
 			Name:      "Lookup", Signature: evm.Signature{Params: []*values.Type{values.Uint64}, Results: []*values.Type{rowType.Pointer}},
-			Call: func(c *evm.Call) error { return c.SetRecordResult(model, f.open(int(c.Argument(0).R))) },
+			Call: func(c *evm.VM) error { return c.SetRecordResult(model, f.open(int(c.CallArgument(0).R))) },
 		})
 		module, err := evmcompiler.Compile("handles.go", script, pkg)
 		if err != nil {
@@ -201,7 +202,7 @@ func Retain() uint64 {
 		}
 		for _, entry := range []string{"Scan", "Retain"} {
 			b.Run(f.name+"/"+entry, func(b *testing.B) {
-				vm := evm.New(program)
+				vm := evmtest.New(program)
 				// The VM's allocation accounting spans runs; benchmark iteration
 				// counts must not eventually trip a production execution budget.
 				vm.Limits.Allocations = ^uint64(0)

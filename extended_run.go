@@ -116,7 +116,7 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 			if err != nil {
 				return err
 			}
-			copied, err := loadNative(&vm.call, s, data, allocated, limits)
+			copied, err := loadNative(vm, s, data, allocated, limits)
 			if err != nil {
 				return err
 			}
@@ -198,9 +198,9 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 		var v values.Value
 		var err error
 		if x.R == values.NativeAddress {
-			v, err = loadNative(&vm.call, s, x.P, allocated, limits)
+			v, err = loadNative(vm, s, x.P, allocated, limits)
 		} else if physical := vm.program.nativeViewAddressShape(x.R); physical != nil {
-			v, err = loadNative(&vm.call, physical, x.P, allocated, limits)
+			v, err = loadNative(vm, physical, x.P, allocated, limits)
 		} else if x.R == 0 {
 			v, err = snapshot(s, s.Stored(x.P), allocated, limits)
 		} else {
@@ -220,13 +220,13 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 			if err != nil {
 				return err
 			}
-			return storeNative(&vm.call, s, data, get(1), allocated, limits)
+			return storeNative(vm, s, data, get(1), allocated, limits)
 		}
 		if x.R == values.NativeAddress {
-			return storeNative(&vm.call, s, x.P, get(1), allocated, limits)
+			return storeNative(vm, s, x.P, get(1), allocated, limits)
 		}
 		if physical := vm.program.nativeViewAddressShape(x.R); physical != nil {
-			return storeNative(&vm.call, physical, x.P, get(1), allocated, limits)
+			return storeNative(vm, physical, x.P, get(1), allocated, limits)
 		}
 		if x.R != 0 {
 			return ErrInvalidState
@@ -287,7 +287,7 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 				v := get(1)
 				if !s.Native.Fields[index].Cells {
 					var err error
-					v, err = nativeStoredValue(&vm.call, vm.program.nativeFieldShape(s, int(index)), v, allocated, limits)
+					v, err = nativeStoredValue(vm, vm.program.nativeFieldShape(s, int(index)), v, allocated, limits)
 					if err != nil {
 						return err
 					}
@@ -304,7 +304,7 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 				if s.Native.Fields[index].Cells {
 					v, err = snapshot(field.Shape, v, allocated, limits)
 				} else {
-					v, err = nativeLoadedValue(&vm.call, vm.program.nativeFieldShape(s, int(index)), v, allocated, limits)
+					v, err = nativeLoadedValue(vm, vm.program.nativeFieldShape(s, int(index)), v, allocated, limits)
 				}
 			} else {
 				v, err = snapshot(field.Shape, field.Shape.Stored(p), allocated, limits)
@@ -373,7 +373,7 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 					p := unsafe.Add(x.SliceReadData(), n*view.Layout.Slice.ElementSize)
 					put(0, vm.program.nativeViewAddress(elem, view.Element, p))
 				} else {
-					v, err := vm.call.nativeViewElement(s, view, n)
+					v, err := vm.nativeViewElement(s, view, n)
 					if err != nil {
 						return err
 					}
@@ -389,7 +389,7 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 				if op.Kind == ExtendedIndexAddr {
 					put(0, vm.program.nativeViewAddress(elem, physical.Elem.Native, p))
 				} else {
-					v, err := loadNative(&vm.call, physical.Elem, p, allocated, limits)
+					v, err := loadNative(vm, physical.Elem, p, allocated, limits)
 					if err != nil {
 						return err
 					}
@@ -411,7 +411,7 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 					put(0, values.Value{R: values.NativeAddress, P: p})
 				}
 			} else {
-				v, err := loadNative(&vm.call, elem, p, allocated, limits)
+				v, err := loadNative(vm, elem, p, allocated, limits)
 				if err != nil {
 					return err
 				}
@@ -448,7 +448,7 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 			return err
 		}
 		if layout := s.NativeAllocation; layout != nil {
-			value, err := vm.call.NativeSlice(layout, layout.Slice.Element, p, uint32(length), uint32(capacity))
+			value, err := vm.NativeSlice(layout, layout.Slice.Element, p, uint32(length), uint32(capacity))
 			if err != nil {
 				return err
 			}
@@ -488,7 +488,7 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 		}
 		if s.Kind == values.SliceKind {
 			if x.HasNativeSlice() {
-				v, err := vm.call.resliceView(x, uint32(lo), uint32(hi-lo), uint32(capBound-lo))
+				v, err := vm.resliceView(x, uint32(lo), uint32(hi-lo), uint32(capBound-lo))
 				if err != nil {
 					return err
 				}
@@ -503,7 +503,7 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 					base = unsafe.Add(base, lo*physical.Native.Array.ElementSize)
 				}
 				layout := vm.program.nativeArraySlice(physical)
-				v, err := vm.call.NativeSlice(layout, physical.Elem.Native, base, uint32(hi-lo), uint32(capBound-lo))
+				v, err := vm.NativeSlice(layout, physical.Elem.Native, base, uint32(hi-lo), uint32(capBound-lo))
 				if err != nil {
 					return err
 				}
@@ -609,7 +609,7 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 		st := collectionStorageFor(s, op.Packed)
 		dst, src := get(0), get(1)
 		if op.Kind == ExtendedAppend && op.Flags == 0 && dst.SliceReadData() == nil && src.SliceLen() != 0 && s.NativeAllocation != nil {
-			value, err := vm.call.NativeSlice(s.NativeAllocation, s.NativeAllocation.Slice.Element, nil, 0, 0)
+			value, err := vm.NativeSlice(s.NativeAllocation, s.NativeAllocation.Slice.Element, nil, 0, 0)
 			if err != nil {
 				return err
 			}
@@ -617,14 +617,14 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 		}
 		if op.Flags == 0 && (dst.HasNativeSlice() || src.HasNativeSlice()) {
 			if op.Kind == ExtendedAppend {
-				v, err := vm.call.appendSliceViews(s, dst, src)
+				v, err := vm.appendSliceViews(s, dst, src)
 				if err != nil {
 					return err
 				}
 				put(0, v)
 			} else {
 				n := uint64(min(dst.SliceLen(), src.SliceLen()))
-				if err := vm.call.copySliceViews(s, dst, src, 0, n); err != nil {
+				if err := vm.copySliceViews(s, dst, src, 0, n); err != nil {
 					return err
 				}
 				put(0, values.Uint(n))
@@ -691,9 +691,9 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 			if view != nil {
 				var err error
 				if length <= uint64(view.Capacity) {
-					result, err = vm.call.resliceView(original, 0, uint32(length), uint32(capacity))
+					result, err = vm.resliceView(original, 0, uint32(length), uint32(capacity))
 				} else {
-					result, err = vm.call.NativeSlice(view.Layout, view.Element, dst.P, uint32(length), uint32(capacity))
+					result, err = vm.NativeSlice(view.Layout, view.Element, dst.P, uint32(length), uint32(capacity))
 				}
 				if err != nil {
 					return err

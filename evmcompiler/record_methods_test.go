@@ -7,6 +7,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/kvo/codec/row2"
 	"github.com/andreyvit/evm/values"
@@ -25,7 +26,7 @@ func TestRecordMethodFunctionABI(t *testing.T) {
 		Name: "Balance", Receiver: pkg.Record(model, false).Pointer,
 		Signature: evm.Signature{Params: []*values.Type{values.Int64}, Results: []*values.Type{values.Int64}},
 		Ownership: &evm.OwnershipEffects{NoRetain: true, NoInvalidate: true},
-		Direct: evm.DirectBinding{Op: evm.OpCallHostSUU, Call: func(c *evm.Call, recv, delta values.Value) (values.Value, error) {
+		Direct: evm.DirectBinding{Op: evm.OpCallHostSUU, Call: func(c *evm.VM, recv, delta values.Value) (values.Value, error) {
 			seen += delta.AsInt()
 			return values.Int(kvo.FromValue(recv).Get(total) + delta.AsInt()), nil
 		}},
@@ -55,7 +56,7 @@ func TestRecordMethodFunctionABI(t *testing.T) {
 	w.End()
 	r := kvo.Encoded(row2.Trusted(w.BytesWritten())).WithModel(model)
 	var out [1]values.Value
-	if err := evm.New(p).Run(context.Background(), "Run", []values.Value{r.Value()}, out[:]); err != nil || out[0].AsInt() != 60 || seen != 18 {
+	if err := evmtest.New(p).Run(context.Background(), "Run", []values.Value{r.Value()}, out[:]); err != nil || out[0].AsInt() != 60 || seen != 18 {
 		t.Fatal(out, seen, err)
 	}
 	pkg.Methods[len(pkg.Methods)-1].Name = "total"

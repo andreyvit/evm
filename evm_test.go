@@ -12,7 +12,7 @@ import (
 	"github.com/andreyvit/evm/values"
 )
 
-func linked(t testing.TB, m *Module, packages ...Package) *VM {
+func linked(t testing.TB, m *Module, packages ...Package) *testSession {
 	t.Helper()
 	p, err := Link(m, packages...)
 	if err != nil {
@@ -65,7 +65,7 @@ func TestRecursionLimitsAndReuse(t *testing.T) {
 	if err := vm.Run(ctx, "factorial", args, out); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
-	if err := vm.Run(context.Background(), "factorial", args, out); !errors.Is(err, ErrInvalidState) {
+	if err := vm.Run(context.Background(), "factorial", args, out); err != nil {
 		t.Fatalf("session survived cancellation: %v", err)
 	}
 	if err := vm.Reset(); err != nil {
@@ -88,7 +88,7 @@ func TestNativeCancellationPanicAndPointerCleanup(t *testing.T) {
 	m := &Module{Imports: []Import{{Package: "bh", Name: "Check", Signature: sig}}, Functions: []Function{{Name: "main", Signature: sig, RCount: 1, PCount: 1, Code: []Instruction{ABC(OpMoveV, 1, 0, 0), WithBC(OpCallHost, 0, 0), ABC(OpMoveV, 0, 1, 0), ABC(OpReturn, 0, 0, 0)}}}}
 	var cancel context.CancelFunc
 	mode := "success"
-	vm := linked(t, m, Package{Path: "bh", Functions: []ExternalFunction{{Name: "Check", Signature: sig, Call: func(c *Call) error {
+	vm := linked(t, m, Package{Path: "bh", Functions: []ExternalFunction{{Name: "Check", Signature: sig, Call: func(c *VM) error {
 		runtime.GC()
 		if c.Value(0).AsString() != strings.Repeat("pointer", 20) {
 			t.Fatal("lost pointer data")
@@ -110,7 +110,7 @@ func TestNativeCancellationPanicAndPointerCleanup(t *testing.T) {
 				t.Fatal("retained pointer after execution")
 			}
 		}
-		if vm.call.Context != nil || vm.call.R != nil || vm.call.P != nil || vm.running || len(vm.stack) != 0 {
+		if vm.R != nil || vm.P != nil || vm.running || len(vm.stack) != 0 {
 			t.Fatal("retained call state")
 		}
 	}
@@ -196,7 +196,7 @@ func TestArithmeticBoundaries(t *testing.T) {
 
 func TestLinkValidationAndSnapshot(t *testing.T) {
 	sig := Signature{Params: []*values.Type{values.Int64}, Results: []*values.Type{values.Int64}}
-	pkg := Package{Path: "bh", Functions: []ExternalFunction{{Name: "Double", Signature: sig, Call: func(c *Call) error { c.R[0] *= 2; return nil }}}}
+	pkg := Package{Path: "bh", Functions: []ExternalFunction{{Name: "Double", Signature: sig, Call: func(c *VM) error { c.R[0] *= 2; return nil }}}}
 	makeModule := func() *Module {
 		return &Module{Words: []uint64{21}, Imports: []Import{{Package: "bh", Name: "Double", Signature: sig}}, Functions: []Function{{Name: "main", Signature: Signature{Results: []*values.Type{values.Int64}}, RCount: 1, Code: []Instruction{WithBC(OpConst, 1, 0), WithBC(OpCallHost, 0, 0), ABC(OpMoveR, 0, 1, 0), ABC(OpReturn, 0, 0, 0)}}}}
 	}
@@ -276,7 +276,7 @@ func TestExactStepsAcrossInitAndEntry(t *testing.T) {
 			},
 		}
 		calls := 0
-		host := Package{Path: "h", Functions: []ExternalFunction{{Name: "Mark", Call: func(*Call) error {
+		host := Package{Path: "h", Functions: []ExternalFunction{{Name: "Mark", Call: func(*VM) error {
 			calls++
 			return nil
 		}}}}
@@ -296,8 +296,8 @@ func TestExactStepsAcrossInitAndEntry(t *testing.T) {
 				t.Fatalf("total %d, limit %d: got (%v, %d calls), want (%v, %d)", total, limit, err, calls, wantErr, wantCalls)
 			}
 			if err == nil {
-				if err := vm.RunWithBudget(ctx, "Run", nil, nil, Budget{Steps: 2}); err != nil || calls != 2 {
-					t.Fatalf("warm entry did not get exactly two fresh steps: %d calls, %v", calls, err)
+				if err := vm.RunWithBudget(ctx, "Run", nil, nil, Budget{Steps: 2}); !errors.Is(err, ErrSteps) || calls != 1 {
+					t.Fatalf("warm run skipped package initialization: %d calls, %v", calls, err)
 				}
 			}
 		}

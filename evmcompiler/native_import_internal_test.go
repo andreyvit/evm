@@ -63,7 +63,7 @@ func TestNativePointerImportsItsReceiverPackage(t *testing.T) {
 	ptr := values.NewPointerShape(thing)
 	signature := &values.Shape{Type: values.NewType("func()*native.Thing", values.Pair), Kind: values.FunctionKind, Cells: 1, Results: []*values.Shape{ptr}}
 	iface := &values.Shape{Type: values.NewType("native.Selfer", values.Pair), Kind: values.InterfaceKind, Cells: 1, Methods: []values.Method{{ID: "Self", Signature: signature}}}
-	pkg := evm.Package{Path: "native", Types: []evm.TypeDecl{{Name: "Thing", Shape: thing}, {Name: "Selfer", Shape: iface}, {Shape: ptr}}, Methods: []evm.ExternalMethod{{Name: "Self", Receiver: ptr.Type, Signature: evm.Signature{Results: []*values.Type{ptr.Type}}, Call: func(c *evm.Call) error { c.SetResult(0, c.Argument(0)); return nil }}}}
+	pkg := evm.Package{Path: "native", Types: []evm.TypeDecl{{Name: "Thing", Shape: thing}, {Name: "Selfer", Shape: iface}, {Shape: ptr}}, Methods: []evm.ExternalMethod{{Name: "Self", Receiver: ptr.Type, Signature: evm.Signature{Results: []*values.Type{ptr.Type}}, Call: func(c *evm.VM) error { c.SetCallResult(0, c.CallArgument(0)); return nil }}}}
 	env, err := newTypeEnvironment([]evm.Package{pkg})
 	if err != nil {
 		t.Fatal(err)

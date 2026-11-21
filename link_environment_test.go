@@ -11,6 +11,7 @@ import (
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
 	"github.com/andreyvit/evm/evmstd"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/values"
 )
@@ -31,26 +32,26 @@ func linkTestPackages(t testing.TB) []evm.Package {
 	sentinel := errors.New("sentinel")
 	failures := []error{nil, sentinel, fmt.Errorf("wrapped: %w", sentinel), &linkTestError{7}}
 	host := evm.Package{Path: "host", Source: "package host\nfunc First[T comparable](a, b T) T\n", Functions: []evm.ExternalFunction{
-		{Name: "Fail", Signature: evm.Signature{Params: []*values.Type{values.IntType}, Results: []*values.Type{values.ErrorType}}, Call: func(c *evm.Call) error { return c.SetError(0, failures[c.Argument(0).AsInt()]) }},
-		{Name: "Any", Signature: evm.Signature{Params: []*values.Type{values.IntType}, Results: []*values.Type{values.AnyType}}, DynamicTypes: []*values.Type{values.StringType, values.IntType}, Call: func(c *evm.Call) error {
+		{Name: "Fail", Signature: evm.Signature{Params: []*values.Type{values.IntType}, Results: []*values.Type{values.ErrorType}}, Call: func(c *evm.VM) error { return c.SetError(0, failures[c.CallArgument(0).AsInt()]) }},
+		{Name: "Any", Signature: evm.Signature{Params: []*values.Type{values.IntType}, Results: []*values.Type{values.AnyType}}, DynamicTypes: []*values.Type{values.StringType, values.IntType}, Call: func(c *evm.VM) error {
 			var x any = "text"
-			if c.Argument(0).AsInt() != 0 {
-				x = int(c.Argument(0).AsInt())
+			if c.CallArgument(0).AsInt() != 0 {
+				x = int(c.CallArgument(0).AsInt())
 			}
 			v, err := c.AnyValue(x)
 			if err != nil {
 				return err
 			}
-			c.SetResult(0, v)
+			c.SetCallResult(0, v)
 			return nil
 		}},
 		{Name: "First", Instantiate: func(args []*values.Type) (evm.ExternalFunction, error) {
 			if len(args) != 1 {
 				return evm.ExternalFunction{}, fmt.Errorf("First needs one type argument")
 			}
-			return evm.ExternalFunction{Signature: evm.Signature{Params: []*values.Type{args[0], args[0]}, Results: args}, Call: func(c *evm.Call) error { c.SetResult(0, c.Argument(0)); return nil }}, nil
+			return evm.ExternalFunction{Signature: evm.Signature{Params: []*values.Type{args[0], args[0]}, Results: args}, Call: func(c *evm.VM) error { c.SetCallResult(0, c.CallArgument(0)); return nil }}, nil
 		}},
-	}, Values: []evm.ExternalValue{{Name: "Limit", Type: values.IntType, Read: func(c *evm.Call) error { c.SetResult(0, values.Int(40)); return nil }}}}
+	}, Values: []evm.ExternalValue{{Name: "Limit", Type: values.IntType, Read: func(c *evm.VM) error { c.SetCallResult(0, values.Int(40)); return nil }}}}
 	// Host types with native methods: a scalar with value methods, whose
 	// pointer needs wrappers, and a struct with methods on its pointer.
 	text := &values.Shape{Type: values.StringType, Kind: values.StringKind, Cells: 1}
@@ -62,10 +63,10 @@ func linkTestPackages(t testing.TB) []evm.Package {
 	describer := &values.Shape{Type: values.NewType("shop.Describer", values.Pair), Kind: values.InterfaceKind, Cells: 1, Methods: []values.Method{{ID: "Describe", Signature: describe}}}
 	strings := evm.Signature{Results: []*values.Type{values.StringType}}
 	shop := evm.Package{Path: "shop", Types: []evm.TypeDecl{{Name: "Code", Shape: code}, {Name: "Item", Shape: item}, {Shape: itemPtr}, {Name: "Describer", Shape: describer}}, Methods: []evm.ExternalMethod{
-		{Name: "Describe", Receiver: code.Type, Signature: strings, Call: func(c *evm.Call) error { c.SetValue(0, values.String(fmt.Sprint("code", c.R[0]))); return nil }},
-		{Name: "String", Receiver: code.Type, Signature: strings, Call: func(c *evm.Call) error { c.SetValue(0, values.String(fmt.Sprint("#", c.R[0]))); return nil }},
-		{Name: "Next", Receiver: code.Type, Signature: evm.Signature{Params: []*values.Type{values.IntType}, Results: []*values.Type{code.Type}}, Call: func(c *evm.Call) error { c.R[0] += c.R[1]; return nil }},
-		{Name: "Describe", Receiver: itemPtr.Type, Signature: strings, Call: func(c *evm.Call) error {
+		{Name: "Describe", Receiver: code.Type, Signature: strings, Call: func(c *evm.VM) error { c.SetValue(0, values.String(fmt.Sprint("code", c.R[0]))); return nil }},
+		{Name: "String", Receiver: code.Type, Signature: strings, Call: func(c *evm.VM) error { c.SetValue(0, values.String(fmt.Sprint("#", c.R[0]))); return nil }},
+		{Name: "Next", Receiver: code.Type, Signature: evm.Signature{Params: []*values.Type{values.IntType}, Results: []*values.Type{code.Type}}, Call: func(c *evm.VM) error { c.R[0] += c.R[1]; return nil }},
+		{Name: "Describe", Receiver: itemPtr.Type, Signature: strings, Call: func(c *evm.VM) error {
 			if c.P[0] == nil {
 				c.SetValue(0, values.String("no item"))
 			} else {
@@ -74,8 +75,8 @@ func linkTestPackages(t testing.TB) []evm.Package {
 			return nil
 		}},
 	}, Functions: []evm.ExternalFunction{
-		{Name: "Make", Signature: evm.Signature{Params: []*values.Type{values.IntType}, Results: []*values.Type{describer.Type}}, DynamicTypes: []*values.Type{code.Type, itemPtr.Type}, Call: func(c *evm.Call) error {
-			if n := c.Argument(0).AsInt(); n != 0 {
+		{Name: "Make", Signature: evm.Signature{Params: []*values.Type{values.IntType}, Results: []*values.Type{describer.Type}}, DynamicTypes: []*values.Type{code.Type, itemPtr.Type}, Call: func(c *evm.VM) error {
+			if n := c.CallArgument(0).AsInt(); n != 0 {
 				return c.SetInterface(0, code.Type, values.Int(n))
 			}
 			return c.SetInterface(0, itemPtr.Type, values.Value{})
@@ -153,7 +154,7 @@ func Run() string {
 
 func linkTestRun(p *evm.Program) string {
 	out := make([]values.Value, 1)
-	if err := evm.New(p).Run(context.Background(), "Run", nil, out); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, out); err != nil {
 		return "error: " + err.Error()
 	}
 	return out[0].AsString()
@@ -264,7 +265,7 @@ func TestLinkEnvironmentErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	other := evm.Package{Path: "other", Functions: []evm.ExternalFunction{{Name: "Value", Signature: evm.Signature{Results: []*values.Type{values.IntType}}, Call: func(c *evm.Call) error { c.SetResult(0, values.Int(1)); return nil }}}}
+	other := evm.Package{Path: "other", Functions: []evm.ExternalFunction{{Name: "Value", Signature: evm.Signature{Results: []*values.Type{values.IntType}}, Call: func(c *evm.VM) error { c.SetCallResult(0, values.Int(1)); return nil }}}}
 	unbound, err := evmcompiler.Compile("main.go", `import "other"
 func Run() int { return other.Value() }`, append(packages, other)...)
 	if err != nil {

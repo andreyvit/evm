@@ -24,16 +24,16 @@ func (s *Schema) installNativeFunction(n *node, t reflect.Type, types map[*node]
 	s.nativeFunctions[n] = &nativeFunctionBinding{types: types, typ: t, signature: typ}
 	n.shape.Native = nativebind.Layout(t, nil, s.static)
 	codec := &evm.NativeValueCodec{
-		Decode: func(c *evm.Call, v values.Value) (values.Value, error) {
+		Decode: func(c *evm.VM, v values.Value) (values.Value, error) {
 			if v.P == nil {
 				return values.Value{}, nil
 			}
 			return nativeFunctionResult(func() values.Value {
-				f := &Frame{Call: c, s: s}
+				f := &Frame{VM: c, s: s}
 				return f.encodeNativeFunction(n, reflect.NewAt(t, v.P).Elem())
 			})
 		},
-		Encode: func(c *evm.Call, v values.Value) (values.Value, error) {
+		Encode: func(c *evm.VM, v values.Value) (values.Value, error) {
 			if v.R == 0 {
 				return values.Value{}, nil
 			}
@@ -41,7 +41,7 @@ func (s *Schema) installNativeFunction(n *node, t reflect.Type, types map[*node]
 				return values.Value{}, err
 			}
 			return nativeFunctionResult(func() values.Value {
-				f := &Frame{Call: c, s: s}
+				f := &Frame{VM: c, s: s}
 				x := reflect.New(t)
 				x.Elem().Set(f.decodeNativeFunction(n, v))
 				return values.Value{P: x.UnsafePointer()}
@@ -74,30 +74,26 @@ func (f *Frame) decodeFunction(n *node, v values.Value) reflect.Value {
 	if err := f.ChargeAllocation(128); err != nil {
 		panic(err)
 	}
-	scope := f.Call.CallbackScope()
+	scope := f.VM.CallbackScope()
 	schema := f.s
 	return reflect.MakeFunc(b.typ, func(in []reflect.Value) []reflect.Value {
 		var results []reflect.Value
-		err := scope.WithCall(func(c *evm.Call) (err error) {
+		err := scope.WithCall(func(c *evm.VM) (err error) {
 			defer func() {
 				if err != nil {
 					c.PanicCallback(err)
 				}
 			}()
-			frame := &Frame{Call: c, s: schema}
+			frame := &Frame{VM: c, s: schema}
 			if err := c.ChargeAllocation(uint64(len(in)+b.typ.NumOut()) * uint64(unsafe.Sizeof(values.Value{})+unsafe.Sizeof(reflect.Value{}))); err != nil {
 				return err
 			}
-			args := make([]values.Value, len(in))
-			out := make([]values.Value, b.typ.NumOut())
+			slots := make([]values.Value, len(in)+b.typ.NumOut())
+			args, out := slots[:len(in)], slots[len(in):]
 			for i, x := range in {
 				args[i] = encode(frame, n.functionArgs[i], x)
 			}
-			value, err := fn.Value(c.Program(), n.functionSignature)
-			if err != nil {
-				return err
-			}
-			if err := c.RunCallbackArgs(value, args, out); err != nil {
+			if err := c.Run(*fn, slots); err != nil {
 				return err
 			}
 			results = make([]reflect.Value, len(out))
@@ -121,20 +117,20 @@ func (f *Frame) encodeNativeFunction(n *node, x reflect.Value) values.Value {
 	// Copy the function value; never retain the address of a mutable field.
 	fn := reflect.ValueOf(x.Interface())
 	schema := f.s
-	v, err := f.Call.NativeFunctionWithData(b.signature, func(c *evm.Call) (err error) {
+	v, err := f.VM.NativeFunctionWithData(b.signature, func(c *evm.VM) (err error) {
 		defer Catch("native function", &err)
 		if err := c.ChargeAllocation(uint64(len(n.functionArgs)+len(n.functionOuts)) * uint64(unsafe.Sizeof(reflect.Value{}))); err != nil {
 			return err
 		}
-		frame := &Frame{Call: c, s: schema}
+		frame := &Frame{VM: c, s: schema}
 		types := b.types
 		in := make([]reflect.Value, len(n.functionArgs))
 		for i, a := range n.functionArgs {
-			in[i] = decodeArgument(frame, a, c.Argument(i), types)
+			in[i] = decodeArgument(frame, a, c.CallArgument(i), types)
 		}
 		out := fn.Call(in)
 		for i, value := range out {
-			c.SetResult(i, encode(frame, n.functionOuts[i], value))
+			c.SetCallResult(i, encode(frame, n.functionOuts[i], value))
 		}
 		return nil
 	}, fn)

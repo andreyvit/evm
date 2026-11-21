@@ -7,6 +7,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -43,7 +44,7 @@ func Run(n int, x float64) float64 {
 			}
 		}
 		var out [1]values.Value
-		vm := evm.New(p)
+		vm := evmtest.New(p)
 		for _, n := range []int{0, 1, 15, 256} {
 			x, want := 1.25, 0.0
 			for i := 0; i < n; i++ {

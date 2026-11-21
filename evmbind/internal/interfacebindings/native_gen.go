@@ -67,27 +67,27 @@ var Bindings = evmbind.Static{Fingerprint: "27a2d70adb56a7c22cf1978bd27c8b537867
 	},
 	Calls: map[string]evmbind.Wrapper{
 		"Any": func(f *evmbind.Frame) {
-			r0 := f.Host.(interface{ Any(*evm.Call) any }).Any(f.Call)
-			f.SetResult(0, writeScalarAny(f, r0))
+			r0 := f.Host.(interface{ Any(*evm.VM) any }).Any(f.VM)
+			f.SetCallResult(0, writeScalarAny(f, r0))
 		},
 		"Echo": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				Echo(*evm.Call, dep0.Named) dep0.Named
-			}).Echo(f.Call, readImported3(f, f.Argument(0)))
-			f.SetResult(0, writeImported3(f, r0))
+				Echo(*evm.VM, dep0.Named) dep0.Named
+			}).Echo(f.VM, readImported3(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeImported3(f, r0))
 		},
 		"EchoLocal": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				EchoLocal(*evm.Call, api.LocalNamed) api.LocalNamed
-			}).EchoLocal(f.Call, readTypeLocalNamed(f, f.Argument(0)))
-			f.SetResult(0, writeTypeLocalNamed(f, r0))
+				EchoLocal(*evm.VM, api.LocalNamed) api.LocalNamed
+			}).EchoLocal(f.VM, readTypeLocalNamed(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeTypeLocalNamed(f, r0))
 		},
 		"Get": func(f *evmbind.Frame) {
-			r0 := f.Host.(interface{ Get(*evm.Call) dep0.Named }).Get(f.Call)
-			f.SetResult(0, writeImported3(f, r0))
+			r0 := f.Host.(interface{ Get(*evm.VM) dep0.Named }).Get(f.VM)
+			f.SetCallResult(0, writeImported3(f, r0))
 		},
 		"LocalNamed.Label": func(f *evmbind.Frame) {
 			r0 := f.Receiver.(api.LocalNamed).Label()
-			f.SetResult(0, writeScalarString(f, r0))
+			f.SetCallResult(0, writeScalarString(f, r0))
 		},
 	}}

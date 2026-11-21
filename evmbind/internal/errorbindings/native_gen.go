@@ -91,11 +91,11 @@ var Bindings = evmbind.Static{Fingerprint: "ee761af14cf5b6796d1629eb35d75a6d4a5e
 	},
 	Calls: map[string]evmbind.Wrapper{
 		"*ErrorBox.Set": func(f *evmbind.Frame) {
-			r0 := readPtrErrorBox(f, f.Argument(0)).Set(readScalarError(f, f.Argument(1)))
-			f.SetResult(0, writeScalarError(f, r0))
+			r0 := readPtrErrorBox(f, f.CallArgument(0)).Set(readScalarError(f, f.CallArgument(1)))
+			f.SetCallResult(0, writeScalarError(f, r0))
 		},
 		"*ErrorBox.Wrap": func(f *evmbind.Frame) {
-			r0 := readPtrErrorBox(f, f.Argument(0)).Wrap(readScalarError(f, f.Argument(1)))
-			f.SetResult(0, writeScalarError(f, r0))
+			r0 := readPtrErrorBox(f, f.CallArgument(0)).Wrap(readScalarError(f, f.CallArgument(1)))
+			f.SetCallResult(0, writeScalarError(f, r0))
 		},
 	}}

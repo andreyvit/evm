@@ -10,6 +10,7 @@ import (
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmbind"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/nativebind"
 	"github.com/andreyvit/evm/values"
 )
@@ -39,8 +40,8 @@ func Check(r BorrowedHeaders) bool
 		f := &pkg.Functions[i]
 		if f.Name == "Get" {
 			f.Direct = evm.DirectBinding{}
-			f.Call = func(c *evm.Call) error {
-				c.SetResult(0, nativebind.Load(reflect.TypeOf(row), unsafe.Pointer(&row)))
+			f.Call = func(c *evm.VM) error {
+				c.SetCallResult(0, nativebind.Load(reflect.TypeOf(row), unsafe.Pointer(&row)))
 				return nil
 			}
 		}
@@ -62,7 +63,7 @@ func Run() bool {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if !out[0].AsBool() || len(row.Buf) != 3 || row.Buf[1] != 0 || row.M["k"] != 5 {

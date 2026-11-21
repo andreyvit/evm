@@ -11,6 +11,7 @@ import (
 	"github.com/andreyvit/evm/evmbind"
 	"github.com/andreyvit/evm/evmbind/internal/interfacedep"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 )
 
 type GenericBinding[T any] struct{ Pointer *T }
@@ -51,7 +52,7 @@ func TestNativeGenericPackageFunctions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	_, err = evmcompiler.Compile("unsupported.go", `import "forms";func Run(){value:=true;forms.Var(&value)}`, pkg)
@@ -146,7 +147,7 @@ func TestNativeGenericConstrainedFunction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -174,7 +175,7 @@ func TestNativeGenericFunctionImportedArgument(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -204,7 +205,7 @@ func TestNativeGenericNamedConstraints(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := evm.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
+		if err := evmtest.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	}

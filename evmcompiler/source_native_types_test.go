@@ -11,6 +11,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/nativebind"
 	"github.com/andreyvit/evm/values"
 )
@@ -38,26 +39,26 @@ type Index[K any] struct { Key K }
 type Table struct{}
 func (t *Table) Lookup[K comparable](index *Index[K], key K) int
 `, Types: []evm.TypeDecl{{SourceName: "Table", Shape: table}, {Shape: tablePtr}, {SourceName: "Index", TypeArgs: []*values.Type{values.StringType}, Shape: index}, {Shape: ptr}}, Values: []evm.ExternalValue{
-		{Name: "ByName", Type: ptr.Type, Read: func(c *evm.Call) error {
-			c.SetResult(0, values.Value{R: values.NativeAddress, P: unsafe.Pointer(actualIndex)})
+		{Name: "ByName", Type: ptr.Type, Read: func(c *evm.VM) error {
+			c.SetCallResult(0, values.Value{R: values.NativeAddress, P: unsafe.Pointer(actualIndex)})
 			return nil
 		}},
-		{Name: "Rows", Type: tablePtr.Type, Read: func(c *evm.Call) error {
-			c.SetResult(0, values.Value{R: values.NativeAddress, P: unsafe.Pointer(actualTable)})
+		{Name: "Rows", Type: tablePtr.Type, Read: func(c *evm.VM) error {
+			c.SetCallResult(0, values.Value{R: values.NativeAddress, P: unsafe.Pointer(actualTable)})
 			return nil
 		}},
 	}, Methods: []evm.ExternalMethod{{Name: "Lookup", Receiver: tablePtr.Type, Instantiate: func(args []*values.Type) (evm.ExternalFunction, error) {
 		if len(args) != 1 || args[0] != values.StringType {
 			return evm.ExternalFunction{}, fmt.Errorf("unsupported index key")
 		}
-		return evm.ExternalFunction{Signature: evm.Signature{Params: []*values.Type{ptr.Type, values.StringType}, Results: []*values.Type{values.IntType}}, Call: func(c *evm.Call) error {
-			table := (*sourceNativeTable)(c.Argument(0).P)
-			idx := (*sourceNativeIndex[string])(c.Argument(1).P)
+		return evm.ExternalFunction{Signature: evm.Signature{Params: []*values.Type{ptr.Type, values.StringType}, Results: []*values.Type{values.IntType}}, Call: func(c *evm.VM) error {
+			table := (*sourceNativeTable)(c.CallArgument(0).P)
+			idx := (*sourceNativeIndex[string])(c.CallArgument(1).P)
 			result := -1
-			if idx.Key == c.Argument(2).AsString() {
+			if idx.Key == c.CallArgument(2).AsString() {
 				result = table.value
 			}
-			c.SetResult(0, values.Int(int64(result)))
+			c.SetCallResult(0, values.Int(int64(result)))
 			return nil
 		}}, nil
 	}}}}
@@ -73,7 +74,7 @@ func (t *Table) Lookup[K comparable](index *Index[K], key K) int
 				t.Fatal(err)
 			}
 			out := make([]values.Value, 1)
-			if err := evm.New(p).Run(context.Background(), "Run", nil, out); err != nil {
+			if err := evmtest.New(p).Run(context.Background(), "Run", nil, out); err != nil {
 				t.Fatal(err)
 			}
 			if out[0].AsInt() != 42 || actualIndex.Key != "changed" {
@@ -121,14 +122,14 @@ func (t *Table) Lookup[K comparable](index *Index[K], key K) int
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := evm.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
+		if err := evmtest.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	})
 	for name, modify := range map[string]func(*evm.Package){
 		"empty receiver": func(p *evm.Package) { p.Source += "\nfunc () Broken()" },
 		"generic receiver": func(p *evm.Package) {
-			p.Methods = append(append([]evm.ExternalMethod(nil), p.Methods...), evm.ExternalMethod{Name: "Extra", Receiver: ptr.Type, Call: func(*evm.Call) error { return nil }})
+			p.Methods = append(append([]evm.ExternalMethod(nil), p.Methods...), evm.ExternalMethod{Name: "Extra", Receiver: ptr.Type, Call: func(*evm.VM) error { return nil }})
 		},
 
 		"unknown":           func(p *evm.Package) { p.Types[2].SourceName = "Missing" },
@@ -155,7 +156,7 @@ func (t *Table) Lookup[K comparable](index *Index[K], key K) int
 			if _, err := evmcompiler.Compile("bad.go", `import "host";func Run(){_ = host.Rows}`, bad); err == nil {
 				t.Fatal("invalid native source mapping accepted")
 			}
-			dependent := evm.Package{Path: "dependent", Functions: []evm.ExternalFunction{{Name: "Rows", Signature: evm.Signature{Results: []*values.Type{tablePtr.Type}}, Call: func(*evm.Call) error { return nil }}}}
+			dependent := evm.Package{Path: "dependent", Functions: []evm.ExternalFunction{{Name: "Rows", Signature: evm.Signature{Results: []*values.Type{tablePtr.Type}}, Call: func(*evm.VM) error { return nil }}}}
 			importer := evmcompiler.SourceImporter(token.NewFileSet(), bad, dependent)
 			for range 2 {
 				if _, err := importer.Import("host"); err == nil {
@@ -191,7 +192,7 @@ func TestSourceNativeGenericNamedKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := make([]values.Value, 1)
-	if err := evm.New(p).Run(context.Background(), "Run", nil, out); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, out); err != nil {
 		t.Fatal(err)
 	}
 	if out[0].AsString() != "named" {
@@ -211,7 +212,7 @@ func TestSourcePackageName(t *testing.T) {
 			t.Fatal(err)
 		}
 		out := make([]values.Value, 1)
-		if err := evm.New(p).Run(context.Background(), "Run", nil, out); err != nil {
+		if err := evmtest.New(p).Run(context.Background(), "Run", nil, out); err != nil {
 			t.Fatal(err)
 		}
 		if out[0].AsInt() != 42 {
@@ -239,13 +240,13 @@ func TestSourceSharedScalarPointer(t *testing.T) {
 	original := sourceNativeKey("original")
 	arg := values.Value{R: values.NativeAddress, P: unsafe.Pointer(&original)}
 	out := make([]values.Value, 1)
-	if err := evm.New(p).Run(context.Background(), "Run", []values.Value{arg}, out); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", []values.Value{arg}, out); err != nil {
 		t.Fatal(err)
 	}
 	if original != "changed" || out[0] != arg {
 		t.Fatal("shared scalar pointer was copied", original, out)
 	}
-	if err := evm.New(p).Run(context.Background(), "Run", []values.Value{{}}, out); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", []values.Value{{}}, out); err != nil {
 		t.Fatal(err)
 	}
 	if out[0] != (values.Value{}) {
@@ -318,7 +319,7 @@ func TestNativeStructWithSourceDefinedScalar(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := make([]values.Value, 1)
-	if err := evm.New(p).Run(context.Background(), "Run", nil, out); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, out); err != nil {
 		t.Fatal(err)
 	}
 	if out[0].AsString() != "hello-world" {

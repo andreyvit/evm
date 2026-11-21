@@ -11,7 +11,7 @@ import (
 )
 
 type Frame struct {
-	*evm.Call
+	*evm.VM
 	Host, Receiver any
 	s              *Schema
 }
@@ -35,10 +35,14 @@ func (f *Frame) Callback(v values.Value) func() {
 	if v.R == 0 {
 		return nil
 	}
-	scope := f.Call.CallbackScope()
+	fn, err := f.Program().Callable(v)
+	if err != nil {
+		panic(err)
+	}
+	scope := f.VM.CallbackScope()
 	return func() {
-		if err := scope.WithCall(func(c *evm.Call) error {
-			if err := c.RunCallback(v); err != nil {
+		if err := scope.WithCall(func(c *evm.VM) error {
+			if err := c.Run(fn, nil); err != nil {
 				c.PanicCallback(err)
 			}
 			return nil
@@ -48,7 +52,7 @@ func (f *Frame) Callback(v values.Value) func() {
 	}
 }
 func (f *Frame) DecodeInterface(v values.Value) any {
-	x, err := f.s.nativeInterface(f.Call, v)
+	x, err := f.s.nativeInterface(f.VM, v)
 	if err != nil {
 		panic(err)
 	}
@@ -56,61 +60,36 @@ func (f *Frame) DecodeInterface(v values.Value) any {
 }
 func (f *Frame) EncodeInterface(x any) values.Value {
 	if f.s.pointers[reflect.TypeOf(x)] == nil {
-		v, err := f.Call.TypedInterfaceValue(x)
+		v, err := f.VM.TypedInterfaceValue(x)
 		if err != nil {
 			panic(err)
 		}
 		return v
 	}
-	v, e := f.s.Interface(f.Program(), x)
+	v, e := f.s.PackInterface(f.Program(), x)
 	if e != nil {
 		panic(e)
 	}
 	return v
 }
 
-// BoxedNamedFunction resolves an explicitly signature-polymorphic named handle.
-// Ordinary any parameters do not use this conversion.
-func (f *Frame) BoxedNamedFunction(v values.Value) *evm.NamedFunction {
-	if v.R == 0 {
-		return nil
-	}
-	fn, err := f.Program().NamedFunction(v)
-	if err != nil {
-		panic(err)
-	}
-	return fn
-}
-
-// NamedFunction retains a typed public guest function without interface boxing.
-func (f *Frame) NamedFunction(v values.Value) *evm.NamedFunction {
-	if v.R == 0 {
-		return nil
-	}
-	fn, err := f.Program().NamedFunctionValue(v)
-	if err != nil {
-		panic(err)
-	}
-	return fn
-}
-
 // Function retains a typed callable, including its captured state.
-func (f *Frame) Function(v values.Value) *evm.FunctionHandle {
+func (f *Frame) Function(v values.Value) *evm.Callable {
 	if v.R == 0 {
 		return nil
 	}
-	if err := f.ChargeAllocation(uint64(unsafe.Sizeof(evm.FunctionHandle{}))); err != nil {
+	if err := f.ChargeAllocation(uint64(unsafe.Sizeof(evm.Callable{}))); err != nil {
 		panic(err)
 	}
-	fn, err := f.Program().FunctionValue(v)
+	fn, err := f.Program().Callable(v)
 	if err != nil {
 		panic(err)
 	}
-	return fn
+	return &fn
 }
 
 // EncodeFunction checks program ownership and the declared result signature.
-func (f *Frame) EncodeFunction(name string, fn *evm.FunctionHandle) values.Value {
+func (f *Frame) EncodeFunction(name string, fn *evm.Callable) values.Value {
 	n := f.s.src.nodes[name]
 	if n == nil || n.kind != nodeRetainedFunction {
 		panic(evm.ErrFunction)
@@ -123,14 +102,14 @@ func (f *Frame) EncodeFunction(name string, fn *evm.FunctionHandle) values.Value
 }
 
 func (f *Frame) DecodeAny(v values.Value) any {
-	x, err := f.Call.NativeAny(v)
+	x, err := f.VM.NativeAny(v)
 	if err != nil {
 		panic(err)
 	}
 	return x
 }
 func (f *Frame) EncodeAny(x any) values.Value {
-	v, err := f.Call.AnyValue(x)
+	v, err := f.VM.AnyValue(x)
 	if err != nil {
 		panic(err)
 	}
@@ -140,7 +119,7 @@ func (f *Frame) EncodeAny(x any) values.Value {
 // DecodeTypedInterface uses the schema that owns the declared interface.
 func (f *Frame) DecodeTypedInterface(name string, v values.Value) any {
 	s := f.interfaceSchema(name)
-	x, err := s.nativeInterface(f.Call, v)
+	x, err := s.nativeInterface(f.VM, v)
 	if err != nil {
 		panic(err)
 	}
@@ -153,13 +132,13 @@ func (f *Frame) DecodeTypedInterface(name string, v values.Value) any {
 func (f *Frame) EncodeTypedInterface(name string, x any) values.Value {
 	s := f.interfaceSchema(name)
 	if s.pointers[reflect.TypeOf(x)] == nil {
-		v, err := f.Call.TypedInterfaceValue(x)
+		v, err := f.VM.TypedInterfaceValue(x)
 		if err != nil {
 			panic(err)
 		}
 		return v
 	}
-	v, err := s.Interface(f.Program(), x)
+	v, err := s.PackInterface(f.Program(), x)
 	if err != nil {
 		panic(err)
 	}
@@ -178,7 +157,7 @@ func (f *Frame) interfaceSchema(name string) *Schema {
 
 // DecodeError preserves native and guest error identity across the binding.
 func (f *Frame) DecodeError(v values.Value) error {
-	x, err := f.Call.NativeError(v)
+	x, err := f.VM.NativeError(v)
 	if err != nil {
 		panic(err)
 	}
@@ -195,7 +174,7 @@ func (f *Frame) Time(t time.Time) values.Value {
 
 // BoxedFunction retains a signature-polymorphic callable and its captures.
 // The receiving host checks its signature. Ordinary any stays ordinary any.
-func (f *Frame) BoxedFunction(v values.Value) *evm.FunctionHandle {
+func (f *Frame) BoxedFunction(v values.Value) *evm.Callable {
 	if v.R == 0 {
 		return nil
 	}
@@ -221,9 +200,9 @@ func (f *Frame) PackCell(name string, fields [2]values.Value) values.Value {
 
 // SetBorrowedBytesResult returns a slice backed by a declared borrow source.
 func (f *Frame) SetBorrowedBytesResult(index int, data []byte) {
-	v, err := f.Call.BorrowBytes(data)
+	v, err := f.VM.BorrowBytes(data)
 	if err != nil {
 		panic(err)
 	}
-	f.SetResult(index, v)
+	f.SetCallResult(index, v)
 }

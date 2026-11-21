@@ -56,9 +56,9 @@ func BindStandardFunction(path, name string, signature Signature) (*ExternalFunc
 	case "evmruntime":
 		switch name {
 		case "IncreaseCPUBudget":
-			call = func(c *Call) error { return c.IncreaseCPUBudget(c.Argument(0).R) }
+			call = func(c *VM) error { return c.IncreaseCPUBudget(c.CallArgument(0).R) }
 		case "IncreaseMemBudget":
-			call = func(c *Call) error { return c.IncreaseMemBudget(c.Argument(0).R, c.Argument(1).R) }
+			call = func(c *VM) error { return c.IncreaseMemBudget(c.CallArgument(0).R, c.CallArgument(1).R) }
 		}
 	case "evm/debug":
 		if name == "print" || name == "println" {
@@ -86,7 +86,7 @@ func BindStandardFunction(path, name string, signature Signature) (*ExternalFunc
 	return &ExternalFunction{Name: name, Signature: signature, Call: call, panics: path == "strings" && name == "Repeat" || path == "strconv" && (name == "FormatFloat" || name == "FormatInt" || name == "FormatUint")}, true
 }
 
-func (c *Call) argument(i int) values.Value {
+func (c *VM) argument(i int) values.Value {
 	g := c.native
 	slot, repr := int(g.params.Slots[i]), g.Signature.Params[i].Repr()
 	var v values.Value
@@ -98,7 +98,7 @@ func (c *Call) argument(i int) values.Value {
 	}
 	return v
 }
-func (c *Call) result(i int, v values.Value) {
+func (c *VM) result(i int, v values.Value) {
 	g := c.native
 	slot, repr := int(g.results.Slots[i]), g.Signature.Results[i].Repr()
 	if repr != values.Pointer {
@@ -108,10 +108,10 @@ func (c *Call) result(i int, v values.Value) {
 		c.P[slot] = v.P
 	}
 }
-func (c *Call) reserve(n uint64) error {
+func (c *VM) reserve(n uint64) error {
 	return charge(n, &c.budget.allocated, c.budget.limits)
 }
-func (c *Call) sliceResult(i int, data []values.Value) error {
+func (c *VM) sliceResult(i int, data []values.Value) error {
 	shape := c.program.Shape(c.native.Signature.Results[i])
 	storage := collectionStorageFor(shape, false)
 	p, err := storage.allocate(uint64(len(data)), shape.Elem.Cells, &c.budget.allocated, c.budget.limits)

@@ -6,6 +6,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/kvo/codec/row2"
 	"github.com/andreyvit/evm/values"
@@ -45,7 +46,7 @@ func Cursor() uint64 {
 	return sum
 }`
 
-func smallHost(t testing.TB, direct bool) (*evm.VM, context.Context) {
+func smallHost(t testing.TB, direct bool) (*evmtest.Session, context.Context) {
 	t.Helper()
 	schema := kvo.NewSchema()
 	prop := kvo.NewProp(schema, 5, "balance", kvo.TUint64, nil)
@@ -81,30 +82,30 @@ func smallHost(t testing.TB, direct bool) (*evm.VM, context.Context) {
 		}
 	}
 	add("Enabled", nil, evm.OpCallHostUU, []*values.Type{word}, values.Boolean,
-		func(c *evm.Call) error { c.R[0] = c.R[0] & 1; return nil },
-		func(_ *evm.Call, x, _ values.Value) (values.Value, error) { return values.Uint(x.R & 1), nil })
+		func(c *evm.VM) error { c.R[0] = c.R[0] & 1; return nil },
+		func(_ *evm.VM, x, _ values.Value) (values.Value, error) { return values.Uint(x.R & 1), nil })
 	add("Lookup", nil, evm.OpCallHostUP, []*values.Type{word}, acc,
-		func(c *evm.Call) error { c.P[0] = accounts[c.R[0]].P; return nil },
-		func(_ *evm.Call, x, _ values.Value) (values.Value, error) { return accounts[x.R], nil })
+		func(c *evm.VM) error { c.P[0] = accounts[c.R[0]].P; return nil },
+		func(_ *evm.VM, x, _ values.Value) (values.Value, error) { return accounts[x.R], nil })
 	add("Balance", acc, evm.OpCallHostMethodU, nil, word,
-		func(c *evm.Call) error { c.R[0] = account.GetField(c.P[0], 0).R; return nil },
-		func(_ *evm.Call, x, _ values.Value) (values.Value, error) { return account.GetField(x.P, 0), nil })
+		func(c *evm.VM) error { c.R[0] = account.GetField(c.P[0], 0).R; return nil },
+		func(_ *evm.VM, x, _ values.Value) (values.Value, error) { return account.GetField(x.P, 0), nil })
 	hasTag := func(v values.Value, s string) values.Value {
 		return values.Bool(account.GetField(v.P, 0).R&1 == 1 && s == "member")
 	}
 	add("HasTag", acc, evm.OpCallHostMethodSU, []*values.Type{str}, values.Boolean,
-		func(c *evm.Call) error { c.R[0] = hasTag(values.Value{P: c.P[0]}, c.Value(1).AsString()).R; return nil },
-		func(_ *evm.Call, x, y values.Value) (values.Value, error) { return hasTag(x, y.AsString()), nil })
+		func(c *evm.VM) error { c.R[0] = hasTag(values.Value{P: c.P[0]}, c.Value(1).AsString()).R; return nil },
+		func(_ *evm.VM, x, y values.Value) (values.Value, error) { return hasTag(x, y.AsString()), nil })
 	add("Context", nil, evm.OpCallHostP, nil, acc,
-		func(c *evm.Call) error { c.P[0] = accounts[17].P; return nil },
-		func(_ *evm.Call, _, _ values.Value) (values.Value, error) { return accounts[17], nil })
+		func(c *evm.VM) error { c.P[0] = accounts[17].P; return nil },
+		func(_ *evm.VM, _, _ values.Value) (values.Value, error) { return accounts[17], nil })
 	name := values.String("cached")
 	add("Name", acc, evm.OpCallHostMethodS, nil, str,
-		func(c *evm.Call) error { c.SetValue(0, name); return c.ChargeAllocation(name.R) },
-		func(_ *evm.Call, _, _ values.Value) (values.Value, error) { return name, nil })
+		func(c *evm.VM) error { c.SetValue(0, name); return c.ChargeAllocation(name.R) },
+		func(_ *evm.VM, _, _ values.Value) (values.Value, error) { return name, nil })
 	add("Cursor", nil, evm.OpCallHostP, nil, cur,
-		func(c *evm.Call) error { index = 0; c.P[0] = tok.P; return nil },
-		func(_ *evm.Call, _, _ values.Value) (values.Value, error) { index = 0; return tok, nil })
+		func(c *evm.VM) error { index = 0; c.P[0] = tok.P; return nil },
+		func(_ *evm.VM, _, _ values.Value) (values.Value, error) { index = 0; return tok, nil })
 	next := func() kvo.Record {
 		if index == len(rows) {
 			return kvo.Record{}
@@ -114,8 +115,8 @@ func smallHost(t testing.TB, direct bool) (*evm.VM, context.Context) {
 		return v
 	}
 	add("Next", cur, evm.OpCallHostMethodS, nil, row.Pointer,
-		func(c *evm.Call) error { return c.SetRecordResult(model, next()) },
-		func(c *evm.Call, _, _ values.Value) (values.Value, error) { return c.RecordValue(model, next()) })
+		func(c *evm.VM) error { return c.SetRecordResult(model, next()) },
+		func(c *evm.VM, _, _ values.Value) (values.Value, error) { return c.RecordValue(model, next()) })
 	m, err := evmcompiler.Compile("small.go", hostCallScript, pkg)
 	if err != nil {
 		t.Fatal(err)
@@ -124,7 +125,7 @@ func smallHost(t testing.TB, direct bool) (*evm.VM, context.Context) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	vm.Limits.Allocations = ^uint64(0)
 	vm.Limits.AllocationBytes = ^uint64(0)
 	ctx, scope := evm.WithRecords(context.Background())

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 	"runtime"
 	"strings"
@@ -117,7 +118,7 @@ func TestGoNativeInterfacesAndMethods(t *testing.T) {
 	sig := &values.Shape{Type: values.NewType("describe signature", values.Pair), Kind: values.FunctionKind, Cells: 1, Results: []*values.Shape{text}}
 	iface := &values.Shape{Type: values.NewType("host.Describer", values.Pair), Kind: values.InterfaceKind, Cells: 1, Methods: []values.Method{{ID: "Describe", Signature: sig}}}
 	pkg := evm.Package{Path: "h", Types: []evm.TypeDecl{{Name: "Number", Shape: named}, {Name: "Object", Shape: object}, {Shape: pointer}, {Name: "Describer", Shape: iface}}, Methods: []evm.ExternalMethod{
-		{Name: "Describe", Receiver: named.Type, Signature: evm.Signature{Results: []*values.Type{values.StringType}}, Call: func(c *evm.Call) error {
+		{Name: "Describe", Receiver: named.Type, Signature: evm.Signature{Results: []*values.Type{values.StringType}}, Call: func(c *evm.VM) error {
 			n := c.R[0]
 			if n == 7 {
 				c.SetValue(0, values.String("seven"))
@@ -126,7 +127,7 @@ func TestGoNativeInterfacesAndMethods(t *testing.T) {
 			}
 			return nil
 		}},
-		{Name: "Describe", Receiver: pointer.Type, Signature: evm.Signature{Results: []*values.Type{values.StringType}}, Call: func(c *evm.Call) error {
+		{Name: "Describe", Receiver: pointer.Type, Signature: evm.Signature{Results: []*values.Type{values.StringType}}, Call: func(c *evm.VM) error {
 			if c.P[0] == nil {
 				c.SetValue(0, values.String("nil"))
 			} else {
@@ -135,9 +136,9 @@ func TestGoNativeInterfacesAndMethods(t *testing.T) {
 			return nil
 		}},
 	}, Functions: []evm.ExternalFunction{
-		{Name: "Make", Signature: evm.Signature{Results: []*values.Type{iface.Type}}, DynamicTypes: []*values.Type{named.Type}, Call: func(c *evm.Call) error { return c.SetInterface(0, named.Type, values.Int(7)) }},
-		{Name: "Nil", Signature: evm.Signature{Results: []*values.Type{iface.Type}}, DynamicTypes: []*values.Type{pointer.Type}, Call: func(c *evm.Call) error { return c.SetInterface(0, pointer.Type, values.Value{}) }},
-		{Name: "Read", Signature: evm.Signature{Params: []*values.Type{values.AnyType}, Results: []*values.Type{values.IntType}}, Call: func(c *evm.Call) error {
+		{Name: "Make", Signature: evm.Signature{Results: []*values.Type{iface.Type}}, DynamicTypes: []*values.Type{named.Type}, Call: func(c *evm.VM) error { return c.SetInterface(0, named.Type, values.Int(7)) }},
+		{Name: "Nil", Signature: evm.Signature{Results: []*values.Type{iface.Type}}, DynamicTypes: []*values.Type{pointer.Type}, Call: func(c *evm.VM) error { return c.SetInterface(0, pointer.Type, values.Value{}) }},
+		{Name: "Read", Signature: evm.Signature{Params: []*values.Type{values.AnyType}, Results: []*values.Type{values.IntType}}, Call: func(c *evm.VM) error {
 			t, v, err := c.Interface(0)
 			if err != nil {
 				return err
@@ -162,12 +163,12 @@ func TestGoNativeInterfacesAndMethods(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := make([]values.Value, 1)
-	if err := evm.New(p).Run(context.Background(), "Run", nil, out); err != nil || out[0].R != 1 {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, out); err != nil || out[0].R != 1 {
 		t.Fatalf("host interface: %v %v", err, out)
 	}
 }
 func TestGoNativeInterfacePairPayload(t *testing.T) {
-	pkg := evm.Package{Path: "h", Functions: []evm.ExternalFunction{{Name: "Text", Signature: evm.Signature{Results: []*values.Type{values.AnyType}}, DynamicTypes: []*values.Type{values.StringType}, Call: func(c *evm.Call) error { return c.SetInterface(0, values.StringType, values.String("retained text")) }}, {Name: "GC", Call: func(*evm.Call) error { runtime.GC(); return nil }}}}
+	pkg := evm.Package{Path: "h", Functions: []evm.ExternalFunction{{Name: "Text", Signature: evm.Signature{Results: []*values.Type{values.AnyType}}, DynamicTypes: []*values.Type{values.StringType}, Call: func(c *evm.VM) error { return c.SetInterface(0, values.StringType, values.String("retained text")) }}, {Name: "GC", Call: func(*evm.VM) error { runtime.GC(); return nil }}}}
 	m, err := evmcompiler.Compile("main.go", `import "h";func Run()bool{x:=h.Text();h.GC();return x.(string)=="retained text"}`, pkg)
 	if err != nil {
 		t.Fatal(err)
@@ -177,7 +178,7 @@ func TestGoNativeInterfacePairPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := make([]values.Value, 1)
-	if err := evm.New(p).Run(context.Background(), "Run", nil, out); err != nil || out[0].R != 1 {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, out); err != nil || out[0].R != 1 {
 		t.Fatalf("pair interface: %v %v", err, out)
 	}
 }
@@ -203,7 +204,7 @@ func TestGoNativeMethodPackageIdentity(t *testing.T) {
 	scalar := &values.Shape{Type: values.NewType("a.T", values.Raw), Kind: values.IntKind, Bits: 64, Cells: 1}
 	sig := &values.Shape{Type: values.NewType("hidden signature", values.Pair), Kind: values.FunctionKind, Cells: 1}
 	iface := &values.Shape{Type: values.NewType("b.I", values.Pair), Kind: values.InterfaceKind, Cells: 1, Methods: []values.Method{{ID: "b.hidden", Signature: sig}}}
-	a := evm.Package{Path: "a", Types: []evm.TypeDecl{{Name: "T", Shape: scalar}}, Methods: []evm.ExternalMethod{{Name: "hidden", Receiver: scalar.Type, Call: func(*evm.Call) error { return nil }}}}
+	a := evm.Package{Path: "a", Types: []evm.TypeDecl{{Name: "T", Shape: scalar}}, Methods: []evm.ExternalMethod{{Name: "hidden", Receiver: scalar.Type, Call: func(*evm.VM) error { return nil }}}}
 	b := evm.Package{Path: "b", Types: []evm.TypeDecl{{Name: "I", Shape: iface}}}
 	m, err := evmcompiler.Compile("main.go", `import("a";"b");func Run()bool{var x any=a.T(3);_,ok:=x.(b.I);return !ok}`, a, b)
 	if err != nil {
@@ -214,7 +215,7 @@ func TestGoNativeMethodPackageIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := make([]values.Value, 1)
-	if err := evm.New(p).Run(context.Background(), "Run", nil, out); err != nil || out[0].R != 1 {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, out); err != nil || out[0].R != 1 {
 		t.Fatalf("package method identity: %v %v", err, out)
 	}
 }
@@ -234,7 +235,7 @@ func TestGoInvalidNativeTypeDeclarations(t *testing.T) {
 func TestGoNativeErrorAndInvalidInterfaceResult(t *testing.T) {
 	typ := values.NewType("h.ErrorText", values.Pair)
 	shape := &values.Shape{Type: typ, Kind: values.StringKind, Cells: 1}
-	pkg := evm.Package{Path: "h", Types: []evm.TypeDecl{{Name: "ErrorText", Shape: shape}}, Methods: []evm.ExternalMethod{{Name: "Error", Receiver: typ, Signature: evm.Signature{Results: []*values.Type{values.StringType}}, Call: func(c *evm.Call) error { return nil }}}, Functions: []evm.ExternalFunction{{Name: "Error", Signature: evm.Signature{Results: []*values.Type{values.ErrorType}}, DynamicTypes: []*values.Type{typ, values.IntType}, Call: func(c *evm.Call) error { return c.SetInterface(0, typ, values.String("failed")) }}}}
+	pkg := evm.Package{Path: "h", Types: []evm.TypeDecl{{Name: "ErrorText", Shape: shape}}, Methods: []evm.ExternalMethod{{Name: "Error", Receiver: typ, Signature: evm.Signature{Results: []*values.Type{values.StringType}}, Call: func(c *evm.VM) error { return nil }}}, Functions: []evm.ExternalFunction{{Name: "Error", Signature: evm.Signature{Results: []*values.Type{values.ErrorType}}, DynamicTypes: []*values.Type{typ, values.IntType}, Call: func(c *evm.VM) error { return c.SetInterface(0, typ, values.String("failed")) }}}}
 	source := `import "h";func Run()bool{err:=h.Error();return err!=nil&&err.Error()=="failed"}`
 	m, err := evmcompiler.Compile("main.go", source, pkg)
 	if err != nil {
@@ -245,15 +246,15 @@ func TestGoNativeErrorAndInvalidInterfaceResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := make([]values.Value, 1)
-	if err := evm.New(p).Run(context.Background(), "Run", nil, out); err != nil || out[0].R != 1 {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, out); err != nil || out[0].R != 1 {
 		t.Fatalf("native error: %v %v", err, out)
 	}
-	pkg.Functions[0].Call = func(c *evm.Call) error { return c.SetInterface(0, values.IntType, values.Int(3)) }
+	pkg.Functions[0].Call = func(c *evm.VM) error { return c.SetInterface(0, values.IntType, values.Int(3)) }
 	p, err = evm.Link(m, pkg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(p).Run(context.Background(), "Run", nil, out); err == nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, out); err == nil {
 		t.Fatal("returned non-error as error interface")
 	}
 }
@@ -301,7 +302,7 @@ func TestGoInterfaceLinkValidationAndSnapshot(t *testing.T) {
 	m.Types[1].Methods[0].Function.Index = 100000
 	m.Invokes[0].Method.Signature.Params[0] = nil
 	out := make([]values.Value, 1)
-	if err := evm.New(p).Run(context.Background(), "Run", nil, out); err != nil || out[0].AsString() != "ok" {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, out); err != nil || out[0].AsString() != "ok" {
 		t.Fatalf("linked snapshot: %v %v", err, out)
 	}
 }
@@ -377,7 +378,7 @@ func TestGoLinkRejectsForeignNativeMethodReceiver(t *testing.T) {
 	typ := values.NewType("foreign", values.Raw)
 	sig := evm.Signature{Params: []*values.Type{typ}}
 	m := &evm.Module{Imports: []evm.Import{{Package: "h", Name: "M", Receiver: typ, Signature: sig}}, Functions: []evm.Function{{Name: "Run", Code: []evm.Instruction{evm.ABC(evm.OpReturn, 0, 0, 0)}}}}
-	pkg := evm.Package{Path: "h", Methods: []evm.ExternalMethod{{Name: "M", Receiver: typ, Call: func(*evm.Call) error { return nil }}}}
+	pkg := evm.Package{Path: "h", Methods: []evm.ExternalMethod{{Name: "M", Receiver: typ, Call: func(*evm.VM) error { return nil }}}}
 	if _, err := evm.Link(m, pkg); err == nil {
 		t.Fatal("linked undeclared method receiver")
 	}
@@ -388,18 +389,18 @@ func TestGoNativeInterfacePayloadMatrix(t *testing.T) {
 	function := &values.Shape{Type: values.NewType("func()int", values.Pair), Kind: values.FunctionKind, Cells: 1, Results: []*values.Shape{number}}
 	pointer := &values.Shape{Type: values.NewType("*int", values.Pointer), Kind: values.PointerKind, Cells: 1, Elem: number}
 	pkg := evm.Package{Path: "h", Types: []evm.TypeDecl{{Shape: slice}, {Shape: function}, {Shape: pointer}}, Functions: []evm.ExternalFunction{
-		{Name: "Slice", Signature: evm.Signature{Results: []*values.Type{values.AnyType}}, DynamicTypes: []*values.Type{slice.Type}, Call: func(c *evm.Call) error {
+		{Name: "Slice", Signature: evm.Signature{Results: []*values.Type{values.AnyType}}, DynamicTypes: []*values.Type{slice.Type}, Call: func(c *evm.VM) error {
 			cells := []values.Value{values.Int(7), values.Int(8)}
 			return c.SetInterface(0, slice.Type, values.SliceValue(unsafe.Pointer(&cells[0]), 2, 2))
 		}},
-		{Name: "Pointer", Signature: evm.Signature{Results: []*values.Type{values.AnyType}}, DynamicTypes: []*values.Type{pointer.Type}, Call: func(c *evm.Call) error {
+		{Name: "Pointer", Signature: evm.Signature{Results: []*values.Type{values.AnyType}}, DynamicTypes: []*values.Type{pointer.Type}, Call: func(c *evm.VM) error {
 			p := new(values.Value)
 			*p = values.Int(9)
 			return c.SetInterface(0, pointer.Type, values.Value{P: unsafe.Pointer(p)})
 		}},
-		{Name: "Function", Signature: evm.Signature{Params: []*values.Type{function.Type}, Results: []*values.Type{values.AnyType}}, DynamicTypes: []*values.Type{function.Type}, Call: func(c *evm.Call) error { return c.SetInterface(0, function.Type, c.Value(0)) }},
-		{Name: "Nil", Signature: evm.Signature{Results: []*values.Type{values.AnyType}}, Call: func(c *evm.Call) error { return c.SetInterface(0, nil, values.Int(99)) }},
-		{Name: "GC", Call: func(*evm.Call) error { runtime.GC(); return nil }},
+		{Name: "Function", Signature: evm.Signature{Params: []*values.Type{function.Type}, Results: []*values.Type{values.AnyType}}, DynamicTypes: []*values.Type{function.Type}, Call: func(c *evm.VM) error { return c.SetInterface(0, function.Type, c.Value(0)) }},
+		{Name: "Nil", Signature: evm.Signature{Results: []*values.Type{values.AnyType}}, Call: func(c *evm.VM) error { return c.SetInterface(0, nil, values.Int(99)) }},
+		{Name: "GC", Call: func(*evm.VM) error { runtime.GC(); return nil }},
 	}}
 	m, err := evmcompiler.Compile("main.go", `import "h";func Run()bool{n:=6;s,p,f:=h.Slice(),h.Pointer(),h.Function(func()int{return n});h.GC();return s.([]int)[1]==8&&*p.(*int)==9&&f.(func()int)()==6&&h.Nil()==nil}`, pkg)
 	if err != nil {
@@ -410,7 +411,7 @@ func TestGoNativeInterfacePayloadMatrix(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := make([]values.Value, 1)
-	if err := evm.New(p).Run(context.Background(), "Run", nil, out); err != nil || out[0].R != 1 {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, out); err != nil || out[0].R != 1 {
 		t.Fatalf("native payload matrix: %v %v", err, out)
 	}
 }
@@ -424,7 +425,7 @@ func TestGoNativeInterfaceChecksDoNotUseGuestSteps(t *testing.T) {
 		iface.Methods = append(iface.Methods, values.Method{ID: name, Signature: methodSig})
 		fmt.Fprintf(&methods, "func(T)%s(){};", name)
 	}
-	pkg := evm.Package{Path: "h", Types: []evm.TypeDecl{{Name: "I", Shape: iface}}, Functions: []evm.ExternalFunction{{Name: "Rewrap", Signature: evm.Signature{Params: []*values.Type{values.AnyType}, Results: []*values.Type{iface.Type}}, Call: func(c *evm.Call) error {
+	pkg := evm.Package{Path: "h", Types: []evm.TypeDecl{{Name: "I", Shape: iface}}, Functions: []evm.ExternalFunction{{Name: "Rewrap", Signature: evm.Signature{Params: []*values.Type{values.AnyType}, Results: []*values.Type{iface.Type}}, Call: func(c *evm.VM) error {
 		typ, v, err := c.Interface(0)
 		if err != nil {
 			return err
@@ -440,7 +441,7 @@ func TestGoNativeInterfaceChecksDoNotUseGuestSteps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	v := make([]values.Value, 1)
 	if err := vm.Run(context.Background(), "Make", nil, v); err != nil {
 		t.Fatal(err)
@@ -472,7 +473,7 @@ func Run() int { return both(N(10), N(20)) }`)
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(prog).Run(context.Background(), "Run", nil, out[:]); err != nil || out[0].R != 1327 {
+	if err := evmtest.New(prog).Run(context.Background(), "Run", nil, out[:]); err != nil || out[0].R != 1327 {
 		t.Fatalf("Run: %v, %v", out, err)
 	}
 }

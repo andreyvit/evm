@@ -17,6 +17,7 @@ import (
 	"github.com/andreyvit/evm/evmbind/internal/methodbindings"
 	"github.com/andreyvit/evm/evmbind/internal/methodfixture"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/kvo/codec/msgpack"
 	"github.com/andreyvit/evm/kvo/codec/row2"
@@ -74,7 +75,7 @@ const methodSource = `import "m"
  func WithFlag(r *m.Customer)int64{return r.WithFlag(3)}
 `
 
-func compileMethods(t testing.TB, pkg evm.Package, src string) (*evm.Module, *evm.VM) {
+func compileMethods(t testing.TB, pkg evm.Package, src string) (*evm.Module, *evmtest.Session) {
 	t.Helper()
 	mod, err := evmcompiler.Compile("methods.go", src, pkg)
 	if err != nil {
@@ -84,7 +85,7 @@ func compileMethods(t testing.TB, pkg evm.Package, src string) (*evm.Module, *ev
 	if err != nil {
 		t.Fatal(err)
 	}
-	return mod, evm.New(p)
+	return mod, evmtest.New(p)
 }
 func TestRecordMethods(t *testing.T) {
 	for _, generated := range []bool{false, true} {
@@ -241,7 +242,7 @@ func TestRecordMethodBorrowing(t *testing.T) {
 			t.Fatal(err)
 		}
 		r := methodRecords()["Fast2"]
-		pkg.Functions = append(pkg.Functions, evm.ExternalFunction{Name: "Read", Signature: evm.Signature{Results: []*values.Type{pkg.Record(methodfixture.Model, false).Pointer}}, Ownership: &evm.OwnershipEffects{NoRetain: true, NoInvalidate: true, Borrowed: []evm.BorrowSource{{Result: 0, Domain: "db"}}}, Call: func(c *evm.Call) error { c.SetResult(0, r.Value()); return nil }})
+		pkg.Functions = append(pkg.Functions, evm.ExternalFunction{Name: "Read", Signature: evm.Signature{Results: []*values.Type{pkg.Record(methodfixture.Model, false).Pointer}}, Ownership: &evm.OwnershipEffects{NoRetain: true, NoInvalidate: true, Borrowed: []evm.BorrowSource{{Result: 0, Domain: "db"}}}, Call: func(c *evm.VM) error { c.SetCallResult(0, r.Value()); return nil }})
 		mod, vm := compileMethods(t, pkg, `import "m";func Run(n int)int64{var s int64;for i:=0;i<n;i++{r:=m.Read();s+=r.Balance()};return s}`)
 		copied := false
 		for _, f := range mod.Functions {

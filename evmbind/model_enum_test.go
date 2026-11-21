@@ -9,6 +9,7 @@ import (
 	"github.com/andreyvit/evm/evmbind"
 	"github.com/andreyvit/evm/evmbind/internal/modelenum"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 )
 
@@ -47,7 +48,7 @@ func Read(row *rows.Row) string {return row.kind.String()}`, packages...); err !
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(program).Run(context.Background(), "Run", nil, nil); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 }

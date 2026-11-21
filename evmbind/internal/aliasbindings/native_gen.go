@@ -132,26 +132,26 @@ var Bindings = evmbind.Static{Fingerprint: "265f73efa8c59e88dfbec3bf862b9b25892c
 	Calls: map[string]evmbind.Wrapper{
 		"Echo": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				Echo(*evm.Call, *dep0.Child) *dep0.Child
-			}).Echo(f.Call, readPtrImported0(f, f.Argument(0)))
-			f.SetResult(0, writePtrImported0(f, r0))
+				Echo(*evm.VM, *dep0.Child) *dep0.Child
+			}).Echo(f.VM, readPtrImported0(f, f.CallArgument(0)))
+			f.SetCallResult(0, writePtrImported0(f, r0))
 		},
 		"Many": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				Many(*evm.Call, []*dep0.Child) map[string]*dep0.Child
-			}).Many(f.Call, readCollection2(f, f.Argument(0)))
-			f.SetResult(0, writeCollection6(f, r0))
+				Many(*evm.VM, []*dep0.Child) map[string]*dep0.Child
+			}).Many(f.VM, readCollection2(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeCollection6(f, r0))
 		},
 	},
 	Direct: map[string]evmbind.DirectFactory{
 		"Echo": func(host any) evm.DirectFunc {
 			h := host.(interface {
-				Echo(*evm.Call, *dep0.Child) *dep0.Child
+				Echo(*evm.VM, *dep0.Child) *dep0.Child
 			})
-			return func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+			return func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 				defer evmbind.Catch("Echo", &err)
 				if x.P != nil && x.R != values.NativeAddress {
-					f := evmbind.Frame{Call: c}
+					f := evmbind.Frame{VM: c}
 					argx := readPtrImported0(&f, x)
 					out := h.Echo(c, argx)
 					v = writePtrImported0(&f, out)

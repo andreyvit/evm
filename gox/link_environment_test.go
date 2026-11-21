@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/gox"
 	"github.com/andreyvit/evm/values"
 )
@@ -94,7 +94,7 @@ func TestLinkEnvironmentMatchesPackageList(t *testing.T) {
 			t.Fatal(err)
 		}
 		out := make([]values.Value, 1)
-		if err := evm.New(program.EVM()).Run(context.Background(), "Run", nil, out); err != nil || out[0].AsString() != "b" {
+		if err := evmtest.New(program.EVM()).Run(context.Background(), "Run", nil, out); err != nil || out[0].AsString() != "b" {
 			t.Fatalf("%s environment: Run = %q, %v", name, out[0].AsString(), err)
 		}
 	}
@@ -116,7 +116,7 @@ func TestLinkEnvironmentMatchesPackageList(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := make([]values.Value, 1)
-	if err := evm.New(program.EVM()).Run(context.Background(), "Run", nil, out); err != nil || out[0].AsString() != "b" {
+	if err := evmtest.New(program.EVM()).Run(context.Background(), "Run", nil, out); err != nil || out[0].AsString() != "b" {
 		t.Fatalf("two compile environments: Run = %q, %v", out[0].AsString(), err)
 	}
 	c := environmentCorpus[0]

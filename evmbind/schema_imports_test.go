@@ -18,6 +18,7 @@ import (
 	"github.com/andreyvit/evm/evmbind/internal/importconsumer"
 	"github.com/andreyvit/evm/evmbind/internal/importfixture"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -25,7 +26,7 @@ type WrappedOptions struct{ Options *importconsumer.Options }
 
 type importHost struct{ options *importconsumer.Options }
 
-func (h *importHost) Echo(_ *evm.Call, o *importconsumer.Options) importfixture.Permission {
+func (h *importHost) Echo(_ *evm.VM, o *importconsumer.Options) importfixture.Permission {
 	h.options = o
 	o.Child.Permission = importfixture.Read
 	return o.Permission
@@ -85,7 +86,7 @@ func TestSharedSchemaImports(t *testing.T) {
 			t.Fatal(err)
 		}
 		var out [1]values.Value
-		if err := evm.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
+		if err := evmtest.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
 			t.Fatal(err)
 		}
 		if out[0].R != 21 || host.options.Child.Permission != importfixture.Read || host.options.Boxed.Value != importfixture.Write || host.options.Child.Value != importfixture.Read {
@@ -137,7 +138,7 @@ func TestImportedNativeCollections(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if out[0].R != 1 {
@@ -174,9 +175,9 @@ func TestConsolidatedSchemaImports(t *testing.T) {
 
 type aliasHost struct{}
 
-func (*aliasHost) Echo(_ *evm.Call, child *importfixture.Child) *importfixture.Child { return child }
+func (*aliasHost) Echo(_ *evm.VM, child *importfixture.Child) *importfixture.Child { return child }
 
-func (*aliasHost) Many(_ *evm.Call, children []*importfixture.Child) map[string]*importfixture.Child {
+func (*aliasHost) Many(_ *evm.VM, children []*importfixture.Child) map[string]*importfixture.Child {
 	return map[string]*importfixture.Child{"first": children[0]}
 }
 
@@ -246,7 +247,7 @@ func TestConsolidatedNativeTypeAliases(t *testing.T) {
 			t.Fatal(err)
 		}
 		var out [1]values.Value
-		if err := evm.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
+		if err := evmtest.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
 			t.Fatal(err)
 		}
 		if !out[0].AsBool() {

@@ -10,6 +10,7 @@ import (
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmbind"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -55,7 +56,7 @@ func TestNativePointerIdentityAcrossPackages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(p).Run(context.Background(), "Run", []values.Value{av, bv}, nil); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", []values.Value{av, bv}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if target.Value != &value || target.At != &stamp || target.List[0] != &value || target.Map["value"] != &value || value != 42 {

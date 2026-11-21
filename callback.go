@@ -17,24 +17,16 @@ func (vm *VM) loadCaptures(f frame, fn *linkedFunction, env unsafe.Pointer) {
 	}
 }
 
-// RunCallback runs a borrowed func() on the native call's goroutine. Its
-// registers are separate so Go can keep using the original Call window.
-// Globals, captured cells, transaction scopes and all budgets stay shared.
-func (c *Call) RunCallback(v values.Value) error {
-	return c.RunCallbackArgs(v, nil, nil)
-}
-
-// RunCallbackArgs invokes a borrowed function with its declared arguments and
-// results. The caller supplies values matching the function's static signature.
-// Captures, globals and budgets remain shared with the suspended invocation.
-// Results are written only on success.
-func (c *Call) RunCallbackArgs(v values.Value, args, results []values.Value) (err error) {
+func (c *VM) runValue(v values.Value, args, results []values.Value) (err error) {
 	if v.R == 0 {
 		return ErrNilFunction
 	}
 	var ref FunctionRef
 	var native *nativeFunction
 	var sig Signature
+	if v.R == boundMethodValue {
+		return c.runBoundMethod((*boundMethod)(v.P), args, results)
+	}
 	if v.R == nativeFunctionValue {
 		var err error
 		native, err = c.program.nativeFunction(v)
@@ -57,7 +49,7 @@ func (c *Call) RunCallbackArgs(v values.Value, args, results []values.Value) (er
 	return c.runCallback(ref, native, sig, v.P, args, results)
 }
 
-func (c *Call) runCallback(ref FunctionRef, native *nativeFunction, sig Signature, captures unsafe.Pointer, args, results []values.Value) (err error) {
+func (c *VM) runCallback(ref FunctionRef, native *nativeFunction, sig Signature, captures unsafe.Pointer, args, results []values.Value) (err error) {
 	if len(sig.Params) != len(args) || len(sig.Results) != len(results) {
 		return ErrFunction
 	}
@@ -65,28 +57,32 @@ func (c *Call) runCallback(ref FunctionRef, native *nativeFunction, sig Signatur
 	if err := b.check(b.remaining); err != nil {
 		return err
 	}
-	parent := b.limits
-	if depth := len(c.vm.stack) + 1; depth < parent.Depth {
-		b.limits.Depth -= depth
-	} else {
-		return ErrDepth
-	}
-	b.limits.RSlots -= c.usedR
-	b.limits.PSlots -= c.usedP
-	defer func() {
-		b.limits = parent
-		c.Context = b.ctx
-		var panicError *PanicError
-		if err != nil && !errors.As(err, &panicError) {
-			b.err = err
+	vm := c
+	// A native root uses the lease's own registers. Only a binding that
+	// re-enters EVM has an outer register window to preserve.
+	if c.inNativeCall {
+		parent := b.limits
+		if depth := len(c.stack) + 1; depth < parent.Depth {
+			b.limits.Depth -= depth
+		} else {
+			return ErrDepth
 		}
-	}()
-	if err := charge(uint64(unsafe.Sizeof(VM{})), &b.allocated, b.limits); err != nil {
-		return err
+		b.limits.RSlots -= c.usedR
+		b.limits.PSlots -= c.usedP
+		defer func() {
+			b.limits.Depth, b.limits.RSlots, b.limits.PSlots = parent.Depth, parent.RSlots, parent.PSlots
+			c.Context = b.ctx
+			if err != nil {
+				var panicError *PanicError
+				if !errors.As(err, &panicError) {
+					b.err = err
+				}
+			}
+		}()
+		saved := vm.enterCallback()
+		defer saved.restore(vm)
 	}
-	vm := &VM{coverage: c.vm.coverage, program: c.program, globals: c.vm.globals, callbackParent: c.vm, Output: c.output, deferGeneration: 1}
-	vm.call = Call{vm: vm, program: c.program, budget: b, Context: b.ctx, Position: c.Position, output: c.output}
-	defer recoverGuestErrorPanic(&vm.call, &err)
+	defer recoverGuestErrorPanic(vm, &err)
 	if ref.Native {
 		var g *linkedNative
 		var call Native
@@ -102,12 +98,12 @@ func (c *Call) runCallback(ref FunctionRef, native *nativeFunction, sig Signatur
 		if err := vm.grow(g.rSize, g.pSize, b); err != nil {
 			return err
 		}
-		vm.call.native = g
-		vm.call.R, vm.call.P = vm.r[:g.rSize], vm.p[:g.pSize]
-		vm.call.usedR, vm.call.usedP = g.rSize, g.pSize
+		vm.native = g
+		vm.R, vm.P = vm.r[:g.rSize], vm.p[:g.pSize]
+		vm.usedR, vm.usedP = g.rSize, g.pSize
 		for i, arg := range args {
 			if arg.R == values.NativeBorrow && arg.P != nil {
-				arg, err = vm.call.importBorrow(sig.Params[i], arg)
+				arg, err = vm.importBorrow(sig.Params[i], arg)
 				if err != nil {
 					return err
 				}
@@ -115,10 +111,13 @@ func (c *Call) runCallback(ref FunctionRef, native *nativeFunction, sig Signatur
 			vm.write(frame{}, Operand{g.params.Slots[i], sig.Params[i].Repr()}, arg)
 		}
 
-		leaveNativeCall := vm.call.enterNativeCall()
+		leaveNativeCall := vm.enterNativeCall()
 		defer leaveNativeCall()
-		if err := call(&vm.call); err != nil {
+		if err := call(vm); err != nil {
 			return err
+		}
+		if b.err != nil {
+			return b.err
 		}
 		if err := b.check(b.remaining); err != nil {
 			return err
@@ -134,37 +133,52 @@ func (c *Call) runCallback(ref FunctionRef, native *nativeFunction, sig Signatur
 	return vm.executeSelected(int(ref.Index), captures, args, results, b)
 }
 
-// RunInterfaceMethod invokes a guest interface method synchronously with the
-// active invocation's globals and budget. Arguments exclude the receiver.
-func (c *Call) RunInterfaceMethod(value values.Value, name string, signature Signature, args, results []values.Value) error {
-	if !c.program.hasInterfaceMethod(value, name, signature) {
-		return ErrFunction
+// LookupMethod resolves a method on this receiver and checks its receiver-free signature.
+func (vm *VM) LookupMethod(value values.Value, name string, signature Signature) (Callable, error) {
+	p := vm.program
+	if !p.hasInterfaceMethod(value, name, signature) {
+		return Callable{}, ErrFunction
 	}
-	shape, receiver, err := c.program.typeShapes.Unpack(value)
+	_, receiver, err := p.UnpackInterface(value)
 	if err != nil {
-		return err
+		return Callable{}, err
 	}
-	if shape == nil {
-		return ErrNil
-	}
-	id := c.program.typeShapes.Index(value)
-	methodID, ok := c.program.lookupMethodID(name)
+	id, _ := p.lookupMethodID(name)
+	method := p.types[p.typeShapes.Index(value)].methods[id]
+	full, ok := p.functionSignature(method.Function)
 	if !ok {
-		return ErrFunction
+		return Callable{}, ErrFunction
 	}
-	method := c.program.types[id].methods[methodID]
-	if method == nil {
-		return ErrFunction
+	if err := vm.ChargeAllocation(uint64(unsafe.Sizeof(boundMethod{}))); err != nil {
+		return Callable{}, err
 	}
-	sig, ok := c.program.functionSignature(method.Function)
-	if !ok {
-		return ErrFunction
+	bound := &boundMethod{ref: method.Function, signature: full, receiver: receiver}
+	bound.target = callTarget{program: p, index: -1, number: boundMethodValue, signature: &method.Signature}
+	return Callable{&bound.target, unsafe.Pointer(bound)}, nil
+}
+
+type boundMethod struct {
+	target    callTarget
+	ref       FunctionRef
+	signature Signature
+	receiver  values.Value
+}
+
+const boundMethodValue = nativeFunctionValue - 1
+
+func (vm *VM) runBoundMethod(method *boundMethod, args, results []values.Value) error {
+	var local [8]values.Value
+	n := len(args) + 1
+	var inputs []values.Value
+	if n <= len(local) {
+		inputs = local[:n]
+	} else {
+		if err := vm.ChargeAllocation(uint64(n) * uint64(unsafe.Sizeof(values.Value{}))); err != nil {
+			return err
+		}
+		inputs = make([]values.Value, n)
 	}
-	if err := c.ChargeAllocation(uint64(len(args)+1) * uint64(unsafe.Sizeof(values.Value{}))); err != nil {
-		return err
-	}
-	params := make([]values.Value, len(args)+1)
-	params[0] = receiver
-	copy(params[1:], args)
-	return c.runCallback(method.Function, nil, sig, nil, params, results)
+	inputs[0] = method.receiver
+	copy(inputs[1:], args)
+	return vm.runCallback(method.ref, nil, method.signature, nil, inputs, results)
 }

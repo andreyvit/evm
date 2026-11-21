@@ -25,6 +25,7 @@ import (
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/kvo/codec/msgpack"
 	"github.com/andreyvit/evm/kvo/codec/row2"
+	"github.com/andreyvit/evm/values"
 )
 
 // The underscore keeps the go tool from building the script as host code.
@@ -84,28 +85,31 @@ func run(out io.Writer) {
 
 	// Compile and link once.
 	module := must(evmcompiler.Compile("rules.go", rulesSource, packages...))
-	program := must(evm.Link(module, packages...))
-	vm := evm.New(program)
-	budget := evm.Budget{Steps: 100_000, Duration: time.Second}
-
+	limits := evm.Limits{Steps: 100_000, Duration: time.Second}
+	program := must(evm.LinkOptions{DefaultLimits: &limits}.Link(module, packages...))
+	describe := must(program.LookupFunction("Describe", &evm.Signature{Params: []*values.Type{models.Record(CustomerModel, false).Pointer, values.TimeType}, Results: []*values.Type{values.StringType}}))
+	redeem := must(program.LookupFunction("Redeem", &evm.Signature{Params: []*values.Type{models.Record(CustomerModel, true).Pointer, values.Int64}, Results: []*values.Type{values.BoolType}}))
+	ctx, scope := evm.WithRecords(context.Background())
+	defer scope.Close()
+	vm := program.AcquireVM(ctx)
+	defer vm.Release()
 	// The script reads the same records. Nothing is converted or copied.
 	now := date(2025, 3, 1)
 	for _, c := range records {
-		var result [1]any
-		ensure(vm.RunEntryNative(context.Background(), "Describe", []any{c, now}, result[:], budget))
-		fmt.Fprintln(out, result[0])
+		slots := [3]values.Value{c.Value(), values.NativeTime(now)}
+		ensure(vm.Run(describe, slots[:]))
+		fmt.Fprintln(out, slots[2].AsString())
 	}
 
 	// The script edits through the host's editors. They live in a record
 	// scope, which a host opens for the length of a transaction.
-	ctx, scope := evm.WithRecords(context.Background())
-	defer scope.Close()
+
 	for i, c := range records {
 		edit := c.Edit()
-		var result [1]any
-		ensure(vm.RunEntryNative(ctx, "Redeem", []any{scope.EditRecord(CustomerModel, edit), int64(250)}, result[:], budget))
+		slots := [3]values.Value{scope.EditRecord(CustomerModel, edit), values.Int(250)}
+		ensure(vm.Run(redeem, slots[:]))
 		records[i] = edit.Record()
-		fmt.Fprintf(out, "%s redeems 250: %v, balance %d\n", c.Get(Customer_Name), result[0], PointBalance(records[i]))
+		fmt.Fprintf(out, "%s redeems 250: %v, balance %d\n", c.Get(Customer_Name), slots[2].AsBool(), PointBalance(records[i]))
 	}
 	fmt.Fprintf(out, "Ada's struct: %d redeemed\n", ada.Redeemed)
 }

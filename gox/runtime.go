@@ -53,45 +53,51 @@ func runtimePackage() evm.Package {
 		},
 	}
 	p.Types = append(slices.Clone(p.Types), trustedSchema().Package().Types...)
-	add := func(name string, params []*values.Type, fn func(*Builder, *evm.Call) error) {
-		p.Functions = append(p.Functions, evm.ExternalFunction{Name: name, Signature: evm.Signature{Params: append([]*values.Type{builderPointer}, params...)}, Call: func(c *evm.Call) error {
-			b, err := builderForCall(c, c.Argument(0))
+	add := func(name string, params []*values.Type, fn func(*Builder, *evm.VM) error) {
+		p.Functions = append(p.Functions, evm.ExternalFunction{Name: name, Signature: evm.Signature{Params: append([]*values.Type{builderPointer}, params...)}, Call: func(c *evm.VM) error {
+			b, err := builderForCall(c, c.CallArgument(0))
 			if err != nil {
 				return err
 			}
 			return fn(b, c)
 		}})
 	}
-	add("Step", []*values.Type{values.IntType}, func(b *Builder, c *evm.Call) error { return b.step(int(c.Argument(1).AsInt())) })
-	add("Value", []*values.Type{values.IntType, values.AnyType}, func(b *Builder, c *evm.Call) error {
+	add("Step", []*values.Type{values.IntType}, func(b *Builder, c *evm.VM) error { return b.step(int(c.CallArgument(1).AsInt())) })
+	add("Value", []*values.Type{values.IntType, values.AnyType}, func(b *Builder, c *evm.VM) error {
 		v, err := nativeValue(c, 2)
 		if err != nil {
 			return err
 		}
-		return b.value(int(c.Argument(1).AsInt()), v)
+		return b.value(int(c.CallArgument(1).AsInt()), v)
 	})
-	add("String", []*values.Type{values.IntType, values.StringType}, func(b *Builder, c *evm.Call) error {
-		return b.stringValue(int(c.Argument(1).AsInt()), c.Argument(2).AsString())
+	add("String", []*values.Type{values.IntType, values.StringType}, func(b *Builder, c *evm.VM) error {
+		return b.stringValue(int(c.CallArgument(1).AsInt()), c.CallArgument(2).AsString())
 	})
-	add("Int", []*values.Type{values.IntType, values.IntType}, func(b *Builder, c *evm.Call) error { return b.value(int(c.Argument(1).AsInt()), c.Argument(2).AsInt()) })
-	add("Bool", []*values.Type{values.IntType, values.Boolean}, func(b *Builder, c *evm.Call) error { return b.value(int(c.Argument(1).AsInt()), c.Argument(2).R != 0) })
-	add("Class", []*values.Type{values.StringType}, func(b *Builder, c *evm.Call) error { return b.Class(c.Argument(1).AsString()) })
-	add("Attr", []*values.Type{values.StringType, values.AnyType}, func(b *Builder, c *evm.Call) error {
+	add("Int", []*values.Type{values.IntType, values.IntType}, func(b *Builder, c *evm.VM) error {
+		return b.value(int(c.CallArgument(1).AsInt()), c.CallArgument(2).AsInt())
+	})
+	add("Bool", []*values.Type{values.IntType, values.Boolean}, func(b *Builder, c *evm.VM) error {
+		return b.value(int(c.CallArgument(1).AsInt()), c.CallArgument(2).R != 0)
+	})
+	add("Class", []*values.Type{values.StringType}, func(b *Builder, c *evm.VM) error { return b.Class(c.CallArgument(1).AsString()) })
+	add("Attr", []*values.Type{values.StringType, values.AnyType}, func(b *Builder, c *evm.VM) error {
 		v, err := nativeValue(c, 2)
 		if err != nil {
 			return err
 		}
-		return b.Attr(c.Argument(1).AsString(), v)
+		return b.Attr(c.CallArgument(1).AsString(), v)
 	})
-	add("AttrOrOmit", []*values.Type{values.StringType, values.AnyType}, func(b *Builder, c *evm.Call) error {
+	add("AttrOrOmit", []*values.Type{values.StringType, values.AnyType}, func(b *Builder, c *evm.VM) error {
 		v, err := nativeValue(c, 2)
 		if err != nil {
 			return err
 		}
-		return b.AttrOrOmit(c.Argument(1).AsString(), v)
+		return b.AttrOrOmit(c.CallArgument(1).AsString(), v)
 	})
-	add("Data", []*values.Type{values.StringType, values.StringType}, func(b *Builder, c *evm.Call) error { return b.Data(c.Argument(1).AsString(), c.Argument(2).AsString()) })
-	add("BuilderText", []*values.Type{values.StringType}, func(b *Builder, c *evm.Call) error { return b.Text(c.Argument(1).AsString()) })
+	add("Data", []*values.Type{values.StringType, values.StringType}, func(b *Builder, c *evm.VM) error {
+		return b.Data(c.CallArgument(1).AsString(), c.CallArgument(2).AsString())
+	})
+	add("BuilderText", []*values.Type{values.StringType}, func(b *Builder, c *evm.VM) error { return b.Text(c.CallArgument(1).AsString()) })
 	for _, name := range []string{"Class", "Attr", "AttrOrOmit", "Data", "BuilderText"} {
 		for _, f := range p.Functions {
 			if f.Name == name {
@@ -101,50 +107,50 @@ func runtimePackage() evm.Package {
 					methodName = "Text"
 				}
 				method := evm.ExternalMethod{Name: methodName, Receiver: builderPointer, Signature: evm.Signature{Params: params}}
-				method.Call = func(c *evm.Call) error {
-					b, err := builderForCall(c, c.Argument(0))
+				method.Call = func(c *evm.VM) error {
+					b, err := builderForCall(c, c.CallArgument(0))
 					if err != nil {
 						return err
 					}
 					switch name {
 					case "Class":
-						return b.Class(c.Argument(1).AsString())
+						return b.Class(c.CallArgument(1).AsString())
 					case "Data":
-						return b.Data(c.Argument(1).AsString(), c.Argument(2).AsString())
+						return b.Data(c.CallArgument(1).AsString(), c.CallArgument(2).AsString())
 					case "BuilderText":
-						return b.Text(c.Argument(1).AsString())
+						return b.Text(c.CallArgument(1).AsString())
 					default:
 						v, err := nativeValue(c, 2)
 						if err != nil {
 							return err
 						}
 						if name == "AttrOrOmit" {
-							return b.AttrOrOmit(c.Argument(1).AsString(), v)
+							return b.AttrOrOmit(c.CallArgument(1).AsString(), v)
 						}
-						return b.Attr(c.Argument(1).AsString(), v)
+						return b.Attr(c.CallArgument(1).AsString(), v)
 					}
 				}
 				p.Methods = append(p.Methods, method)
 			}
 		}
 	}
-	p.Methods = append(p.Methods, evm.ExternalMethod{Name: "HTML", Receiver: builderPointer, Signature: evm.Signature{Params: []*values.Type{trustedTypes["HTML"]}}, Call: func(c *evm.Call) error {
-		b, err := builderForCall(c, c.Argument(0))
+	p.Methods = append(p.Methods, evm.ExternalMethod{Name: "HTML", Receiver: builderPointer, Signature: evm.Signature{Params: []*values.Type{trustedTypes["HTML"]}}, Call: func(c *evm.VM) error {
+		b, err := builderForCall(c, c.CallArgument(0))
 		if err != nil {
 			return err
 		}
-		return b.HTML(HTML(c.Argument(1).AsString()))
+		return b.HTML(HTML(c.CallArgument(1).AsString()))
 	}})
 	p.Methods = append(p.Methods,
-		evm.ExternalMethod{Name: "Open", Receiver: builderPointer, Signature: evm.Signature{Params: []*values.Type{values.StringType}}, Call: func(c *evm.Call) error {
-			b, err := builderForCall(c, c.Argument(0))
+		evm.ExternalMethod{Name: "Open", Receiver: builderPointer, Signature: evm.Signature{Params: []*values.Type{values.StringType}}, Call: func(c *evm.VM) error {
+			b, err := builderForCall(c, c.CallArgument(0))
 			if err != nil {
 				return err
 			}
-			return b.Open(c.Argument(1).AsString())
+			return b.Open(c.CallArgument(1).AsString())
 		}},
-		evm.ExternalMethod{Name: "Close", Receiver: builderPointer, Call: func(c *evm.Call) error {
-			b, err := builderForCall(c, c.Argument(0))
+		evm.ExternalMethod{Name: "Close", Receiver: builderPointer, Call: func(c *evm.VM) error {
+			b, err := builderForCall(c, c.CallArgument(0))
 			if err != nil {
 				return err
 			}
@@ -154,7 +160,7 @@ func runtimePackage() evm.Package {
 	// Small side-effecting calls read arguments directly from guest registers.
 	// Keep the normal callbacks for indirect and deferred invocations.
 	direct := func(fn func(*Builder, values.Value) error) evm.DirectFunc {
-		return func(c *evm.Call, x, y values.Value) (values.Value, error) {
+		return func(c *evm.VM, x, y values.Value) (values.Value, error) {
 			b, err := builderForCall(c, x)
 			if err != nil {
 				return values.Value{}, err
@@ -174,10 +180,14 @@ func runtimePackage() evm.Package {
 		f := &p.Functions[i]
 		if f.Name == "Text" || f.Name == "TrustedHTML" {
 			trusted := f.Name == "TrustedHTML"
-			fn := func(_ *evm.Call, x, _ values.Value) (values.Value, error) {
+			fn := func(_ *evm.VM, x, _ values.Value) (values.Value, error) {
 				return contentCell.pack(Content{x.AsString(), trusted}), nil
 			}
-			f.Call = func(c *evm.Call) error { v, err := fn(c, c.Argument(0), values.Value{}); c.SetResult(0, v); return err }
+			f.Call = func(c *evm.VM) error {
+				v, err := fn(c, c.CallArgument(0), values.Value{})
+				c.SetCallResult(0, v)
+				return err
+			}
 			f.Direct = evm.DirectBinding{Op: evm.HostCallOpcode(false, []values.Repr{values.Pair}, values.Pair), Call: fn}
 			continue
 		}
@@ -197,8 +207,8 @@ func runtimePackage() evm.Package {
 	}
 	return p
 }
-func nativeValue(c *evm.Call, index int) (any, error) {
-	v := c.Argument(index)
+func nativeValue(c *evm.VM, index int) (any, error) {
+	v := c.CallArgument(index)
 	shape, raw, err := c.Program().UnpackInterface(v)
 	if err != nil || shape == nil {
 		return nil, err
@@ -247,7 +257,7 @@ func nativeValue(c *evm.Call, index int) (any, error) {
 	return c.JSONValue(v, 16<<20)
 }
 
-func builderForCall(c *evm.Call, v values.Value) (*Builder, error) {
+func builderForCall(c *evm.VM, v values.Value) (*Builder, error) {
 	b := (*Builder)(v.P)
 	if b == nil {
 		return nil, fmt.Errorf("nil rendering builder")

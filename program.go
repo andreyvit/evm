@@ -1,7 +1,6 @@
 package evm
 
 import (
-	"context"
 	"fmt"
 	"iter"
 	"maps"
@@ -200,29 +199,13 @@ func (m *Module) ListedShapes() iter.Seq[*values.Shape] {
 	}
 }
 
-// Call borrows an in-place argument/result window for this native call. Read
-// parameters before overwriting result slots. Do not retain Call or its slices,
-// and do not reenter this VM. Independent VMs may run concurrently.
-type Call struct {
-	vm           *VM
-	usedR, usedP int // live parent register span when entering a synchronous callback
-	program      *Program
-	output       func(string) error
-	native       *linkedNative
-	budget       *executionBudget
-	Context      context.Context
-	Position     SourcePosition
-	R            []uint64
-	P            []unsafe.Pointer
-}
-
 // Value reads a V pair. Access R-only and P-only arguments through their banks.
-func (c *Call) Value(slot int) values.Value { return values.Value{R: c.R[slot], P: c.P[slot]} }
+func (c *VM) Value(slot int) values.Value { return values.Value{R: c.R[slot], P: c.P[slot]} }
 
 // SetValue writes a V pair into a result slot whose external type uses both banks.
-func (c *Call) SetValue(slot int, v values.Value) { c.R[slot], c.P[slot] = v.R, v.P }
+func (c *VM) SetValue(slot int, v values.Value) { c.R[slot], c.P[slot] = v.R, v.P }
 
-type Native func(*Call) error
+type Native func(*VM) error
 
 // LinkName identifies the function in imports and disassembly.
 func (f *ExternalFunction) LinkName() string {
@@ -404,6 +387,9 @@ func linkNative(fn ExternalFunction, params, results Layout) linkedNative {
 // outside the execution loop. Independent VMs may share a Program if its native
 // wrappers support concurrent use.
 type Program struct {
+	defaultLimits           Limits
+	targets                 []callTarget
+	entryNumbers            []uint64
 	mutableFields           sync.Map // mutableFieldKey -> *values.Shape
 	hostData                any
 	nativeSliceTypes        map[reflect.Type]nativeSliceType
@@ -497,7 +483,7 @@ func (e *LinkEnvironment) link(m *Module, hostData any) (*Program, error) {
 	if len(m.Functions) == 0 || uint64(len(m.Functions)) > 1<<32 || uint64(len(m.Imports)) > MethodImportBase-nativeErrorNatives-panicNatives || uint64(len(m.MethodImports)) >= nativeFunctionIndex-MethodImportBase {
 		return nil, fmt.Errorf("invalid function/import count")
 	}
-	p := &Program{hostData: hostData, jsonTypes: m.JSONTypes, sharedMethodIDs: e.methodIDs, methodIDs: make(map[string]uint32), requirements: make(map[*values.Shape][]methodRequirement), typeIDs: make(map[*values.Type]uint32), words: slices.Clone(m.Words), entries: make(map[string]int), conversions: slices.Clone(m.Conversions)}
+	p := &Program{defaultLimits: e.defaultLimits, hostData: hostData, jsonTypes: m.JSONTypes, sharedMethodIDs: e.methodIDs, methodIDs: make(map[string]uint32), requirements: make(map[*values.Shape][]methodRequirement), typeIDs: make(map[*values.Type]uint32), words: slices.Clone(m.Words), entries: make(map[string]int), conversions: slices.Clone(m.Conversions)}
 	if e.codecsErr != nil {
 		return nil, e.codecsErr
 	}
@@ -873,10 +859,11 @@ func (e *LinkEnvironment) link(m *Module, hostData any) (*Program, error) {
 	}
 	for i := range p.functions {
 		f := &p.functions[i]
-		if f.Internal || f.Name == m.Init {
+		if f.Internal || f.Method || len(f.Captures) != 0 || f.Name == m.Init {
 			delete(p.entries, f.Name)
 		}
 	}
+	p.linkCallables()
 	return p, nil
 }
 

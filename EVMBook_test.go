@@ -6,10 +6,11 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
-func arithmeticVM(tb testing.TB, compact bool) *evm.VM {
+func arithmeticVM(tb testing.TB, compact bool) *evmtest.Session {
 	tb.Helper()
 	m, err := (evmcompiler.Options{NoOptimization: !compact}).Compile("example.go", "func Arithmetic(x, y uint8) uint8 { return x + y }")
 	if err != nil {
@@ -26,7 +27,7 @@ func arithmeticVM(tb testing.TB, compact bool) *evm.VM {
 	if err != nil {
 		tb.Fatal(err)
 	}
-	return evm.New(p)
+	return evmtest.New(p)
 }
 
 func TestArithmeticSchedules(t *testing.T) {

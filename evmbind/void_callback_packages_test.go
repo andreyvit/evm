@@ -8,19 +8,20 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
 type voidPackageHost struct {
-	named    *evm.NamedFunction
-	retained *evm.FunctionHandle
+	named    *evm.Callable
+	retained *evm.Callable
 }
 
-func (h *voidPackageHost) Nested(_ *evm.Call, f *evm.NamedFunctionOf[func(func())]) {}
+func (h *voidPackageHost) Nested(_ *evm.VM, f *evm.FunctionOf[func(func())]) {}
 
-func (h *voidPackageHost) Run(_ *evm.Call, f func())                         { f() }
-func (h *voidPackageHost) Named(_ *evm.Call, f *evm.NamedFunctionOf[func()]) { h.named = f }
-func (h *voidPackageHost) Retain(_ *evm.Call, f *evm.FunctionOf[func()])     { h.retained = f }
+func (h *voidPackageHost) Run(_ *evm.VM, f func())                     { f() }
+func (h *voidPackageHost) Named(_ *evm.VM, f *evm.FunctionOf[func()])  { h.named = f }
+func (h *voidPackageHost) Retain(_ *evm.VM, f *evm.FunctionOf[func()]) { h.retained = f }
 
 func TestVoidCallbacksAcrossPackages(t *testing.T) {
 	for _, reverse := range []bool{false, true} {
@@ -31,8 +32,8 @@ func TestVoidCallbacksAcrossPackages(t *testing.T) {
 			}
 			b, err := New("second", fstest.MapFS{"b.go": {Data: []byte(`package second
  import "github.com/andreyvit/evm"
- func Named(f *evm.NamedFunctionOf[func()]){}
- func Nested(f *evm.NamedFunctionOf[func(func())]){}
+ func Named(f *evm.FunctionOf[func()]){}
+ func Nested(f *evm.FunctionOf[func(func())]){}
  func Retain(f *evm.FunctionOf[func()]){}
  func Run(f func()){}
  `)}}, Options{Host: reflect.TypeFor[*voidPackageHost]()})
@@ -60,7 +61,7 @@ func TestVoidCallbacksAcrossPackages(t *testing.T) {
 				t.Fatal(err)
 			}
 			result := make([]values.Value, 1)
-			if err := evm.New(program).Run(context.Background(), "Run", nil, result); err != nil {
+			if err := evmtest.New(program).Run(context.Background(), "Run", nil, result); err != nil {
 				t.Fatal(err)
 			}
 			if result[0].AsInt() != 2 || hostB.named == nil || hostB.retained == nil {
@@ -71,7 +72,7 @@ func TestVoidCallbacksAcrossPackages(t *testing.T) {
 }
 
 func TestNestedVoidCallbackDeclaration(t *testing.T) {
-	s, err := New("nested", fstest.MapFS{"nested.go": {Data: []byte(`package nested;import "github.com/andreyvit/evm";func Nested(f *evm.NamedFunctionOf[func(func())]){}`)}}, Options{Host: reflect.TypeFor[*voidPackageHost]()})
+	s, err := New("nested", fstest.MapFS{"nested.go": {Data: []byte(`package nested;import "github.com/andreyvit/evm";func Nested(f *evm.FunctionOf[func(func())]){}`)}}, Options{Host: reflect.TypeFor[*voidPackageHost]()})
 	if err != nil {
 		t.Fatal(err)
 	}

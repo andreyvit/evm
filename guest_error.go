@@ -27,8 +27,8 @@ func (e guestError) call(fn Native) error { return e.host.scope.WithCall(fn) }
 
 func (e guestError) Error() string {
 	var result [1]values.Value
-	err := e.call(func(c *Call) error {
-		return c.RunInterfaceMethod(e.value, "Error", Signature{Results: []*values.Type{values.StringType}}, nil, result[:])
+	err := e.call(func(c *VM) error {
+		return runErrorMethod(c, e.value, "Error", Signature{Results: []*values.Type{values.StringType}}, result[:])
 	})
 	if err != nil {
 		panic(guestErrorPanic{err})
@@ -61,12 +61,15 @@ func (e guestError) Is(target error) bool {
 		return false
 	}
 	var out [1]values.Value
-	err := e.call(func(c *Call) error {
+	err := e.call(func(c *VM) error {
 		arg, err := c.ErrorValue(target)
 		if err != nil {
 			return err
 		}
-		return c.RunInterfaceMethod(e.value, "Is", signature, []values.Value{arg}, out[:])
+		slots := [2]values.Value{arg}
+		err = runErrorMethod(c, e.value, "Is", signature, slots[:])
+		out[0] = slots[1]
+		return err
 	})
 	if err != nil {
 		panic(guestErrorPanic{err})
@@ -76,9 +79,9 @@ func (e guestError) Is(target error) bool {
 
 func (e guestSingleError) Unwrap() error {
 	var result error
-	err := e.call(func(c *Call) error {
+	err := e.call(func(c *VM) error {
 		var out [1]values.Value
-		if err := c.RunInterfaceMethod(e.value, "Unwrap", Signature{Results: []*values.Type{values.ErrorType}}, nil, out[:]); err != nil {
+		if err := runErrorMethod(c, e.value, "Unwrap", Signature{Results: []*values.Type{values.ErrorType}}, out[:]); err != nil {
 			return err
 		}
 		var err error
@@ -92,9 +95,9 @@ func (e guestSingleError) Unwrap() error {
 }
 func (e guestMultiError) Unwrap() []error {
 	var result []error
-	err := e.call(func(c *Call) error {
+	err := e.call(func(c *VM) error {
 		var out [1]values.Value
-		if err := c.RunInterfaceMethod(e.value, "Unwrap", Signature{Results: []*values.Type{ErrorSliceType}}, nil, out[:]); err != nil {
+		if err := runErrorMethod(c, e.value, "Unwrap", Signature{Results: []*values.Type{ErrorSliceType}}, out[:]); err != nil {
 			return err
 		}
 		v := out[0]
@@ -122,7 +125,7 @@ type guestErrorPanic struct{ err error }
 func (p guestErrorPanic) Error() string { return p.err.Error() }
 func (p guestErrorPanic) Unwrap() error { return p.err }
 
-func (c *Call) nativeErrorArgument(value values.Value) (error, error) {
+func (c *VM) nativeErrorArgument(value values.Value) (error, error) {
 	x, err := c.NativeAny(value)
 	if err != nil {
 		return nil, err
@@ -136,8 +139,8 @@ func (c *Call) nativeErrorArgument(value values.Value) (error, error) {
 	return nil, fmt.Errorf("value does not implement error")
 }
 
-func (c *Call) guestErrorHost() (*guestErrorHost, error) {
-	vm := c.vm.rootVM()
+func (c *VM) guestErrorHost() (*guestErrorHost, error) {
+	vm := c
 	if vm.guestErrors == nil {
 		if err := c.ChargeAllocation(uint64(unsafe.Sizeof(guestErrorHost{}))); err != nil {
 			return nil, err
@@ -147,7 +150,7 @@ func (c *Call) guestErrorHost() (*guestErrorHost, error) {
 	return vm.guestErrors, nil
 }
 
-func (c *Call) adaptGuestError(value values.Value) (error, error) {
+func (c *VM) adaptGuestError(value values.Value) (error, error) {
 	host, err := c.guestErrorHost()
 	if err != nil {
 		return nil, err
@@ -180,6 +183,14 @@ func (p *Program) hasInterfaceMethod(value values.Value, name string, signature 
 
 // NativeError converts an error argument while preserving its identity.
 // The second result reports conversion failure, not the argument's value.
-func (c *Call) NativeError(value values.Value) (error, error) {
+func (c *VM) NativeError(value values.Value) (error, error) {
 	return c.nativeErrorArgument(value)
+}
+
+func runErrorMethod(vm *VM, receiver values.Value, name string, sig Signature, slots []values.Value) error {
+	fn, err := vm.LookupMethod(receiver, name, sig)
+	if err != nil {
+		return err
+	}
+	return vm.Run(fn, slots)
 }

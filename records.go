@@ -104,7 +104,7 @@ func ModelPackage(path string, schemas ...*kvo.Schema) (Package, error) {
 			r := NewRecordType(name, model, mutable)
 			r.SchemaView = true
 			pkg.Records = append(pkg.Records, r)
-			pkg.Methods = append(pkg.Methods, ExternalMethod{Name: "ToJSON", Receiver: r.Pointer, Signature: Signature{Results: []*values.Type{object.Type}}, Call: func(c *Call) error { return c.recordJSON(r) }})
+			pkg.Methods = append(pkg.Methods, ExternalMethod{Name: "ToJSON", Receiver: r.Pointer, Signature: Signature{Results: []*values.Type{object.Type}}, Call: func(c *VM) error { return c.recordJSON(r) }})
 		}
 	}
 	return pkg, nil
@@ -314,20 +314,20 @@ func (s *RecordScope) resultSlot(site recordSite, b *executionBudget) (values.Va
 
 // SetReadRecordResult returns one immutable KVO row from a host function.
 // The compiler owns the payload when it escapes its borrowing boundary.
-func (c *Call) SetReadRecordResult(model *kvo.Model, m row2.View) error {
+func (c *VM) SetReadRecordResult(model *kvo.Model, m row2.View) error {
 	return c.SetRecordResult(model, kvo.Encoded(m))
 }
-func (c *Call) SetRecordResult(model *kvo.Model, m kvo.Record) error {
+func (c *VM) SetRecordResult(model *kvo.Model, m kvo.Record) error {
 	_, err := c.recordResult(model, m, true)
 	return err
 }
 
 // RecordValue returns the immutable row cell without allocating a handle.
-func (c *Call) RecordValue(model *kvo.Model, m kvo.Record) (values.Value, error) {
+func (c *VM) RecordValue(model *kvo.Model, m kvo.Record) (values.Value, error) {
 	return c.recordResult(model, m, false)
 }
 
-func (c *Call) recordResult(model *kvo.Model, m kvo.Record, window bool) (values.Value, error) {
+func (c *VM) recordResult(model *kvo.Model, m kvo.Record, window bool) (values.Value, error) {
 	if m.NativeModel() != nil && m.NativeModel() != model {
 		return values.Value{}, fmt.Errorf("incorrect native record model")
 	}
@@ -336,18 +336,18 @@ func (c *Call) recordResult(model *kvo.Model, m kvo.Record, window bool) (values
 		v = m.WithModel(model).Value()
 	}
 	if window {
-		c.SetResult(0, v)
+		c.SetCallResult(0, v)
 	}
 	return v, nil
 }
 
 // SetEditRecordResult returns a mutable KVO row with the editor's native lifetime.
-func (c *Call) SetEditRecordResult(model *kvo.Model, e *kvo.Editor) error {
+func (c *VM) SetEditRecordResult(model *kvo.Model, e *kvo.Editor) error {
 	return c.SetBackedEditRecordResult(model, e, nil)
 }
 
 // SetBackedEditRecordResult keeps the native backing with the virtual row.
-func (c *Call) SetBackedEditRecordResult(model *kvo.Model, e *kvo.Editor, backing any) error {
+func (c *VM) SetBackedEditRecordResult(model *kvo.Model, e *kvo.Editor, backing any) error {
 	scope := c.budget.recordScope()
 	if e != nil {
 		n := recordHandleBytes
@@ -358,7 +358,7 @@ func (c *Call) SetBackedEditRecordResult(model *kvo.Model, e *kvo.Editor, backin
 			return err
 		}
 	}
-	c.SetResult(0, scope.editRecord(model, e, backing))
+	c.SetCallResult(0, scope.editRecord(model, e, backing))
 	return nil
 }
 
@@ -432,7 +432,7 @@ func (s *RecordScope) MutableRecord(v values.Value, model *kvo.Model) (*kvo.Edit
 }
 
 // MutableRecord resolves the native editor and backing without a session lookup.
-func (c *Call) MutableRecord(v values.Value, model *kvo.Model) (*kvo.Editor, any, error) {
+func (c *VM) MutableRecord(v values.Value, model *kvo.Model) (*kvo.Editor, any, error) {
 	r := mutableRecord(v)
 	if r == nil || r.model != model || r.state == nil || r.parent != nil {
 		return nil, nil, fmt.Errorf("expected a mutable root record")
@@ -667,7 +667,7 @@ func recordCell(v values.Value) values.Value {
 // The returned record retains its existing native representation and lifetime.
 // Both a nil row pointer and a zero row value have missing record contents.
 // Callers needing pointer identity must also inspect the original argument.
-func (c *Call) Record(v values.Value, model *kvo.Model) (kvo.Record, error) {
+func (c *VM) Record(v values.Value, model *kvo.Model) (kvo.Record, error) {
 	return readRecordCell(v, model)
 }
 

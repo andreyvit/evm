@@ -5,6 +5,7 @@ import (
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmbind"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 	"reflect"
 	"testing"
@@ -33,7 +34,7 @@ func TestDiscoverNativeGraph(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if b.Name != "Grace" || b.hidden != 7 {
@@ -97,7 +98,7 @@ func TestDiscoverDynamicRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if out[0].R != 1 || b.Name != "Grace" {
@@ -151,7 +152,7 @@ func Run(extra *app.DiscoveredBar) string {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(program).Run(context.Background(), "Run", []values.Value{arg}, out[:]); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", []values.Value{arg}, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if got := out[0].AsString(); got != "Store!" {

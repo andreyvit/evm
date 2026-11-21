@@ -10,6 +10,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -29,7 +30,7 @@ func TestPackedSlices(t *testing.T) {
  func Limit(n int)int{a:=make([]int,n);return a[0]}
  func Empty(n int)bool{a:=make([]*node,n);return a[n:]!=nil}
  `
-	pkg := evm.Package{Path: "h", Functions: []evm.ExternalFunction{{Name: "GC", Call: func(*evm.Call) error { runtime.GC(); return nil }}}}
+	pkg := evm.Package{Path: "h", Functions: []evm.ExternalFunction{{Name: "GC", Call: func(*evm.VM) error { runtime.GC(); return nil }}}}
 	for _, raw := range []bool{false, true} {
 		m, err := (evmcompiler.Options{NoOptimization: raw}).Compile("packed.go", src, pkg)
 		if err != nil {
@@ -46,7 +47,7 @@ func TestPackedSlices(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		vm := evm.New(p)
+		vm := evmtest.New(p)
 		var out [1]values.Value
 		for _, c := range []struct {
 			name    string
@@ -66,13 +67,13 @@ func TestPackedSlices(t *testing.T) {
 		if err := vm.Run(context.Background(), "Address", []values.Value{values.Int(2)}, out[:]); err != nil || (*values.Value)(out[0].P).R != 19 {
 			t.Fatalf("escaped address %v %v", out, err)
 		}
-		vm = evm.New(p)
+		vm = evmtest.New(p)
 		vm.Limits.AllocationBytes = 1024
 		err = vm.Run(context.Background(), "Limit", []values.Value{values.Int(100)}, out[:])
 		if raw && !errors.Is(err, evm.ErrAllocation) || !raw && err != nil {
 			t.Fatalf("raw=%v budget: %v", raw, err)
 		}
-		if err := evm.New(p).Run(context.Background(), "Limit", []values.Value{values.Int(0)}, out[:]); !errors.Is(err, evm.ErrBounds) {
+		if err := evmtest.New(p).Run(context.Background(), "Limit", []values.Value{values.Int(0)}, out[:]); !errors.Is(err, evm.ErrBounds) {
 			t.Fatalf("bounds: %v", err)
 		}
 	}

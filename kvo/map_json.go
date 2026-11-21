@@ -11,7 +11,7 @@ import (
 // entry. Scalar/record maps have allocation-free access; dynamic object trees
 // allocate when materialized as any. Nil is a present JSON null, not deletion.
 func NewJSONMapProp[K comparable](schema *Schema, code uint64, name string, keyType AnyType, key values.Codec[K]) *MapPropRef[K, any] {
-	c := newMapCodec(MapOf(keyType, TJSON), key, values.Codec[any]{Type: reflect.TypeFor[any](), Decode: func(v values.Value) any { var out any; DecodeJSON(v, &out); return out }, Encode: JSONValue})
+	c := newMapCodec(MapOf(keyType, TJSON), key, values.Codec[any]{Type: reflect.TypeFor[any](), Unpack: func(v values.Value) any { var out any; DecodeJSON(v, &out); return out }, Pack: JSONValue})
 	c.messagePack = func(_ *nativePlan, v msgpack.View) any {
 		var out any
 		if !v.Nil() {

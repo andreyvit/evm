@@ -8,6 +8,7 @@ import (
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmbind"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -61,7 +62,7 @@ func (c Counts) Add(key string) { c[key]++ }
 			continue
 		}
 		var out [1]values.Value
-		if err := evm.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
+		if err := evmtest.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
 			t.Errorf("%s: %v", name, err)
 			continue
 		}

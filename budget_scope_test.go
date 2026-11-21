@@ -9,6 +9,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -32,7 +33,7 @@ func TestWallAndSectionBudgets(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var stack []*evm.BudgetScope
 			p := evm.Package{Path: "host", Functions: []evm.ExternalFunction{
-				{Name: "Open", Call: func(c *evm.Call) error {
+				{Name: "Open", Call: func(c *evm.VM) error {
 					n := tc.inner
 					if len(stack) > 0 {
 						n = 1 << 40
@@ -40,13 +41,13 @@ func TestWallAndSectionBudgets(t *testing.T) {
 					stack = append(stack, c.NarrowBudget(n, tc.section))
 					return nil
 				}},
-				{Name: "End", Call: func(c *evm.Call) error {
+				{Name: "End", Call: func(c *evm.VM) error {
 					k := len(stack) - 1
 					s := stack[k]
 					stack = stack[:k]
 					return s.End(c)
 				}},
-				{Name: "Wait", Call: func(c *evm.Call) error {
+				{Name: "Wait", Call: func(c *evm.VM) error {
 					if tc.wait {
 						time.Sleep(25 * time.Millisecond)
 					}
@@ -66,7 +67,7 @@ func TestWallAndSectionBudgets(t *testing.T) {
 				t.Fatal(err)
 			}
 			out := []values.Value{values.Int(-1)}
-			err = evm.New(prog).RunWithBudget(context.Background(), "Main", nil, out, evm.Budget{Steps: tc.outer, Duration: tc.whole})
+			err = evmtest.New(prog).RunWithBudget(context.Background(), "Main", nil, out, evm.Budget{Steps: tc.outer, Duration: tc.whole})
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("got %v, want %v", err, tc.want)
 			}
@@ -92,14 +93,14 @@ func TestAdjustableBudgets(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var scope *evm.BudgetScope
 			p := evm.Package{Path: "host", Functions: []evm.ExternalFunction{
-				{Name: "Open", Call: func(c *evm.Call) error {
+				{Name: "Open", Call: func(c *evm.VM) error {
 					scope = c.NarrowCPUBudget(10*time.Millisecond, 50*time.Millisecond)
 					return nil
 				}},
-				{Name: "End", Call: func(c *evm.Call) error { return scope.End(c) }},
-				{Name: "Wait", Call: func(c *evm.Call) error { time.Sleep(25 * time.Millisecond); return nil }},
-				{Name: "WaitLong", Call: func(c *evm.Call) error { time.Sleep(70 * time.Millisecond); return nil }},
-				{Name: "Size", Signature: evm.Signature{Params: []*values.Type{values.IntType}}, Call: func(c *evm.Call) error { return nil }},
+				{Name: "End", Call: func(c *evm.VM) error { return scope.End(c) }},
+				{Name: "Wait", Call: func(c *evm.VM) error { time.Sleep(25 * time.Millisecond); return nil }},
+				{Name: "WaitLong", Call: func(c *evm.VM) error { time.Sleep(70 * time.Millisecond); return nil }},
+				{Name: "Size", Signature: evm.Signature{Params: []*values.Type{values.IntType}}, Call: func(c *evm.VM) error { return nil }},
 			}}
 			imports := `import "host";`
 			if strings.Contains(tc.body, "evmruntime.") {
@@ -113,7 +114,7 @@ func TestAdjustableBudgets(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			vm := evm.New(program)
+			vm := evmtest.New(program)
 			err = vm.RunWithBudget(context.Background(), "Main", nil, nil, evm.Budget{UnlimitedSteps: true, Duration: time.Second, AllocationBytes: 1024, HardAllocationBytes: 4096})
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("got %v, want %v", err, tc.want)

@@ -6,6 +6,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -20,7 +21,7 @@ func BenchmarkUnaryBinding(b *testing.B) {
 			if specialized {
 				fn.Direct = evm.DirectUnary(func(n uint64) uint64 { return n + 1 })
 			} else {
-				fn.Direct = evm.DirectBinding{Op: evm.OpCallHostUU, Call: func(_ *evm.Call, n, _ values.Value) (values.Value, error) {
+				fn.Direct = evm.DirectBinding{Op: evm.OpCallHostUU, Call: func(_ *evm.VM, n, _ values.Value) (values.Value, error) {
 					return values.Uint(n.R + 1), nil
 				}}
 			}
@@ -37,7 +38,7 @@ func Run(n uint64) uint64 {
 			if err != nil {
 				b.Fatal(err)
 			}
-			vm := evm.New(p)
+			vm := evmtest.New(p)
 			in, out := []values.Value{values.Uint(7)}, make([]values.Value, 1)
 			if err := vm.Run(context.Background(), "Run", in, out); err != nil || out[0].R != 263 {
 				b.Fatal(out, err)

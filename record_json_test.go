@@ -11,6 +11,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/kvo/codec/msgpack"
 	"github.com/andreyvit/evm/kvo/codec/row2"
@@ -108,7 +109,7 @@ func Kinds(r *m.Row) bool { v := r.ToJSON(); return v["small"].(int64)==7 && v["
 			if err := d.Decode(&want); err != nil {
 				t.Fatal(err)
 			}
-			vm := evm.New(p)
+			vm := evmtest.New(p)
 			args := []values.Value{r.Value()}
 			var result [1]values.Value
 			if err := vm.Run(context.Background(), "Kinds", args, result[:]); err != nil || result[0].R != 1 {
@@ -124,7 +125,7 @@ func Kinds(r *m.Row) bool { v := r.ToJSON(); return v["small"].(int64)==7 && v["
 			}
 		})
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	args := []values.Value{bind.Record(reflect.ValueOf(&row)).Value()}
 	var out [1]values.Value
 	if err := vm.Run(context.Background(), "Export", args, out[:]); err != nil {
@@ -134,11 +135,11 @@ func Kinds(r *m.Row) bool { v := r.ToJSON(); return v["small"].(int64)==7 && v["
 		t.Fatal("budget", err)
 	}
 	row.Code = 0
-	if err := evm.New(p).Run(context.Background(), "Export", args, out[:]); err == nil {
+	if err := evmtest.New(p).Run(context.Background(), "Export", args, out[:]); err == nil {
 		t.Fatal("ignored custom marshaler error")
 	}
 	row.Code, row.Float = 9, math.NaN()
-	if err := evm.New(p).Run(context.Background(), "Export", args, out[:]); err == nil {
+	if err := evmtest.New(p).Run(context.Background(), "Export", args, out[:]); err == nil {
 		t.Fatal("accepted NaN")
 	}
 }
@@ -183,7 +184,7 @@ func Export(r *m.Row) any { return r.ToJSON() }`, pkg)
 		t.Fatal(err)
 	}
 	for _, r := range []kvo.Record{bind.Record(reflect.ValueOf(src)), bind.MessagePack(msgpack.Encode(nil, reflect.ValueOf(src)))} {
-		vm := evm.New(p)
+		vm := evmtest.New(p)
 		var out [1]values.Value
 		if err := vm.Run(context.Background(), "Export", []values.Value{r.Value()}, out[:]); err != nil {
 			t.Fatal(err)

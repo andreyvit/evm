@@ -38,7 +38,7 @@ type Static struct {
 }
 
 // MutableSlots selects zero-based explicit parameters and results, excluding
-// method receivers and the host-only *evm.Call argument. Only direct pointers
+// method receivers and the host-only *evm.VM argument. Only direct pointers
 // to modeled native structs are supported.
 type MutableSlots struct{ Params, Results []int }
 
@@ -111,7 +111,7 @@ type Options struct {
 	Mode    Mode
 	Static  *Static
 	// Host is the concrete receiver of package functions. Its methods take a
-	// leading *evm.Call for access to the session and source position.
+	// leading *evm.VM for access to the session and source position.
 	Host reflect.Type
 	// Types associate guest names with native Go declarations.
 	Types []reflect.Type
@@ -125,7 +125,7 @@ type Implementation struct {
 	typ      reflect.Type
 	load     func(unsafe.Pointer) any
 	pointer  func(any) unsafe.Pointer
-	receiver func(unsafe.Pointer, *evm.Call) any
+	receiver func(unsafe.Pointer, *evm.VM) any
 }
 
 func Pointer[T any]() Implementation {
@@ -135,9 +135,9 @@ func Pointer[T any]() Implementation {
 // PointerForCall lets a native receiver use the current external call (for
 // example to narrow a budget). The interface value still carries the original
 // pointer. The receiver returned by bind is used only for this method call.
-func PointerForCall[T any](bind func(*T, *evm.Call) *T) Implementation {
+func PointerForCall[T any](bind func(*T, *evm.VM) *T) Implementation {
 	impl := Pointer[T]()
-	impl.receiver = func(p unsafe.Pointer, c *evm.Call) any { return bind((*T)(p), c) }
+	impl.receiver = func(p unsafe.Pointer, c *evm.VM) any { return bind((*T)(p), c) }
 	return impl
 }
 
@@ -154,6 +154,7 @@ type entry struct {
 	pointer  *nativePointer
 }
 type Schema struct {
+	nodesByNative   map[*node]reflect.Type
 	values          []entry // bound package variables, parallel to pkg.Values
 	src             *source
 	pkg             evm.Package
@@ -301,6 +302,7 @@ func newSchema(src *source, opt Options) (schema *Schema, err error) {
 		}
 	}
 	s.static = opt.Mode.Select(path, src.fingerprint, fingerprint, compatible)
+	s.nodesByNative = native
 	s.fields = make(map[reflect.Type]*nativebind.Struct)
 	s.nativeTypes = make(map[reflect.Type]*values.Type)
 	s.nativeModels = make(map[reflect.Type]*node)
@@ -335,24 +337,24 @@ func newSchema(src *source, opt Options) (schema *Schema, err error) {
 			}
 			n.shape.Native = nativebind.Layout(t, nil, s.static)
 			codec := &evm.NativeValueCodec{
-				Decode: func(c *evm.Call, v values.Value) (values.Value, error) {
-					return (*evm.FunctionHandle)(v.P).Value(c.Program(), n.functionSignature)
+				Decode: func(c *evm.VM, v values.Value) (values.Value, error) {
+					return (*evm.Callable)(v.P).Value(c.Program(), n.functionSignature)
 				},
-				Encode: func(c *evm.Call, v values.Value) (values.Value, error) {
+				Encode: func(c *evm.VM, v values.Value) (values.Value, error) {
 					if v.R == 0 {
 						return values.Value{}, nil
 					}
-					if err := c.ChargeAllocation(uint64(unsafe.Sizeof(evm.FunctionHandle{}))); err != nil {
+					if err := c.ChargeAllocation(uint64(unsafe.Sizeof(evm.Callable{}))); err != nil {
 						return values.Value{}, err
 					}
-					fn, err := c.Program().FunctionValue(v)
+					fn, err := c.Program().Callable(v)
 					if err != nil {
 						return values.Value{}, err
 					}
-					if _, err = fn.Value(c.Program(), n.functionSignature); err != nil {
+					if err = fn.CheckSignature(n.functionSignature); err != nil {
 						return values.Value{}, err
 					}
-					return values.Value{P: unsafe.Pointer(fn)}, nil
+					return values.Value{P: unsafe.Pointer(&fn)}, nil
 				},
 			}
 			for i := range src.pkg.Types {
@@ -375,7 +377,7 @@ func newSchema(src *source, opt Options) (schema *Schema, err error) {
 			}
 			continue
 		}
-		if n.kind == nodeFunctionHandle || n.kind == nodeCallback {
+		if n.kind == nodeCallback {
 			continue
 		}
 		s.nativeTypes[t] = n.shape.Type
@@ -712,11 +714,11 @@ func (s *Schema) Bind(host any) evm.Package {
 	return pkg
 }
 func (s *Schema) bind(e entry, host any) evm.Native {
-	return func(c *evm.Call) (err error) {
+	return func(c *evm.VM) (err error) {
 		defer Catch(e.op.key, &err)
-		f := Frame{Call: c, Host: host, s: s}
+		f := Frame{VM: c, Host: host, s: s}
 		if e.pointer != nil {
-			p := c.Argument(0).P
+			p := c.CallArgument(0).P
 			if e.pointer.receiver != nil {
 				f.Receiver = e.pointer.receiver(p, c)
 			} else {
@@ -747,9 +749,9 @@ func restore(t *nativePointer, p unsafe.Pointer) any {
 	return t.load(p)
 }
 
-// Interface creates a program-local R+P argument. P is the original Go pointer,
+// PackInterface creates a program-local R+P argument. P is the original Go pointer,
 // including a nil pointer in a non-nil interface.
-func (s *Schema) Interface(p *evm.Program, x any) (values.Value, error) {
+func (s *Schema) PackInterface(p *evm.Program, x any) (values.Value, error) {
 	if x == nil {
 		return values.Value{}, nil
 	}
@@ -764,8 +766,8 @@ func (s *Schema) Interface(p *evm.Program, x any) (values.Value, error) {
 	return values.Value{}, fmt.Errorf("unregistered host pointer %T", x)
 }
 
-// NativeInterface recovers a native pointer without a running call.
-func (s *Schema) NativeInterface(p *evm.Program, v values.Value) (any, error) {
+// UnpackInterface recovers a native pointer without a running call.
+func (s *Schema) UnpackInterface(p *evm.Program, v values.Value) (any, error) {
 	if v == (values.Value{}) {
 		return nil, nil
 	}
@@ -785,7 +787,7 @@ func (s *Schema) NativeInterface(p *evm.Program, v values.Value) (any, error) {
 }
 
 // nativeInterface also supports native values, charging their copies to the call.
-func (s *Schema) nativeInterface(c *evm.Call, v values.Value) (any, error) {
+func (s *Schema) nativeInterface(c *evm.VM, v values.Value) (any, error) {
 	if v == (values.Value{}) {
 		return nil, nil
 	}

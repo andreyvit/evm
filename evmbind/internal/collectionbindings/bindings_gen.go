@@ -238,13 +238,13 @@ var Bindings = evmbind.Static{Fingerprint: "559c48d46efdebe5b24f7b978202220bfa73
 	},
 	Calls: map[string]evmbind.Wrapper{
 		"GetAny": func(f *evmbind.Frame) {
-			r0 := f.Host.(interface{ GetAny(*evm.Call) any }).GetAny(f.Call)
-			f.SetResult(0, writeScalarAny(f, r0))
+			r0 := f.Host.(interface{ GetAny(*evm.VM) any }).GetAny(f.VM)
+			f.SetCallResult(0, writeScalarAny(f, r0))
 		},
 		"Roundtrip": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				Roundtrip(*evm.Call, api.Panel) api.Panel
-			}).Roundtrip(f.Call, readTypePanel(f, f.Argument(0)))
-			f.SetResult(0, writeTypePanel(f, r0))
+				Roundtrip(*evm.VM, api.Panel) api.Panel
+			}).Roundtrip(f.VM, readTypePanel(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeTypePanel(f, r0))
 		},
 	}}

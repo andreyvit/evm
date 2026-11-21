@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/nativebind"
 
 	"github.com/andreyvit/evm"
@@ -30,15 +31,15 @@ type mutableHost struct {
 	sink  *mutablehost.SliceSink
 }
 
-func (h *mutableHost) Get(*evm.Call) *modeldata.BoundModel                               { return h.row }
-func (h *mutableHost) Ordinary(*evm.Call) *modeldata.BoundModel                          { return h.row }
-func (h *mutableHost) Other(*evm.Call) *modeldata.Alternate                              { return h.other }
-func (h *mutableHost) Echo(_ *evm.Call, row *modeldata.BoundModel) *modeldata.BoundModel { return row }
-func (h *mutableHost) EchoAny(_ *evm.Call, v any) any                                    { return v }
+func (h *mutableHost) Get(*evm.VM) *modeldata.BoundModel                               { return h.row }
+func (h *mutableHost) Ordinary(*evm.VM) *modeldata.BoundModel                          { return h.row }
+func (h *mutableHost) Other(*evm.VM) *modeldata.Alternate                              { return h.other }
+func (h *mutableHost) Echo(_ *evm.VM, row *modeldata.BoundModel) *modeldata.BoundModel { return row }
+func (h *mutableHost) EchoAny(_ *evm.VM, v any) any                                    { return v }
 
-func (*mutableHost) ServiceInstance(*evm.Call) *mutablehost.Service { return &mutablehost.Service{} }
+func (*mutableHost) ServiceInstance(*evm.VM) *mutablehost.Service { return &mutablehost.Service{} }
 
-func (*mutableHost) CheckSlices(_ *evm.Call, tags []string, data []byte, numbers []int64) bool {
+func (*mutableHost) CheckSlices(_ *evm.VM, tags []string, data []byte, numbers []int64) bool {
 	if len(tags) != 2 || tags[1] != "b" || data[1] != 2 || numbers[1] != 4 {
 		return false
 	}
@@ -48,9 +49,9 @@ func (*mutableHost) CheckSlices(_ *evm.Call, tags []string, data []byte, numbers
 	return true
 }
 
-func (*mutableHost) InterfaceService(*evm.Call) mutablehost.RowService { return &mutablehost.Service{} }
+func (*mutableHost) InterfaceService(*evm.VM) mutablehost.RowService { return &mutablehost.Service{} }
 
-func (h *mutableHost) Sink(*evm.Call) *mutablehost.SliceSink { return h.sink }
+func (h *mutableHost) Sink(*evm.VM) *mutablehost.SliceSink { return h.sink }
 
 func TestMutableModelAnnotations(t *testing.T) {
 	models, dep, err := modeldata.Declarations()
@@ -82,7 +83,7 @@ func TestMutableModelAnnotations(t *testing.T) {
 		h := &mutableHost{row: &modeldata.BoundModel{Name: "original", Hidden: 42}, other: &modeldata.Alternate{Label: "other"}}
 		model := models.Records[0].Model
 		edit := kvo.EditEncoded(row2.Edit(row2.Empty(row2.Compact2))).WithModel(model)
-		dbx := evm.Package{Path: "dbx", Functions: []evm.ExternalFunction{{Name: "Edit", Signature: evm.Signature{Results: []*values.Type{models.Record(model, true).Pointer}}, Call: func(c *evm.Call) error { return c.SetEditRecordResult(model, edit) }}}}
+		dbx := evm.Package{Path: "dbx", Functions: []evm.ExternalFunction{{Name: "Edit", Signature: evm.Signature{Results: []*values.Type{models.Record(model, true).Pointer}}, Call: func(c *evm.VM) error { return c.SetEditRecordResult(model, edit) }}}}
 		pkgs := []evm.Package{models, dep.Package(), host.Bind(h), dbx}
 		mod, err := evmcompiler.Compile("mutable.go", `import("db";"host";"dbx")
 func Run()bool{
@@ -112,7 +113,7 @@ func Slices(tags []string,data []byte,numbers []int64)bool{
 		if err != nil {
 			t.Fatal(err)
 		}
-		vm := evm.New(p)
+		vm := evmtest.New(p)
 		var out [1]values.Value
 		if err := vm.Run(context.Background(), "Run", nil, out[:]); err != nil || out[0].R != 1 {
 			t.Fatal(out, err)

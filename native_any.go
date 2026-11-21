@@ -73,7 +73,7 @@ func nativeAnyLayout(s *values.Shape) bool {
 // keep their Go types and backing storage. Model row pointers return their live
 // native pointer, or a kvo.Record for encoded data; native-backed row values
 // return Go value copies. Guest-only types retain a handle.
-func (c *Call) NativeAny(v values.Value) (any, error) {
+func (c *VM) NativeAny(v values.Value) (any, error) {
 	s, x, err := c.program.UnpackInterface(v)
 	if err != nil || s == nil {
 		return nil, err
@@ -144,7 +144,7 @@ func (c *Call) NativeAny(v values.Value) (any, error) {
 
 // AnyValue converts native Go data into a guest interface. Native reference
 // values retain their backing storage; guest handles must belong to this program.
-func (c *Call) AnyValue(x any) (values.Value, error) {
+func (c *VM) AnyValue(x any) (values.Value, error) {
 	if err, ok := x.(error); ok {
 		return c.ErrorValue(err)
 	}
@@ -153,14 +153,14 @@ func (c *Call) AnyValue(x any) (values.Value, error) {
 
 // TypedInterfaceValue preserves the concrete identity promised by a typed
 // native interface. AnyValue separately preserves native error adaptation.
-func (c *Call) TypedInterfaceValue(x any) (values.Value, error) {
+func (c *VM) TypedInterfaceValue(x any) (values.Value, error) {
 	if c.program.nativeGoShapes[reflect.TypeOf(x)] != nil {
 		return c.anyValue(x)
 	}
 	return c.AnyValue(x)
 }
 
-func (c *Call) anyValue(x any) (values.Value, error) {
+func (c *VM) anyValue(x any) (values.Value, error) {
 	if x == nil {
 		return values.Value{}, nil
 	}
@@ -222,8 +222,8 @@ func (c *Call) anyValue(x any) (values.Value, error) {
 // NativeAnyCodec is shared by all host packages exposing ordinary any fields.
 // NativeLayout supplies the address of a Go interface, not its ABI words.
 var NativeAnyCodec = &NativeValueCodec{
-	Decode: func(c *Call, v values.Value) (values.Value, error) { return c.AnyValue(*(*any)(v.P)) },
-	Encode: func(c *Call, v values.Value) (values.Value, error) {
+	Decode: func(c *VM, v values.Value) (values.Value, error) { return c.AnyValue(*(*any)(v.P)) },
+	Encode: func(c *VM, v values.Value) (values.Value, error) {
 		x, err := c.NativeAny(v)
 		if err != nil {
 			return values.Value{}, err
@@ -243,10 +243,10 @@ func NativeInterfaceCodec(t reflect.Type) *NativeValueCodec {
 		panic("native interface codec requires an interface type")
 	}
 	return &NativeValueCodec{
-		Decode: func(c *Call, v values.Value) (values.Value, error) {
+		Decode: func(c *VM, v values.Value) (values.Value, error) {
 			return c.anyValue(reflect.NewAt(t, v.P).Elem().Interface())
 		},
-		Encode: func(c *Call, v values.Value) (values.Value, error) {
+		Encode: func(c *VM, v values.Value) (values.Value, error) {
 			shape, _, err := c.program.UnpackInterface(v)
 			if err != nil {
 				return values.Value{}, err
@@ -276,7 +276,7 @@ func NativeInterfaceCodec(t reflect.Type) *NativeValueCodec {
 }
 
 // nativeScalar converts a Go value whose type is in nativeScalarVMTypes.
-func (c *Call) nativeScalar(rv reflect.Value) (values.Value, error) {
+func (c *VM) nativeScalar(rv reflect.Value) (values.Value, error) {
 	switch rv.Kind() {
 	case reflect.Struct:
 		t := rv.Interface().(time.Time)
@@ -302,7 +302,7 @@ func (c *Call) nativeScalar(rv reflect.Value) (values.Value, error) {
 
 // nativeScalarAny converts a VM value of a scalar or time type to the Go
 // value of the matching Go type. It needs no linked interface type.
-func (c *Call) nativeScalarAny(t *values.Type, x values.Value) (any, bool, error) {
+func (c *VM) nativeScalarAny(t *values.Type, x values.Value) (any, bool, error) {
 	typ := nativeScalarTypes[t]
 	if typ == nil {
 		return nil, false, nil

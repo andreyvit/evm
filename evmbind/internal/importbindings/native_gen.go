@@ -142,20 +142,20 @@ var Bindings = evmbind.Static{Fingerprint: "e231eb707fcf3c2e811bb3d4eacf92deebfc
 	Calls: map[string]evmbind.Wrapper{
 		"Echo": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				Echo(*evm.Call, *api.Options) dep0.Permission
-			}).Echo(f.Call, readPtrOptions(f, f.Argument(0)))
-			f.SetResult(0, writeImported5(f, r0))
+				Echo(*evm.VM, *api.Options) dep0.Permission
+			}).Echo(f.VM, readPtrOptions(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeImported5(f, r0))
 		},
 	},
 	Direct: map[string]evmbind.DirectFactory{
 		"Echo": func(host any) evm.DirectFunc {
 			h := host.(interface {
-				Echo(*evm.Call, *api.Options) dep0.Permission
+				Echo(*evm.VM, *api.Options) dep0.Permission
 			})
-			return func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+			return func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 				defer evmbind.Catch("Echo", &err)
 				if x.P != nil && x.R != values.NativeAddress {
-					f := evmbind.Frame{Call: c}
+					f := evmbind.Frame{VM: c}
 					argx := readPtrOptions(&f, x)
 					out := h.Echo(c, argx)
 					v = writeImported5(nil, out)

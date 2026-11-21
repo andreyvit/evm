@@ -38,8 +38,8 @@ type ExternalConstant struct {
 // Conversions may inspect the current program and charge allocations. They
 // must not retain Call or change its argument/result window.
 type NativeValueCodec struct {
-	Decode func(*Call, values.Value) (values.Value, error)
-	Encode func(*Call, values.Value) (values.Value, error)
+	Decode func(*VM, values.Value) (values.Value, error)
+	Encode func(*VM, values.Value) (values.Value, error)
 }
 
 type NativeSliceDecl struct {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -20,7 +21,7 @@ func TestDirectVoidCalls(t *testing.T) {
 				defer cancel()
 				var calls int
 				failure := errors.New("host failure")
-				pkg := evm.Package{Path: "h", Functions: []evm.ExternalFunction{{Name: "Write", Signature: evm.Signature{Params: []*values.Type{values.StringType, values.IntType}}, Direct: evm.DirectBinding{Op: evm.OpCallHostSUV, Window: window, Call: func(c *evm.Call, x, y values.Value) (values.Value, error) {
+				pkg := evm.Package{Path: "h", Functions: []evm.ExternalFunction{{Name: "Write", Signature: evm.Signature{Params: []*values.Type{values.StringType, values.IntType}}, Direct: evm.DirectBinding{Op: evm.OpCallHostSUV, Window: window, Call: func(c *evm.VM, x, y values.Value) (values.Value, error) {
 					calls++
 					if c.Context != ctx || c.Position.File != "void.go" || c.Position.Line == 0 {
 						t.Fatal("missing call metadata")
@@ -28,7 +29,7 @@ func TestDirectVoidCalls(t *testing.T) {
 					if x.AsString() != "kept alive" {
 						t.Fatal("corrupt string argument")
 					}
-					if window && (c.Argument(0) != x || c.Argument(1) != y) {
+					if window && (c.CallArgument(0) != x || c.CallArgument(1) != y) {
 						t.Fatal("corrupt argument window")
 					}
 					switch y.R {
@@ -72,7 +73,7 @@ func Run(s string,n int)(string,int) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				vm := evm.New(p)
+				vm := evmtest.New(p)
 				in := []values.Value{values.String(strings.Join([]string{"kept", "alive"}, " ")), values.Int(0)}
 				var out [2]values.Value
 				if err := vm.Run(ctx, "Run", in, out[:]); err != nil || out[0] != in[0] || out[1] != in[1] || calls != 5 {

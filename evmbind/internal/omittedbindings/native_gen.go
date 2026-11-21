@@ -84,29 +84,25 @@ var Bindings = evmbind.Static{Fingerprint: "40bae84c401638081454f42cc20359bf23a8
 	},
 	Calls: map[string]evmbind.Wrapper{
 		"Check": func(f *evmbind.Frame) {
-			r0 := f.Host.(interface {
-				Check(*evm.Call, *api.Page) bool
-			}).Check(f.Call, readPtrPage(f, f.Argument(0)))
-			f.SetResult(0, writeScalarBool(f, r0))
+			r0 := f.Host.(interface{ Check(*evm.VM, *api.Page) bool }).Check(f.VM, readPtrPage(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeScalarBool(f, r0))
 		},
 		"Get": func(f *evmbind.Frame) {
-			r0 := f.Host.(interface{ Get(*evm.Call) api.Page }).Get(f.Call)
-			f.SetResult(0, writeTypePage(f, r0))
+			r0 := f.Host.(interface{ Get(*evm.VM) api.Page }).Get(f.VM)
+			f.SetCallResult(0, writeTypePage(f, r0))
 		},
 		"Pointer": func(f *evmbind.Frame) {
-			r0 := f.Host.(interface{ Pointer(*evm.Call) *api.Page }).Pointer(f.Call)
-			f.SetResult(0, writePtrPage(f, r0))
+			r0 := f.Host.(interface{ Pointer(*evm.VM) *api.Page }).Pointer(f.VM)
+			f.SetCallResult(0, writePtrPage(f, r0))
 		},
 	},
 	Direct: map[string]evmbind.DirectFactory{
 		"Check": func(host any) evm.DirectFunc {
-			h := host.(interface {
-				Check(*evm.Call, *api.Page) bool
-			})
-			return func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+			h := host.(interface{ Check(*evm.VM, *api.Page) bool })
+			return func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 				defer evmbind.Catch("Check", &err)
 				if x.P != nil && x.R != values.NativeAddress {
-					f := evmbind.Frame{Call: c}
+					f := evmbind.Frame{VM: c}
 					argx := readPtrPage(&f, x)
 					out := h.Check(c, argx)
 					v = writeScalarBool(nil, out)
@@ -119,8 +115,8 @@ var Bindings = evmbind.Static{Fingerprint: "40bae84c401638081454f42cc20359bf23a8
 			}
 		},
 		"Pointer": func(host any) evm.DirectFunc {
-			h := host.(interface{ Pointer(*evm.Call) *api.Page })
-			return func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+			h := host.(interface{ Pointer(*evm.VM) *api.Page })
+			return func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 				defer evmbind.Catch("Pointer", &err)
 				out := h.Pointer(c)
 				v = writePtrPage(nil, out)

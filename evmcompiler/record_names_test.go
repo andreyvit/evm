@@ -8,6 +8,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/kvo/codec/row2"
 	"github.com/andreyvit/evm/values"
@@ -29,7 +30,7 @@ func TestNamespacedRecordSelectors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	ctx, scope := evm.WithRecords(context.Background())
 	defer scope.Close()
 	edit := row2.Edit(row2.Empty(row2.Fast2))
@@ -66,7 +67,7 @@ func Edit(r *m.CustomerEdit) { r.balance = 10; r.points += 3 }
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	ctx, scope := evm.WithRecords(context.Background())
 	defer scope.Close()
 	edit := row2.Edit(row2.Empty(row2.Fast2))
@@ -89,7 +90,7 @@ func TestRecordMethodSelectorCollisions(t *testing.T) {
 				r := evm.NewRecordType("Customer", m, mutable)
 				pkg := evm.Package{Path: "m", Records: []*evm.RecordType{r}, Methods: []evm.ExternalMethod{{
 					Name: name, Receiver: r.Pointer, Signature: evm.Signature{Results: []*values.Type{values.Int64}},
-					Call: func(c *evm.Call) error { c.SetResult(0, values.Int(42)); return nil },
+					Call: func(c *evm.VM) error { c.SetCallResult(0, values.Int(42)); return nil },
 				}}}
 				// Direct package declarations must enforce the same rules as evmbind.
 				_, err := evmcompiler.Compile("collision.go", `import "m"; func Read(r *m.Customer) int64 { return r.balance }`, pkg)

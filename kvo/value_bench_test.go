@@ -7,6 +7,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/internal/valuebench"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/kvo/codec/msgpack"
@@ -99,7 +100,7 @@ func BenchmarkSharedValue(b *testing.B) {
 			b.Run("EVMString", func(b *testing.B) {
 				ctx, scope := evm.WithRecords(context.Background())
 				defer scope.Close()
-				vm := evm.New(program)
+				vm := evmtest.New(program)
 				vm.Limits = evm.Limits{Allocations: ^uint64(0), AllocationBytes: ^uint64(0)}
 				args := []values.Value{scope.ReadRecord(model, c.r)}
 				out := make([]values.Value, 1)

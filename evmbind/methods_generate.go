@@ -101,10 +101,10 @@ func GenerateMethods(outputPackage string, methods []Method) ([]byte, error) {
 		target := targets[name]
 		callName := imports[target[0]] + "." + target[1]
 		line("%q: {Signature:%q,", name, f.signature)
-		line("Call:func(c *evm.Call)(err error){defer evmbind.Catch(%q,&err)", name)
-		args := []string{"kvo.FromValue(c.Argument(0))"}
+		line("Call:func(c *evm.VM)(err error){defer evmbind.Catch(%q,&err)", name)
+		args := []string{"kvo.FromValue(c.CallArgument(0))"}
 		for i := 1; i < f.typ.NumIn(); i++ {
-			args = append(args, decode(f.typ.In(i), fmt.Sprintf("c.Argument(%d)", i)))
+			args = append(args, decode(f.typ.In(i), fmt.Sprintf("c.CallArgument(%d)", i)))
 		}
 		var results []string
 		for i := 0; i < f.typ.NumOut(); i++ {
@@ -115,11 +115,11 @@ func GenerateMethods(outputPackage string, methods []Method) ([]byte, error) {
 			if f.typ.Out(i).Kind() == reflect.String {
 				line("if err:=c.ChargeAllocation(uint64(len(%s)));err!=nil{return err}", r)
 			}
-			line("c.SetResult(%d,%s)", i, encode(f.typ.Out(i), r))
+			line("c.SetCallResult(%d,%s)", i, encode(f.typ.Out(i), r))
 		}
 		line("return nil},")
 		if op := f.opcode(); op != 0 {
-			line("Direct:evm.DirectBinding{Op:evm.%s,Call:func(c *evm.Call,x,y values.Value)(v values.Value,err error){defer evmbind.Catch(%q,&err)", "OpCallHost"+strings.ToUpper(strings.TrimPrefix(op.String(), "call.host.")), name)
+			line("Direct:evm.DirectBinding{Op:evm.%s,Call:func(c *evm.VM,x,y values.Value)(v values.Value,err error){defer evmbind.Catch(%q,&err)", "OpCallHost"+strings.ToUpper(strings.TrimPrefix(op.String(), "call.host.")), name)
 			args = []string{"kvo.FromValue(x)"}
 			if f.typ.NumIn() > 1 {
 				args = append(args, decode(f.typ.In(1), "y"))

@@ -27,7 +27,7 @@ func (p *Program) EncodeJSON(ctx context.Context, v values.Value, limit int) (js
 }
 
 // EncodeJSON encodes an any argument from this invocation.
-func (c *Call) EncodeJSON(v values.Value, limit int) (json.RawMessage, error) {
+func (c *VM) EncodeJSON(v values.Value, limit int) (json.RawMessage, error) {
 	w := jsonValueWriter{call: c, ctx: c.Context, types: c.program.typeShapes, limit: limit, charge: c.ChargeAllocation}
 	if _, err := w.dynamic(v, 0); err != nil {
 		return nil, err
@@ -36,7 +36,7 @@ func (c *Call) EncodeJSON(v values.Value, limit int) (json.RawMessage, error) {
 }
 
 // EncodeJSONObject encodes a statically typed map[string]any argument.
-func (c *Call) EncodeJSONObject(v values.Value, limit int) (json.RawMessage, error) {
+func (c *VM) EncodeJSONObject(v values.Value, limit int) (json.RawMessage, error) {
 	w := jsonValueWriter{call: c, ctx: c.Context, types: c.program.typeShapes, limit: limit}
 	s := values.Shape{Kind: values.MapKind, Key: &values.Shape{Kind: values.StringKind}, Elem: &values.Shape{Kind: values.InterfaceKind}}
 	if _, err := w.value(&s, v, 0); err != nil {
@@ -54,7 +54,7 @@ func (p *Program) JSONValue(ctx context.Context, v values.Value, limit int) (any
 }
 
 // JSONValue also meters the materialized tree against this invocation's budget.
-func (c *Call) JSONValue(v values.Value, limit int) (any, error) {
+func (c *VM) JSONValue(v values.Value, limit int) (any, error) {
 	w := jsonValueWriter{call: c, ctx: c.Context, types: c.program.typeShapes, limit: limit, mode: jsonMaterialize, charge: c.ChargeAllocation}
 	return w.dynamic(v, 0)
 }
@@ -62,7 +62,7 @@ func (c *Call) JSONValue(v values.Value, limit int) (any, error) {
 // JSONValueWithSize materializes an any value and reports its equivalent JSON
 // byte length. Streaming output consumers can share one limit across values
 // without serializing the materialized tree a second time.
-func (c *Call) JSONValueWithSize(v values.Value, limit int) (any, int, error) {
+func (c *VM) JSONValueWithSize(v values.Value, limit int) (any, int, error) {
 	w := jsonValueWriter{call: c, ctx: c.Context, types: c.program.typeShapes, limit: limit, mode: jsonMaterialize, charge: c.ChargeAllocation}
 	out, err := w.dynamic(v, 0)
 	if err != nil {
@@ -87,15 +87,15 @@ func (m jsonConversionMode) String() string {
 
 // Standalone JSON conversion has no invocation budget. Bound temporary native
 // collection snapshots by the requested output size, in addition to its byte cap.
-func (p *Program) jsonConversionCall(ctx context.Context, limit int) *Call {
+func (p *Program) jsonConversionCall(ctx context.Context, limit int) *VM {
 	hi, bytes := bits.Mul64(uint64(max(limit, 0)), 128)
 	if hi != 0 {
 		bytes = math.MaxUint64
 	}
-	return &Call{Context: ctx, program: p, budget: &executionBudget{ctx: ctx, limits: Limits{AllocationBytes: bytes, Allocations: uint64(max(limit, 0)) + 1}}}
+	return &VM{Context: ctx, program: p, budget: &executionBudget{ctx: ctx, limits: Limits{AllocationBytes: bytes, Allocations: uint64(max(limit, 0)) + 1}}}
 }
 
-func (w *jsonValueWriter) nativeCall() *Call {
+func (w *jsonValueWriter) nativeCall() *VM {
 	if w.call == nil {
 		w.call = w.program.jsonConversionCall(w.ctx, w.limit)
 	}
@@ -104,7 +104,7 @@ func (w *jsonValueWriter) nativeCall() *Call {
 
 type jsonValueWriter struct {
 	program *Program
-	call    *Call
+	call    *VM
 	ctx     context.Context
 	types   *values.TypeTable
 	limit   int

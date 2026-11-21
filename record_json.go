@@ -248,18 +248,18 @@ func (cv recordConverter) jsonScalar(x any, depth int) (values.Value, error) {
 	return cv.p.packInterface(uint64(id), v, &cv.b.allocated, cv.b.limits)
 }
 
-func (c *Call) recordJSON(typ *RecordType) error {
+func (c *VM) recordJSON(typ *RecordType) error {
 	var row kvo.Record
 	if !typ.Mutable {
 		var err error
-		row, err = readRecordCell(c.Argument(0), typ.Model)
+		row, err = readRecordCell(c.CallArgument(0), typ.Model)
 		if err != nil {
 			return err
 		}
-	} else if native, ok := nativeMutableRecord(recordCell(c.Argument(0))); ok {
+	} else if native, ok := nativeMutableRecord(recordCell(c.CallArgument(0))); ok {
 		row = native
 	} else {
-		r := mutableRecord(c.Argument(0))
+		r := mutableRecord(c.CallArgument(0))
 		if r == nil || r.model != typ.Model {
 			return fmt.Errorf("invalid %s record", typ.Name)
 		}
@@ -283,6 +283,6 @@ func (c *Call) recordJSON(typ *RecordType) error {
 	if err != nil {
 		return err
 	}
-	c.SetResult(0, values.Value{P: value.P})
+	c.SetCallResult(0, values.Value{P: value.P})
 	return nil
 }

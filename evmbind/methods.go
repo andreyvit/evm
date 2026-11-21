@@ -228,12 +228,12 @@ func (f methodFunction) opcode() evm.Opcode {
 	return directOpcode(values.Pair, args, results)
 }
 func (f methodFunction) reflected() evm.Native {
-	return func(c *evm.Call) (err error) {
+	return func(c *evm.VM) (err error) {
 		defer Catch(f.symbol, &err)
 		args := make([]reflect.Value, f.typ.NumIn())
-		args[0] = reflect.ValueOf(kvo.FromValue(c.Argument(0)))
+		args[0] = reflect.ValueOf(kvo.FromValue(c.CallArgument(0)))
 		for i := 1; i < len(args); i++ {
-			v := c.Argument(i)
+			v := c.CallArgument(i)
 			x := reflect.New(f.typ.In(i)).Elem()
 			switch x.Kind() {
 			case reflect.Bool:
@@ -270,7 +270,7 @@ func (f methodFunction) reflected() evm.Native {
 				}
 				v = values.String(strings.Clone(x.String()))
 			}
-			c.SetResult(i, v)
+			c.SetCallResult(i, v)
 		}
 		return nil
 	}

@@ -6,6 +6,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -29,14 +30,15 @@ func TestProgramAssertValue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	defer vm.Reset()
 	var fns [2]values.Value
 	if err := vm.Run(context.Background(), "Targets", nil, fns[:]); err != nil {
 		t.Fatal(err)
 	}
 	for _, f := range fns {
-		fn, err := p.FunctionValue(f)
+		fnValue, err := p.Callable(f)
+		fn := &fnValue
 		if err != nil {
 			t.Fatal(err)
 		}

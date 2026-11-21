@@ -19,6 +19,7 @@ import (
 	"github.com/andreyvit/evm/evmbind/internal/fixture"
 	"github.com/andreyvit/evm/evmbind/internal/fixturebindings"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/kvo/codec/row2"
 	"github.com/andreyvit/evm/values"
@@ -56,7 +57,7 @@ func (t *transaction) Observe(columns []string, row map[string]any) {
 	delete(row, "n")
 	t.observed = true
 }
-func (t *transaction) forCall(c *evm.Call) *transaction {
+func (t *transaction) forCall(c *evm.VM) *transaction {
 	if t != nil {
 		t.line = c.Position.Line
 	}
@@ -71,13 +72,13 @@ type host struct {
 	mark fixture.Count
 }
 
-func (h *host) Pair(_ *evm.Call) (*fixture.Row, *fixture.Row) {
+func (h *host) Pair(_ *evm.VM) (*fixture.Row, *fixture.Row) {
 	r := &fixture.Row{Ratio: -1.25, Amount: 1.5, Bits: 65535}
 	h.row = r
 	return r, r
 }
 
-func (h *host) Roundtrip(_ *evm.Call, ctx fixture.Context, a, b *fixture.Row) (fixture.Context, *fixture.Row, fixture.Row) {
+func (h *host) Roundtrip(_ *evm.VM, ctx fixture.Context, a, b *fixture.Row) (fixture.Context, *fixture.Row, fixture.Row) {
 	if a != b || a.Count != 5 || a.Detail.Text != "hello" || !a.Active {
 		panic("bad native args")
 	}
@@ -141,16 +142,16 @@ func Run(ctx h.Context) bool {
 				if err != nil {
 					t.Fatal(err, m.Disassemble())
 				}
-				vm := evm.New(p)
+				vm := evmtest.New(p)
 				tx := &transaction{tenant: name}
-				arg, err := s.Interface(p, tx)
+				arg, err := s.PackInterface(p, tx)
 				if err != nil || arg.P != unsafe.Pointer(tx) || arg.R == 0 {
 					t.Fatalf("boxed context: %v %v", arg, err)
 				}
-				if alloc := testing.AllocsPerRun(100, func() { _, err = s.Interface(p, tx) }); alloc != 0 {
+				if alloc := testing.AllocsPerRun(100, func() { _, err = s.PackInterface(p, tx) }); alloc != 0 {
 					t.Fatalf("context packing allocated %v", alloc)
 				}
-				nilPtr, err := s.Interface(p, (*transaction)(nil))
+				nilPtr, err := s.PackInterface(p, (*transaction)(nil))
 				if err != nil || nilPtr.P != nil || nilPtr.R != arg.R {
 					t.Fatal("lost typed nil")
 				}
@@ -202,17 +203,17 @@ func Deep(ctx h.Context) {recurse(ctx)}
 				t.Fatal(err)
 			}
 			tx := &transaction{}
-			v, err := s.Interface(p, tx)
+			v, err := s.PackInterface(p, tx)
 			if err != nil {
 				t.Fatal(err)
 			}
 			args := []values.Value{v}
-			vm := evm.New(p)
+			vm := evmtest.New(p)
 			out := make([]values.Value, 1)
 			if err := vm.Run(context.Background(), "Run", args, out); err != nil || out[0].AsInt() != 4 {
 				t.Fatal(err, out)
 			}
-			if err := vm.Run(context.Background(), "Total", nil, out); err != nil || out[0].AsInt() != 5 {
+			if err := vm.Run(context.Background(), "Total", nil, out); err != nil || out[0].AsInt() != 0 {
 				t.Fatal(err, out)
 			}
 			func() {
@@ -226,7 +227,7 @@ func Deep(ctx h.Context) {recurse(ctx)}
 			if err := vm.RunWithBudget(context.Background(), "Forever", args, nil, evm.Budget{Steps: 900}); !errors.Is(err, evm.ErrSteps) {
 				t.Fatal(err)
 			}
-			vm = evm.New(p)
+			vm = evmtest.New(p)
 			vm.Limits.Depth = 8
 			if err := vm.Run(context.Background(), "Deep", args, nil); !errors.Is(err, evm.ErrDepth) {
 				t.Fatal(err)
@@ -279,9 +280,9 @@ func TestBindingDrift(t *testing.T) {
 	}
 }
 
-func (h *host) Enabled(c *evm.Call, n fixture.Count) bool { return n&1 != 0 }
-func (h *host) Name(c *evm.Call, prefix fixture.Label, n fixture.Count) fixture.Label {
-	if c.Context == nil || c.Position.Line == 0 || c.Argument(0).AsString() != string(prefix) || c.R[1] != uint64(n) || c.P[0] != c.Argument(0).P {
+func (h *host) Enabled(c *evm.VM, n fixture.Count) bool { return n&1 != 0 }
+func (h *host) Name(c *evm.VM, prefix fixture.Label, n fixture.Count) fixture.Label {
+	if c.Context == nil || c.Position.Line == 0 || c.CallArgument(0).AsString() != string(prefix) || c.R[1] != uint64(n) || c.P[0] != c.CallArgument(0).P {
 		panic("incorrect native argument window")
 	}
 	if prefix == "panic" {
@@ -289,12 +290,12 @@ func (h *host) Name(c *evm.Call, prefix fixture.Label, n fixture.Count) fixture.
 	}
 	return fixture.Label(strings.Repeat(string(prefix), int(n)))
 }
-func (h *host) Lookup(c *evm.Call, id fixture.Count) *fixture.Row {
+func (h *host) Lookup(c *evm.VM, id fixture.Count) *fixture.Row {
 	return &fixture.Row{Count: id, Detail: fixture.Detail{Text: "member"}}
 }
-func (h *host) Ratio(c *evm.Call, x float32) float64 { return float64(x) * 1.5 }
-func (h *host) Mark(_ *evm.Call, n fixture.Count)    { h.mark = n }
-func (h *host) Marked(_ *evm.Call) fixture.Count     { return h.mark }
+func (h *host) Ratio(c *evm.VM, x float32) float64 { return float64(x) * 1.5 }
+func (h *host) Mark(_ *evm.VM, n fixture.Count)    { h.mark = n }
+func (h *host) Marked(_ *evm.VM) fixture.Count     { return h.mark }
 
 const generatedCalls = `import "h"
 func Check() bool {
@@ -332,7 +333,7 @@ func VoidMethod() h.Count {
 }
 `
 
-func generatedVM(t testing.TB, mode string) (*evm.VM, *evm.Module) {
+func generatedVM(t testing.TB, mode string) (*evmtest.Session, *evm.Module) {
 	t.Helper()
 	bindings := fixturebindings.Bindings
 	opt := options()
@@ -356,7 +357,7 @@ func generatedVM(t testing.TB, mode string) (*evm.VM, *evm.Module) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	vm.Limits.Allocations = ^uint64(0)
 	vm.Limits.AllocationBytes = ^uint64(0)
 	return vm, m
@@ -485,7 +486,7 @@ func Run() bool {
  for i:=range a {a[i]+=count}
  return a[2]==23 && saved==y
 }
-func Later() h.Count {return saved.Count}
+func Later(x *h.Row) h.Count {return x.Count}
 func VMCycles() bool {
  a:=[2]h.Row{{Count:2},{Count:3}}
  a[0].Next=&a[1];a[1].Next=&a[0]
@@ -523,7 +524,7 @@ func References() bool {
 				if err != nil {
 					t.Fatal(err, m.Disassemble())
 				}
-				vm := evm.New(p)
+				vm := evmtest.New(p)
 				out := make([]values.Value, 1)
 				if err := vm.Run(context.Background(), "Run", nil, out); err != nil || out[0].R != 1 {
 					t.Fatalf("%v %v\n%s", out, err, m.Disassemble())
@@ -532,7 +533,11 @@ func References() bool {
 					t.Fatalf("detached native object: %+v", h.row)
 				}
 				h.row.Count = 27
-				if err := vm.Run(context.Background(), "Later", nil, out); err != nil || out[0].R != 27 {
+				row, err := s.NativePointer(h.row)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := vm.Run(context.Background(), "Later", []values.Value{row}, out); err != nil || out[0].R != 27 {
 					t.Fatalf("lost host identity: %v %v", out, err)
 				}
 				if err := vm.Run(context.Background(), "References", nil, out); err != nil || out[0].R != 1 {
@@ -613,13 +618,13 @@ func Pack(row *h.Row) any { return row }
 		}
 
 		out := make([]values.Value, 1)
-		if err := evm.New(p).Run(context.Background(), "Run", []values.Value{arg}, out); err != nil {
+		if err := evmtest.New(p).Run(context.Background(), "Run", []values.Value{arg}, out); err != nil {
 			t.Fatal(err)
 		}
 		if out[0].R != 8 || row.Count != 8 || r.GetValue(1).AsInt() != 8 || string(r.Child(row2.Step{Key: 2}).GetValue(3).AsBytes()) != "EVM" {
 			t.Fatalf("disconnected KVO/EVM/native object: %+v", row)
 		}
-		if err := evm.New(p).Run(context.Background(), "Dynamic", []values.Value{packed}, out); err != nil || out[0].R != 8 {
+		if err := evmtest.New(p).Run(context.Background(), "Dynamic", []values.Value{packed}, out); err != nil || out[0].R != 8 {
 			t.Fatalf("native interface argument: %v %v", out, err)
 		}
 	}

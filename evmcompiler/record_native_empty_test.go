@@ -7,6 +7,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/values"
 )
@@ -29,10 +30,10 @@ func TestNativeRecordWithoutProperties(t *testing.T) {
 	b := &nativeEmptyRow{Hidden: 2}
 	var got *nativeEmptyRow
 	db.Functions = []evm.ExternalFunction{
-		{Name: "A", Signature: evm.Signature{Results: []*values.Type{row.Pointer}}, Call: func(c *evm.Call) error { c.SetResult(0, binding.Record(reflect.ValueOf(a)).Value()); return nil }},
-		{Name: "B", Signature: evm.Signature{Results: []*values.Type{row.Pointer}}, Call: func(c *evm.Call) error { c.SetResult(0, binding.Record(reflect.ValueOf(b)).Value()); return nil }},
-		{Name: "Keep", Signature: evm.Signature{Params: []*values.Type{row.Pointer}}, Call: func(c *evm.Call) error {
-			r, err := c.Record(c.Argument(0), model)
+		{Name: "A", Signature: evm.Signature{Results: []*values.Type{row.Pointer}}, Call: func(c *evm.VM) error { c.SetCallResult(0, binding.Record(reflect.ValueOf(a)).Value()); return nil }},
+		{Name: "B", Signature: evm.Signature{Results: []*values.Type{row.Pointer}}, Call: func(c *evm.VM) error { c.SetCallResult(0, binding.Record(reflect.ValueOf(b)).Value()); return nil }},
+		{Name: "Keep", Signature: evm.Signature{Params: []*values.Type{row.Pointer}}, Call: func(c *evm.VM) error {
+			r, err := c.Record(c.CallArgument(0), model)
 			if err != nil {
 				return err
 			}
@@ -50,7 +51,7 @@ func Run() bool { x:=*db.A(); y:=*db.B(); db.Keep(&x); if x==y {panic("hidden ig
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	err = evm.New(prog).Run(context.Background(), "Run", nil, out[:])
+	err = evmtest.New(prog).Run(context.Background(), "Run", nil, out[:])
 	if err != nil || got == nil || got.Hidden != 1 || !out[0].AsBool() {
 		t.Fatal(err, got, out)
 	}

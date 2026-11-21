@@ -208,13 +208,11 @@ func (s *sourceImporter) Import(path string) (*types.Package, error) {
 		// Host declarations may annotate retained function signatures. This
 		// opaque handle is not an importable guest package or a native layout.
 		pkg := types.NewPackage(path, "evm")
-		for _, names := range [][2]string{{"NamedFunction", "NamedFunctionOf"}, {"FunctionHandle", "FunctionOf"}} {
-			handle := types.NewNamed(types.NewTypeName(token.NoPos, pkg, names[0], nil), types.NewStruct(nil, nil), nil)
-			pkg.Scope().Insert(handle.Obj())
-			alias := types.NewAlias(types.NewTypeName(token.NoPos, pkg, names[1], nil), handle)
-			alias.SetTypeParams([]*types.TypeParam{types.NewTypeParam(types.NewTypeName(token.NoPos, pkg, "Signature", nil), types.Universe.Lookup("any").Type())})
-			pkg.Scope().Insert(alias.Obj())
-		}
+		handle := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Callable", nil), types.NewStruct(nil, nil), nil)
+		pkg.Scope().Insert(handle.Obj())
+		alias := types.NewAlias(types.NewTypeName(token.NoPos, pkg, "FunctionOf", nil), handle)
+		alias.SetTypeParams([]*types.TypeParam{types.NewTypeParam(types.NewTypeName(token.NoPos, pkg, "Signature", nil), types.Universe.Lookup("any").Type())})
+		pkg.Scope().Insert(alias.Obj())
 		pkg.MarkComplete()
 		s.imported[path] = pkg
 		return pkg, nil

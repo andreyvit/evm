@@ -11,6 +11,7 @@ import (
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmbind"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -71,7 +72,7 @@ func TestNativeGenericStructInstances(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(program).Run(context.Background(), "Run", []values.Value{nv, sv}, out[:]); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", []values.Value{nv, sv}, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if out[0].R != 1 || n.Value != 42 {
@@ -142,7 +143,7 @@ func TestNativeGenericStructOmittedField(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(p).Run(context.Background(), "Run", []values.Value{arg}, nil); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", []values.Value{arg}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if native.Value != 42 || native.hidden != "retained" {
@@ -186,7 +187,7 @@ func TestNativeGenericStructArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if out[0].R != 1 {
@@ -222,7 +223,7 @@ func TestNativeGenericStructImportedArgument(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(program).Run(context.Background(), "Run", []values.Value{arg}, out[:]); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", []values.Value{arg}, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if out[0].AsInt() != 42 {
@@ -263,7 +264,7 @@ func TestNativeGenericEmbeddedSelfReference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -290,7 +291,7 @@ func TestNativeGenericFunctionFieldErrorIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(p).Run(context.Background(), "Run", []values.Value{arg}, nil); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", []values.Value{arg}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if value != "updated" {
@@ -324,7 +325,7 @@ func TestNativeGenericEmbeddedInstance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -375,7 +376,7 @@ func TestNativeGenericImportsDoNotOwnStructuralTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(program).Run(context.Background(), "Run", nil, nil); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -424,7 +425,7 @@ func TestNativeGenericScalarArgumentWithConsumerInSamePackage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(program).Run(context.Background(), "Run", nil, nil); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -462,7 +463,7 @@ func TestNativeGenericNestedScalarArgument(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := evm.New(program).Run(context.Background(), "Run", nil, nil); err != nil {
+			if err := evmtest.New(program).Run(context.Background(), "Run", nil, nil); err != nil {
 				t.Fatal(err)
 			}
 		})

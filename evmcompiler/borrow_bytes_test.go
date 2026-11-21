@@ -7,6 +7,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -15,15 +16,15 @@ func TestBorrowedByteOperations(t *testing.T) {
 	var last values.Value
 	s := &values.Shape{Type: evm.ByteSliceType, Kind: values.SliceKind, Cells: 1, Elem: &values.Shape{Type: values.Uint8, Kind: values.UintKind, Bits: 8, Cells: 1}}
 	pkg := evm.Package{Path: "host", Types: []evm.TypeDecl{{Shape: s}}, Functions: []evm.ExternalFunction{
-		{Name: "Get", Signature: evm.Signature{Results: []*values.Type{evm.ByteSliceType}}, Ownership: &evm.OwnershipEffects{NoRetain: true, NoInvalidate: true, Borrowed: []evm.BorrowSource{{Domain: "bytes"}}}, Call: func(c *evm.Call) error {
+		{Name: "Get", Signature: evm.Signature{Results: []*values.Type{evm.ByteSliceType}}, Ownership: &evm.OwnershipEffects{NoRetain: true, NoInvalidate: true, Borrowed: []evm.BorrowSource{{Domain: "bytes"}}}, Call: func(c *evm.VM) error {
 			v, err := c.BorrowBytes(data)
 			if err == nil {
 				last = v
-				c.SetResult(0, v)
+				c.SetCallResult(0, v)
 			}
 			return err
 		}},
-		{Name: "End", Ownership: &evm.OwnershipEffects{NoRetain: true, Ends: []evm.ScopeEnd{{Domain: "bytes"}}}, Call: func(*evm.Call) error { data[1] = '!'; return nil }},
+		{Name: "End", Ownership: &evm.OwnershipEffects{NoRetain: true, Ends: []evm.ScopeEnd{{Domain: "bytes"}}}, Call: func(*evm.VM) error { data[1] = '!'; return nil }},
 	}}
 	const src = `import "host"
 type Bytes []byte
@@ -55,7 +56,7 @@ func AcrossEnd() int { b:=Bytes(host.Get())[1:];host.End();return int(b[0]) }
 		if err != nil {
 			t.Fatal(err)
 		}
-		vm := evm.New(p)
+		vm := evmtest.New(p)
 		for _, tc := range []struct {
 			name  string
 			want  uint64

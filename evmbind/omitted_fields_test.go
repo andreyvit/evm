@@ -2,6 +2,7 @@ package evmbind
 
 import (
 	"context"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/nativebind"
 	"math"
 	"reflect"
@@ -49,7 +50,7 @@ func TestOmittedNativeFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := make([]values.Value, 1)
-	if err := evm.New(program).Run(context.Background(), "Update", []values.Value{arg}, result); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Update", []values.Value{arg}, result); err != nil {
 		t.Fatal(err)
 	}
 	if page.Title != "guest" || page.Count != 6 || page.Private != marker || result[0].AsInt() != 6 {
@@ -62,9 +63,9 @@ func TestOmittedNativeFields(t *testing.T) {
 
 type projectedPageHost struct{ page ProjectedPage }
 
-func (h *projectedPageHost) Get(_ *evm.Call) ProjectedPage      { return h.page }
-func (h *projectedPageHost) Pointer(_ *evm.Call) *ProjectedPage { return &h.page }
-func (h *projectedPageHost) Check(_ *evm.Call, p *ProjectedPage) bool {
+func (h *projectedPageHost) Get(_ *evm.VM) ProjectedPage      { return h.page }
+func (h *projectedPageHost) Pointer(_ *evm.VM) *ProjectedPage { return &h.page }
+func (h *projectedPageHost) Check(_ *evm.VM, p *ProjectedPage) bool {
 	return p.Private == h.page.Private && p.Title == "copy"
 }
 
@@ -93,7 +94,7 @@ func Reset(){*page.Pointer()=page.ProjectedPage{Title:"reset"}}`, schema.Package
 		t.Fatal(err)
 	}
 	result := make([]values.Value, 1)
-	if err := evm.New(p).Run(context.Background(), "Run", nil, result); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, result); err != nil {
 		t.Fatal(err)
 	}
 	if result[0].R != 1 || host.page.Title != "original" {
@@ -104,8 +105,8 @@ func Reset(){*page.Pointer()=page.ProjectedPage{Title:"reset"}}`, schema.Package
 		fn := &bound.Functions[i]
 		if fn.Name == "Get" {
 			fn.Direct = evm.DirectBinding{}
-			fn.Call = func(c *evm.Call) error {
-				c.SetResult(0, nativebind.Load(reflect.TypeOf(host.page), unsafe.Pointer(&host.page)))
+			fn.Call = func(c *evm.VM) error {
+				c.SetCallResult(0, nativebind.Load(reflect.TypeOf(host.page), unsafe.Pointer(&host.page)))
 				return nil
 			}
 		}
@@ -114,21 +115,21 @@ func Reset(){*page.Pointer()=page.ProjectedPage{Title:"reset"}}`, schema.Package
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(borrowed).Run(context.Background(), "Run", nil, result); err != nil {
+	if err := evmtest.New(borrowed).Run(context.Background(), "Run", nil, result); err != nil {
 		t.Fatal(err)
 	}
 	if result[0].R != 1 || host.page.Title != "original" {
 		t.Fatal("borrowed host aggregate lost its snapshot")
 	}
 	for _, name := range []string{"NativeCopy", "NativeStore"} {
-		if err := evm.New(p).Run(context.Background(), name, nil, result); err != nil {
+		if err := evmtest.New(p).Run(context.Background(), name, nil, result); err != nil {
 			t.Fatal(err)
 		}
 		if result[0].R != 1 {
 			t.Fatalf("%s lost hidden fields", name)
 		}
 	}
-	if err := evm.New(p).Run(context.Background(), "Reset", nil, nil); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Reset", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if host.page.Private != nil || host.page.Title != "reset" {
@@ -234,21 +235,21 @@ func Run()bool {
 		t.Fatal(err)
 	}
 	result := make([]values.Value, 1)
-	if err := evm.New(p).Run(context.Background(), "Run", nil, result); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, result); err != nil {
 		t.Fatal(err)
 	}
 	if result[0].R != 1 {
 		t.Fatal("native comparison or map key mismatch")
 	}
 	host.page.Private = []int{1}
-	if err := evm.New(p).Run(context.Background(), "Recover", nil, result); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Recover", nil, result); err != nil {
 		t.Fatal(err)
 	}
 	if result[0].R != 1 {
 		t.Fatal("native comparison panic was not recoverable")
 	}
 	host.page.Private = math.NaN()
-	if err := evm.New(p).Run(context.Background(), "NaN", nil, result); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "NaN", nil, result); err != nil {
 		t.Fatal(err)
 	}
 	if result[0].R != 1 {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/kvo/codec/row2"
 	"github.com/andreyvit/evm/nativebind"
@@ -58,15 +59,15 @@ func TestMutableNativeRowAliases(t *testing.T) {
 	encoded := binding.Encode(nil, reflect.ValueOf(mutableNativeRow{Name: "borrowed from encoded row"}), row2.Fast2)
 	checks := 0
 	host := evm.Package{Path: "host", Functions: []evm.ExternalFunction{
-		{Name: "Get", Signature: evm.Signature{Results: []*values.Type{db.Record(model, true).Pointer}}, Call: func(c *evm.Call) error {
+		{Name: "Get", Signature: evm.Signature{Results: []*values.Type{db.Record(model, true).Pointer}}, Call: func(c *evm.VM) error {
 			v, err := evm.NativeMutableRecordValue(model, binding.Record(reflect.ValueOf(row)))
-			c.SetResult(0, v)
+			c.SetCallResult(0, v)
 			return err
 		}},
-		{Name: "Encoded", Signature: evm.Signature{Results: []*values.Type{db.Record(model, false).Pointer}}, Call: func(c *evm.Call) error { return c.SetReadRecordResult(model, row2.Trusted(encoded)) }},
-		{Name: "Invalidate", Call: func(c *evm.Call) error { clear(encoded); return nil }},
-		{Name: "Swap", Call: func(c *evm.Call) error { row.Child = replacement; return nil }},
-		{Name: "Check", Call: func(c *evm.Call) error {
+		{Name: "Encoded", Signature: evm.Signature{Results: []*values.Type{db.Record(model, false).Pointer}}, Call: func(c *evm.VM) error { return c.SetReadRecordResult(model, row2.Trusted(encoded)) }},
+		{Name: "Invalidate", Call: func(c *evm.VM) error { clear(encoded); return nil }},
+		{Name: "Swap", Call: func(c *evm.VM) error { row.Child = replacement; return nil }},
+		{Name: "Check", Call: func(c *evm.VM) error {
 			checks++
 			if row.Count != 42 || row.Name != "after" || old.Name != "retained" || row.Kids[1] != old || len(row.Tags) != 2 || row.Tags[0] != "shared" || row.Tags[1] != "added" || row.Bytes[0] != 9 || row.Bytes[1] != 8 || row.Nested[0][0] != "nested" || row.Numbers[1] != 12 || row.Hidden != 42 || old.Hidden != 73 {
 				t.Error("native changes not immediate")
@@ -78,8 +79,8 @@ func TestMutableNativeRowAliases(t *testing.T) {
 	integer := &values.Shape{Type: values.Int64, Kind: values.IntKind, Bits: 64, Cells: 1}
 	numbers := &values.Shape{Type: values.NewType("[]int64", values.Pair), Kind: values.SliceKind, Elem: integer, Cells: 1, Native: nativebind.Layout(reflect.TypeOf(plain), nil, false)}
 	host.Types = append(host.Types, evm.TypeDecl{Shape: numbers})
-	host.Functions = append(host.Functions, evm.ExternalFunction{Name: "Plain", Signature: evm.Signature{Results: []*values.Type{numbers.Type}}, Call: func(c *evm.Call) error {
-		c.SetResult(0, nativebind.Load(reflect.TypeOf(plain), unsafe.Pointer(&plain)))
+	host.Functions = append(host.Functions, evm.ExternalFunction{Name: "Plain", Signature: evm.Signature{Results: []*values.Type{numbers.Type}}, Call: func(c *evm.VM) error {
+		c.SetCallResult(0, nativebind.Load(reflect.TypeOf(plain), unsafe.Pointer(&plain)))
 		return nil
 	}})
 	mod, err := evmcompiler.Compile("aliases.go", `import("db";"host")
@@ -129,7 +130,7 @@ func TestMutableNativeRowAliases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
 		t.Fatalf("%v\n%s", err, mod.Disassemble())
 	}
 	if checks != 1 {
@@ -137,14 +138,14 @@ func TestMutableNativeRowAliases(t *testing.T) {
 	}
 	row.Child = nil
 	for _, tc := range []struct{ name, contains string }{{"NilChild", "invalid"}, {"Map", "native map layout"}, {"RejectSlice", "explicit conversion"}} {
-		if err := evm.New(p).Run(context.Background(), tc.name, nil, nil); err == nil || !strings.Contains(err.Error(), tc.contains) {
+		if err := evmtest.New(p).Run(context.Background(), tc.name, nil, nil); err == nil || !strings.Contains(err.Error(), tc.contains) {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
 	}
 	if row.Child != nil || row.Scores["a"] != 1 || row.Tags[0] != "shared" {
 		t.Fatal("failed operations changed native data")
 	}
-	if err := evm.New(p).Run(context.Background(), "OwnedStrings", nil, nil); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "OwnedStrings", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if row.Tags[0] != "borrowed from encoded row" || row.Tags[2] != "borrowed from encoded row" {

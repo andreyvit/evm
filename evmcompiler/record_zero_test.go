@@ -8,6 +8,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/values"
 )
@@ -54,7 +55,7 @@ func NilCopy()string{var p *db.Row;r:=*p;return r.name}
 	}
 	for _, name := range []string{"Read", "Copy", "List", "Alloc", "Aggregate", "ObjectList"} {
 		out := make([]values.Value, 1)
-		if err := evm.New(program).Run(context.Background(), name, nil, out); err != nil {
+		if err := evmtest.New(program).Run(context.Background(), name, nil, out); err != nil {
 			t.Errorf("%s: %v", name, err)
 		} else if !out[0].AsBool() {
 			t.Errorf("%s: nonzero field", name)
@@ -67,13 +68,13 @@ func NilCopy()string{var p *db.Row;r:=*p;return r.name}
 		{"EditRead", "invalid RowEdit record"},
 		{"EditCopy", "invalid RowEdit record"},
 	} {
-		err := evm.New(program).Run(context.Background(), tc.name, nil, make([]values.Value, 1))
+		err := evmtest.New(program).Run(context.Background(), tc.name, nil, make([]values.Value, 1))
 		if err == nil || !strings.Contains(err.Error(), tc.message) {
 			t.Errorf("%s: %v", tc.name, err)
 		}
 	}
 	for _, name := range []string{"Index", "LocalIndex", "ObjectIndex"} {
-		if err := evm.New(program).Run(context.Background(), name, nil, make([]values.Value, 1)); !errors.Is(err, evm.ErrBounds) {
+		if err := evmtest.New(program).Run(context.Background(), name, nil, make([]values.Value, 1)); !errors.Is(err, evm.ErrBounds) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}

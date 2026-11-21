@@ -6,16 +6,18 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
 func TestFunctionHandleReportsCaptures(t *testing.T) {
 	function := &values.Shape{Type: values.NewType("func()int", values.Pair), Kind: values.FunctionKind, Cells: 1, Results: []*values.Shape{{Type: values.IntType, Kind: values.IntKind, Bits: 64, Cells: 1}}}
-	var retained *evm.FunctionHandle
+	var retained *evm.Callable
 	host := evm.Package{Path: "host", Types: []evm.TypeDecl{{Shape: function}}, Functions: []evm.ExternalFunction{
-		{Name: "Register", Signature: evm.Signature{Params: []*values.Type{function.Type}}, Call: func(c *evm.Call) error {
+		{Name: "Register", Signature: evm.Signature{Params: []*values.Type{function.Type}}, Call: func(c *evm.VM) error {
 			var err error
-			retained, err = c.Program().FunctionValue(c.Argument(0))
+			retainedValue, err := c.Program().Callable(c.CallArgument(0))
+			retained = &retainedValue
 			return err
 		}},
 	}}
@@ -36,7 +38,7 @@ func Bound() { c := &Counter{}; host.Register(c.Next) }
 		t.Fatal(err)
 	}
 	for entry, want := range map[string]bool{"Named": false, "Literal": false, "Closure": true, "Bound": true} {
-		if err := evm.New(program).Run(context.Background(), entry, nil, nil); err != nil {
+		if err := evmtest.New(program).Run(context.Background(), entry, nil, nil); err != nil {
 			t.Fatal(entry, err)
 		}
 		if got := retained.HasCaptures(); got != want {

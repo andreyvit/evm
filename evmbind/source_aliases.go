@@ -2,16 +2,16 @@ package evmbind
 
 import "go/types"
 
-func functionHandleAlias(t types.Type) bool {
+func isFunctionOf(t types.Type) bool {
 	a, ok := t.(*types.Alias)
-	return ok && a.Obj().Pkg() != nil && a.Obj().Pkg().Path() == "github.com/andreyvit/evm" && (a.Obj().Name() == "FunctionOf" || a.Obj().Name() == "NamedFunctionOf")
+	return ok && a.Obj().Pkg() != nil && a.Obj().Pkg().Path() == "github.com/andreyvit/evm" && a.Obj().Name() == "FunctionOf"
 }
 
-func aliasesFunctionHandle(t types.Type) bool {
+func aliasesFunctionOf(t types.Type) bool {
 	for {
 		switch x := t.(type) {
 		case *types.Alias:
-			if functionHandleAlias(x) {
+			if isFunctionOf(x) {
 				return true
 			}
 			t = x.Rhs()
@@ -24,19 +24,19 @@ func aliasesFunctionHandle(t types.Type) bool {
 }
 
 // Binding identities must not depend on which alias appeared first, including
-// inside pointer and function signatures. Keep EVM's signature-carrying handle
-// aliases intact: their Go representation deliberately erases that signature.
+// inside pointer and function signatures. Keep FunctionOf intact so the
+// binding compiler can read its signature type argument.
 func canonicalAliasType(t types.Type) types.Type {
 	if types.Identical(t, types.Universe.Lookup("any").Type()) {
 		return types.Universe.Lookup("any").Type()
 	}
 	switch x := t.(type) {
 	case *types.Alias:
-		if functionHandleAlias(x) {
+		if isFunctionOf(x) {
 			return x
 		}
-		if aliasesFunctionHandle(x.Rhs()) {
-			fail("alias %s of an EVM function handle is not supported", x.Obj().Name())
+		if aliasesFunctionOf(x.Rhs()) {
+			fail("alias %s of an EVM callable is not supported", x.Obj().Name())
 		}
 		return canonicalAliasType(types.Unalias(x))
 	case *types.Pointer:

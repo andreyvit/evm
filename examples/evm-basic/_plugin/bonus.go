@@ -9,13 +9,8 @@ import (
 	"time"
 )
 
-// Package variables live as long as the VM session that runs the plugin.
-var ordersSeen int
-
 // OnOrder awards points for an order and returns a line for the log.
 func OnOrder(c *shop.Customer, o *shop.Order, now time.Time) string {
-	ordersSeen++
-
 	points := o.Cents / 100 * shop.PointsPerDollar
 	if slices.ContainsFunc(o.Items, isGift) {
 		points *= 2
@@ -31,7 +26,7 @@ func OnOrder(c *shop.Customer, o *shop.Order, now time.Time) string {
 			break
 		}
 	}
-	return fmt.Sprintf("#%d %s: +%d points, %d total, %s", ordersSeen, o.ID, points, c.Points, c.Tier)
+	return fmt.Sprintf("%s: +%d points, %d total, %s", o.ID, points, c.Points, c.Tier)
 }
 
 func isGift(item shop.Item) bool { return strings.HasPrefix(item.SKU, "GIFT-") }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmbind"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/gox"
 	"github.com/andreyvit/evm/values"
 )
@@ -44,17 +45,18 @@ var count int
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(p.EVM())
+	vm := evmtest.New(p.EVM())
 	var out [1]values.Value
 	if err := vm.Run(context.Background(), "Choose", nil, out[:]); err != nil {
 		t.Fatal(err)
 	}
-	fn, err := p.EVM().FunctionValue(out[0])
+	fnValue, err := p.EVM().Callable(out[0])
+	fn := &fnValue
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"<p>Alice &amp; Bob:41</p>", "<p>Alice &amp; Bob:42</p>"} {
-		err := vm.RunNative(context.Background(), func(c *evm.Call) error {
+	for _, want := range []string{"<p>Alice &amp; Bob:1</p>", "<p>Alice &amp; Bob:1</p>"} {
+		err := vm.RunNative(context.Background(), func(c *evm.VM) error {
 			got, err := p.RenderFunctionInCall(c, fn, nil, gox.RenderOptions{Strict: true})
 			if err != nil {
 				return err
@@ -71,10 +73,10 @@ var count int
 	if err := vm.Run(context.Background(), "Count", nil, out[:]); err != nil {
 		t.Fatal(err)
 	}
-	if out[0].AsInt() != 42 {
-		t.Fatalf("handler globals reset: %d", out[0].AsInt())
+	if out[0].AsInt() != 0 {
+		t.Fatalf("unexpected retained globals: %d", out[0].AsInt())
 	}
-	if err := vm.RunNative(context.Background(), func(c *evm.Call) error {
+	if err := vm.RunNative(context.Background(), func(c *evm.VM) error {
 		if _, err := p.RenderFunctionInCall(c, fn, nil, gox.RenderOptions{Budget: evm.Budget{Steps: 10}}); err == nil {
 			t.Fatal("nested budget was silently ignored")
 		}
@@ -90,7 +92,7 @@ var count int
 
 type nestedRenderHost struct{}
 
-func (*nestedRenderHost) Nested(c *evm.Call, fn *evm.FunctionHandle) gox.HTML {
+func (*nestedRenderHost) Nested(c *evm.VM, fn *evm.Callable) gox.HTML {
 	html, err := gox.ProgramOf(c.Program()).RenderFunctionInCall(c, fn, nil, gox.RenderOptions{Strict: true})
 	if err != nil {
 		c.PanicCallback(err)

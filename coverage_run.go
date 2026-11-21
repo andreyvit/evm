@@ -21,7 +21,7 @@ func (vm *VM) executeCovered(idx int, env unsafe.Pointer, args, results []values
 	for i, arg := range args {
 		if arg.R == values.NativeBorrow && arg.P != nil {
 			var err error
-			arg, err = vm.call.importBorrow(f.Signature.Params[i], arg)
+			arg, err = vm.importBorrow(f.Signature.Params[i], arg)
 			if err != nil {
 				return err
 			}
@@ -41,6 +41,7 @@ func (vm *VM) executeCovered(idx int, env unsafe.Pointer, args, results []values
 	var failure error
 	// External callbacks share the meter with their suspended caller.
 	remaining := budget.remaining
+	defer func() { budget.remaining = min(remaining, budget.remaining) }()
 	var r []uint64
 	var p []unsafe.Pointer
 resumeFrame:
@@ -488,7 +489,10 @@ dispatch:
 			goto resumeFrame
 
 		case opTestDirect:
-			if failure = vm.invokeDirect(&cur, ins, budget); failure != nil {
+			budget.remaining = remaining
+			failure = vm.invokeDirect(&cur, ins, budget)
+			remaining = budget.remaining
+			if failure != nil {
 				goto nativeFault
 			}
 			ins = vm.coverage.instruction(cur.function, cur.pc)
@@ -508,7 +512,9 @@ dispatch:
 				cur.pc += int(int32(ins.BC()))
 			}
 		case opCallDirect:
+			budget.remaining = remaining
 			failure = vm.invokeDirect(&cur, ins, budget)
+			remaining = budget.remaining
 			if failure != nil {
 				goto nativeFault
 			}
@@ -568,7 +574,7 @@ dispatch:
 		{
 			var guestFailure guestErrorPanic
 			if errors.As(failure, &guestFailure) {
-				failure = vm.call.guestErrorFailure(guestFailure.err)
+				failure = vm.guestErrorFailure(guestFailure.err)
 			}
 		}
 		switch failure.(type) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 	"testing"
 	"unsafe"
@@ -67,7 +68,8 @@ func TestGoFatalLimitsDoNotRunDefers(t *testing.T) {
 	if err := vm.Run(context.Background(), "Run", nil, nil); !errors.Is(err, evm.ErrSteps) {
 		t.Fatalf("limit: %v", err)
 	}
-	if err := vm.Run(context.Background(), "State", nil, make([]values.Value, 1)); !errors.Is(err, evm.ErrInvalidState) {
+	var state [1]values.Value
+	if err := vm.Run(context.Background(), "State", nil, state[:]); err != nil || state[0].AsBool() {
 		t.Fatalf("failed session: %v", err)
 	}
 }
@@ -109,7 +111,7 @@ func TestGoFatalFailuresSkipDeferredHostEffects(t *testing.T) {
 			ran := false
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			pkg := evm.Package{Path: "h", Functions: []evm.ExternalFunction{{Name: "Mark", Call: func(*evm.Call) error { ran = true; return nil }}, {Name: "Bad", Call: func(*evm.Call) error {
+			pkg := evm.Package{Path: "h", Functions: []evm.ExternalFunction{{Name: "Mark", Call: func(*evm.VM) error { ran = true; return nil }}, {Name: "Bad", Call: func(*evm.VM) error {
 				if mode == "cancellation" {
 					cancel()
 					return nil
@@ -142,7 +144,7 @@ func TestGoFatalFailuresSkipDeferredHostEffects(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			vm := evm.New(p)
+			vm := evmtest.New(p)
 			vm.Limits = limits
 			if err := vm.Run(ctx, "Run", nil, nil); !errors.Is(err, want) {
 				t.Fatalf("failure: %v", err)
@@ -155,7 +157,7 @@ func TestGoFatalFailuresSkipDeferredHostEffects(t *testing.T) {
 }
 func TestGoDeferredNativeSourcePosition(t *testing.T) {
 	line := 0
-	pkg := evm.Package{Path: "h", Functions: []evm.ExternalFunction{{Name: "Mark", Call: func(c *evm.Call) error { line = c.Position.Line; return nil }}}}
+	pkg := evm.Package{Path: "h", Functions: []evm.ExternalFunction{{Name: "Mark", Call: func(c *evm.VM) error { line = c.Position.Line; return nil }}}}
 	m, err := evmcompiler.Compile("plugin.go", "import \"h\"\nfunc Run(){\n defer h.Mark()\n}\n", pkg)
 	if err != nil {
 		t.Fatal(err)
@@ -164,7 +166,7 @@ func TestGoDeferredNativeSourcePosition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if line != 3 {
@@ -201,7 +203,7 @@ func TestGoDeferLinkValidationAndSnapshot(t *testing.T) {
 	m.Defers[0].Args[0].Slot = 65535
 	m.Functions[0].RecoverPC = 100000
 	out := make([]values.Value, 1)
-	if err := evm.New(p).Run(context.Background(), "Run", nil, out); err != nil || out[0].R != 7 {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, out); err != nil || out[0].R != 7 {
 		t.Fatalf("defer metadata snapshot: %v %v", err, out)
 	}
 }
@@ -280,7 +282,7 @@ func TestGoYieldAndDeferredCallsShareFuel(t *testing.T) {
 		`import "h";func Run(){defer h.Mark();defer func(){for{}}()}`,
 	} {
 		ran := false
-		pkg := evm.Package{Path: "h", Functions: []evm.ExternalFunction{{Name: "Mark", Call: func(*evm.Call) error { ran = true; return nil }}}}
+		pkg := evm.Package{Path: "h", Functions: []evm.ExternalFunction{{Name: "Mark", Call: func(*evm.VM) error { ran = true; return nil }}}}
 		m, err := evmcompiler.Compile("main.go", source, pkg)
 		if err != nil {
 			t.Fatal(err)
@@ -289,7 +291,7 @@ func TestGoYieldAndDeferredCallsShareFuel(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		vm := evm.New(p)
+		vm := evmtest.New(p)
 		vm.Limits.Steps = 500
 		if err := vm.Run(context.Background(), "Run", nil, nil); !errors.Is(err, evm.ErrSteps) {
 			t.Fatalf("shared fuel: %v", err)

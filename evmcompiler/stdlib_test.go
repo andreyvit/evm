@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"log"
 	"math"
 	"runtime"
@@ -248,11 +249,11 @@ func TestGoIndependentSessionOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, b := evm.New(p), evm.New(p)
+	a, b := evmtest.New(p), evmtest.New(p)
 	var first, second string
 	a.Output = func(s string) error { first += s; return nil }
 	b.Output = func(s string) error { second += s; return nil }
-	for _, vm := range []*evm.VM{a, b, a} {
+	for _, vm := range []*evmtest.Session{a, b, a} {
 		if err := vm.Run(context.Background(), "Run", nil, nil); err != nil {
 			t.Fatal(err)
 		}
@@ -276,7 +277,7 @@ func BenchmarkStandardLibraryUnusedStartup(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				vm := evm.New(p)
+				vm := evmtest.New(p)
 				if err := vm.Run(context.Background(), "Run", nil, out); err != nil {
 					b.Fatal(err)
 				}
@@ -345,7 +346,7 @@ func FuzzStandardFormatting(f *testing.F) {
 				n = 0
 			}
 		}
-		vm := evm.New(p)
+		vm := evmtest.New(p)
 		vm.Limits.Steps = 100000
 		vm.Limits.OutputBytes = 4096
 		out := make([]values.Value, 1)
@@ -402,7 +403,7 @@ func TestGoStandardImportsCannotBeOverridden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pkg := evm.Package{Path: "math", Functions: []evm.ExternalFunction{{Name: "Sqrt", Signature: m.Imports[0].Signature, Call: func(*evm.Call) error { return nil }}}}
+	pkg := evm.Package{Path: "math", Functions: []evm.ExternalFunction{{Name: "Sqrt", Signature: m.Imports[0].Signature, Call: func(*evm.VM) error { return nil }}}}
 	if _, err := evm.Link(m, pkg); err == nil {
 		t.Fatal("overrode standard primitive")
 	}
@@ -476,12 +477,12 @@ func TestGoStandardPanicValueTypes(t *testing.T) {
 func TestGoFormattingNativeInterfaceChildrenAndGC(t *testing.T) {
 	number := &values.Shape{Type: values.NewType("h.Number", values.Raw), Kind: values.IntKind, Bits: 64, Cells: 1}
 	object := &values.Shape{Type: values.NewType("h.Object", values.Pointer), Kind: values.StructKind, Cells: 1, Fields: []values.Field{{Name: "N", Shape: number}}}
-	pkg := evm.Package{Path: "h", Types: []evm.TypeDecl{{Name: "Number", Shape: number}, {Name: "Object", Shape: object}}, Methods: []evm.ExternalMethod{{Name: "String", Receiver: number.Type, Signature: evm.Signature{Results: []*values.Type{values.StringType}}, Call: func(c *evm.Call) error { c.SetValue(0, values.String("native")); return nil }}}, Functions: []evm.ExternalFunction{
-		{Name: "Make", Signature: evm.Signature{Results: []*values.Type{values.AnyType}}, DynamicTypes: []*values.Type{object.Type}, Call: func(c *evm.Call) error {
+	pkg := evm.Package{Path: "h", Types: []evm.TypeDecl{{Name: "Number", Shape: number}, {Name: "Object", Shape: object}}, Methods: []evm.ExternalMethod{{Name: "String", Receiver: number.Type, Signature: evm.Signature{Results: []*values.Type{values.StringType}}, Call: func(c *evm.VM) error { c.SetValue(0, values.String("native")); return nil }}}, Functions: []evm.ExternalFunction{
+		{Name: "Make", Signature: evm.Signature{Results: []*values.Type{values.AnyType}}, DynamicTypes: []*values.Type{object.Type}, Call: func(c *evm.VM) error {
 			v := values.Int(3)
 			return c.SetInterface(0, object.Type, values.Value{P: unsafe.Pointer(&v)})
 		}},
-		{Name: "GC", Call: func(*evm.Call) error { runtime.GC(); return nil }},
+		{Name: "GC", Call: func(*evm.VM) error { runtime.GC(); return nil }},
 	}}
 	source := `import("fmt";"strings";"h");func Run()string{parts:=strings.Split(strings.Repeat("ab,",20),",");h.GC();return fmt.Sprint(h.Make())+strings.Join(parts,"-")}`
 	m, err := evmcompiler.Compile("main.go", source, pkg)
@@ -492,7 +493,7 @@ func TestGoFormattingNativeInterfaceChildrenAndGC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	out := make([]values.Value, 1)
 	if err := vm.Run(context.Background(), "Run", nil, out); err != nil {
 		t.Fatal(err)

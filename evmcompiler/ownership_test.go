@@ -9,6 +9,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/kvo/codec/row2"
 	"github.com/andreyvit/evm/values"
@@ -20,15 +21,15 @@ func ownershipFixture() (evm.Package, []byte, *string) {
 	callback := &values.Shape{Type: values.NewType("func()", values.Pair), Kind: values.FunctionKind, Cells: 1}
 	end := func() { copy(data, "dead") }
 	pkg := evm.Package{Path: "borrow", Types: []evm.TypeDecl{{Shape: callback}, {Name: "Text", ScalarBase: values.StringType, Shape: &values.Shape{Type: values.NewType("borrow.Text", values.Pair), Kind: values.StringKind, Cells: 1}}}, Functions: []evm.ExternalFunction{
-		{Name: "Read", Signature: evm.Signature{Results: []*values.Type{values.StringType}}, Ownership: &evm.OwnershipEffects{NoRetain: true, NoInvalidate: true, Borrowed: []evm.BorrowSource{{Result: 0, Domain: "test.buffer"}}}, Call: func(c *evm.Call) error {
-			c.SetResult(0, values.String(unsafe.String(unsafe.SliceData(data), len(data))))
+		{Name: "Read", Signature: evm.Signature{Results: []*values.Type{values.StringType}}, Ownership: &evm.OwnershipEffects{NoRetain: true, NoInvalidate: true, Borrowed: []evm.BorrowSource{{Result: 0, Domain: "test.buffer"}}}, Call: func(c *evm.VM) error {
+			c.SetCallResult(0, values.String(unsafe.String(unsafe.SliceData(data), len(data))))
 			return nil
 		}},
-		{Name: "End", Ownership: &evm.OwnershipEffects{NoRetain: true, Ends: []evm.ScopeEnd{{Domain: "test.buffer"}}}, Call: func(*evm.Call) error { end(); return nil }},
+		{Name: "End", Ownership: &evm.OwnershipEffects{NoRetain: true, Ends: []evm.ScopeEnd{{Domain: "test.buffer"}}}, Call: func(*evm.VM) error { end(); return nil }},
 		{Name: "RawEnd", Signature: evm.Signature{Params: []*values.Type{values.Uint64}, Results: []*values.Type{values.Uint64}}, Direct: evm.DirectUnary(func(uint64) uint64 { end(); return 0 })},
-		{Name: "UnknownEnd", Call: func(*evm.Call) error { end(); return nil }},
-		{Name: "Keep", Signature: evm.Signature{Params: []*values.Type{values.StringType}}, Call: func(c *evm.Call) error { *kept = c.Argument(0).AsString(); return nil }},
-		{Name: "Write", Signature: evm.Signature{Params: []*values.Type{callback.Type}}, Ownership: &evm.OwnershipEffects{NoRetain: true, Callbacks: []evm.ScopedCallback{{Argument: 0, Domain: "test.buffer"}}}, Call: func(c *evm.Call) error { defer end(); return c.RunCallback(c.Argument(0)) }},
+		{Name: "UnknownEnd", Call: func(*evm.VM) error { end(); return nil }},
+		{Name: "Keep", Signature: evm.Signature{Params: []*values.Type{values.StringType}}, Call: func(c *evm.VM) error { *kept = c.CallArgument(0).AsString(); return nil }},
+		{Name: "Write", Signature: evm.Signature{Params: []*values.Type{callback.Type}}, Ownership: &evm.OwnershipEffects{NoRetain: true, Callbacks: []evm.ScopedCallback{{Argument: 0, Domain: "test.buffer"}}}, Call: func(c *evm.VM) error { defer end(); return evmtest.Callback(c, c.CallArgument(0), nil, nil) }},
 	}}
 	return pkg, data, kept
 }
@@ -70,7 +71,7 @@ func TestOwnershipBoundaries(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		vm := evm.New(program)
+		vm := evmtest.New(program)
 		var out [1]values.Value
 		for _, flag := range []uint64{0, 1} {
 			copy(data, "live")
@@ -119,7 +120,7 @@ func TestBorrowReadAllocationsAndBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	vm.Limits.Steps = 1 << 30
 	var out [1]values.Value
 	args := []values.Value{values.Int(10000)}
@@ -171,9 +172,13 @@ func TestRecordCellOwnership(t *testing.T) {
 			}
 			rt := pkg.Record(model, false).Pointer
 			pkg.Functions = append(pkg.Functions,
-				evm.ExternalFunction{Name: "Read", Signature: evm.Signature{Results: []*values.Type{rt}}, Ownership: &evm.OwnershipEffects{NoRetain: true, NoInvalidate: true}, Direct: evm.DirectBinding{Op: evm.OpCallHostS, Call: func(c *evm.Call, _, _ values.Value) (values.Value, error) { return c.RecordValue(model, row) }}},
-				evm.ExternalFunction{Name: "Tuple", Signature: evm.Signature{Results: []*values.Type{rt, values.Boolean}}, Call: func(c *evm.Call) error { c.SetResult(0, row.Value()); c.SetResult(1, values.Bool(true)); return nil }},
-				evm.ExternalFunction{Name: "End", Call: func(*evm.Call) error { clear(data); return nil }},
+				evm.ExternalFunction{Name: "Read", Signature: evm.Signature{Results: []*values.Type{rt}}, Ownership: &evm.OwnershipEffects{NoRetain: true, NoInvalidate: true}, Direct: evm.DirectBinding{Op: evm.OpCallHostS, Call: func(c *evm.VM, _, _ values.Value) (values.Value, error) { return c.RecordValue(model, row) }}},
+				evm.ExternalFunction{Name: "Tuple", Signature: evm.Signature{Results: []*values.Type{rt, values.Boolean}}, Call: func(c *evm.VM) error {
+					c.SetCallResult(0, row.Value())
+					c.SetCallResult(1, values.Bool(true))
+					return nil
+				}},
+				evm.ExternalFunction{Name: "End", Call: func(*evm.VM) error { clear(data); return nil }},
 			)
 			mod, err := (evmcompiler.Options{NoOptimization: debug}).Compile("cells.go", `import("db";"fmt")
 func Scan(n int) uint64 { var sum uint64; for i:=0;i<n;i++ {r:=db.Read();sum+=r.count+uint64(len(r.name))};return sum }
@@ -196,7 +201,7 @@ func TypedNil()bool {var r *db.Row;var x any=r;return x!=nil && x.(*db.Row)==nil
 			if err != nil {
 				t.Fatal(err)
 			}
-			vm := evm.New(p)
+			vm := evmtest.New(p)
 			var out [1]values.Value
 			run := func(name string, args ...values.Value) {
 				t.Helper()

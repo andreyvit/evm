@@ -9,6 +9,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/kvo/codec/row2"
 	"github.com/andreyvit/evm/values"
@@ -31,7 +32,7 @@ func TestSchemaPackage(t *testing.T) {
 	delta.Set([]row2.Step{{Key: count}}, values.Uint(9), row2.Word)
 	delta.Set([]row2.Step{{Key: note}}, values.Bytes([]byte("nine")), row2.Data)
 	v := scope.Read(model, delta.Snapshot())
-	m.Functions = []evm.ExternalFunction{{On: row, Name: "Find", Signature: evm.Signature{Results: []*values.Type{row.Pointer}}, Call: func(c *evm.Call) error { c.SetResult(0, v); return nil }}}
+	m.Functions = []evm.ExternalFunction{{On: row, Name: "Find", Signature: evm.Signature{Results: []*values.Type{row.Pointer}}, Call: func(c *evm.VM) error { c.SetCallResult(0, v); return nil }}}
 	bh := evm.Package{Path: "bh", Functions: []evm.ExternalFunction{{Name: "Read", Signature: evm.Signature{Results: []*values.Type{row.Pointer}}, Call: m.Functions[0].Call}}}
 	for _, src := range []string{
 		`import schema "m"; func Run()uint64 {find:=schema.CustomerRow.Find;return find().count}`,
@@ -48,7 +49,7 @@ func TestSchemaPackage(t *testing.T) {
 			t.Fatal(err)
 		}
 		var out [1]values.Value
-		if err := evm.New(program).Run(ctx, "Run", nil, out[:]); err != nil || out[0].R != 9 {
+		if err := evmtest.New(program).Run(ctx, "Run", nil, out[:]); err != nil || out[0].R != 9 {
 			t.Fatal(out, err)
 		}
 	}
@@ -92,7 +93,7 @@ func TestModelJSONDetachesNestedData(t *testing.T) {
 	edit.Set([]row2.Step{{Key: labels}}, values.Bytes(list.BytesWritten()), row2.Data)
 	ctx, scope := evm.WithRecords(context.Background())
 	defer scope.Close()
-	pkg.Functions = append(pkg.Functions, evm.ExternalFunction{On: pkg.Record(model, false), Name: "Get", Signature: evm.Signature{Results: []*values.Type{pkg.Record(model, false).Pointer}}, Call: func(c *evm.Call) error { return c.SetReadRecordResult(model, edit.Snapshot()) }}, evm.ExternalFunction{Name: "Close", Call: func(c *evm.Call) error { scope.Close(); return nil }})
+	pkg.Functions = append(pkg.Functions, evm.ExternalFunction{On: pkg.Record(model, false), Name: "Get", Signature: evm.Signature{Results: []*values.Type{pkg.Record(model, false).Pointer}}, Call: func(c *evm.VM) error { return c.SetReadRecordResult(model, edit.Snapshot()) }}, evm.ExternalFunction{Name: "Close", Call: func(c *evm.VM) error { scope.Close(); return nil }})
 	m, err := evmcompiler.Compile("main.go", `import "m";func Main()any{v:=m.Document.Get().ToJSON();m.Close();v["title"]="copy";return v}`, pkg)
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +103,7 @@ func TestModelJSONDetachesNestedData(t *testing.T) {
 		t.Fatal(err)
 	}
 	var result [1]values.Value
-	if err := evm.New(program).Run(ctx, "Main", nil, result[:]); err != nil {
+	if err := evmtest.New(program).Run(ctx, "Main", nil, result[:]); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := program.EncodeJSON(context.Background(), result[0], 1024)

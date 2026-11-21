@@ -15,21 +15,21 @@ func TimePackage() Package {
 	p.Constants = append(p.Constants,
 		ExternalConstant{Name: "RFC3339", Type: values.StringType, Value: values.String(time.RFC3339)},
 		ExternalConstant{Name: "RFC3339Nano", Type: values.StringType, Value: values.String(time.RFC3339Nano)})
-	p.Methods = append(p.Methods, ExternalMethod{Name: "Format", Receiver: values.TimeType, Ownership: &OwnershipEffects{NoRetain: true, NoInvalidate: true}, Signature: Signature{Params: []*values.Type{values.StringType}, Results: []*values.Type{values.StringType}}, Call: func(c *Call) error {
-		text := c.Argument(0).AsTime().Format(c.Argument(1).AsString())
+	p.Methods = append(p.Methods, ExternalMethod{Name: "Format", Receiver: values.TimeType, Ownership: &OwnershipEffects{NoRetain: true, NoInvalidate: true}, Signature: Signature{Params: []*values.Type{values.StringType}, Results: []*values.Type{values.StringType}}, Call: func(c *VM) error {
+		text := c.CallArgument(0).AsTime().Format(c.CallArgument(1).AsString())
 		if err := c.ChargeAllocation(uint64(len(text))); err != nil {
 			return err
 		}
-		c.SetResult(0, values.String(text))
+		c.SetCallResult(0, values.String(text))
 		return nil
 	}})
-	add := func(name string, params []*values.Type, result *values.Type, f func(*Call) values.Value) {
-		p.Methods = append(p.Methods, ExternalMethod{Ownership: &OwnershipEffects{NoRetain: true, NoInvalidate: true}, Name: name, Receiver: values.TimeType, Signature: Signature{Params: params, Results: []*values.Type{result}}, Call: func(c *Call) error { c.SetResult(0, f(c)); return nil }})
+	add := func(name string, params []*values.Type, result *values.Type, f func(*VM) values.Value) {
+		p.Methods = append(p.Methods, ExternalMethod{Ownership: &OwnershipEffects{NoRetain: true, NoInvalidate: true}, Name: name, Receiver: values.TimeType, Signature: Signature{Params: params, Results: []*values.Type{result}}, Call: func(c *VM) error { c.SetCallResult(0, f(c)); return nil }})
 	}
-	add("IsZero", nil, values.Boolean, func(c *Call) values.Value { return values.Bool(c.Argument(0).AsTime().IsZero()) })
+	add("IsZero", nil, values.Boolean, func(c *VM) values.Value { return values.Bool(c.CallArgument(0).AsTime().IsZero()) })
 	for _, name := range []string{"Before", "After", "Equal"} {
-		add(name, []*values.Type{values.TimeType}, values.Boolean, func(c *Call) values.Value {
-			a, b := c.Argument(0).AsTime(), c.Argument(1).AsTime()
+		add(name, []*values.Type{values.TimeType}, values.Boolean, func(c *VM) values.Value {
+			a, b := c.CallArgument(0).AsTime(), c.CallArgument(1).AsTime()
 			switch name {
 			case "Before":
 				return values.Bool(a.Before(b))
@@ -41,8 +41,8 @@ func TimePackage() Package {
 		})
 	}
 	for _, name := range []string{"Unix", "UnixMilli", "UnixMicro", "UnixNano"} {
-		add(name, nil, values.Int64, func(c *Call) values.Value {
-			t := c.Argument(0).AsTime()
+		add(name, nil, values.Int64, func(c *VM) values.Value {
+			t := c.CallArgument(0).AsTime()
 			switch name {
 			case "Unix":
 				return values.Int(t.Unix())
@@ -80,14 +80,14 @@ func WithTimePackage(packages []Package) ([]Package, error) {
 
 // Native slots contain Go time.Time; logical VM values own their snapshots.
 var nativeTimeCodec = &NativeValueCodec{
-	Decode: func(c *Call, v values.Value) (values.Value, error) {
+	Decode: func(c *VM, v values.Value) (values.Value, error) {
 		t := *(*time.Time)(v.P)
 		if err := c.ChargeAllocation(values.NativeTimeAllocBytes(t)); err != nil {
 			return values.Value{}, err
 		}
 		return values.NativeTime(t), nil
 	},
-	Encode: func(c *Call, v values.Value) (values.Value, error) {
+	Encode: func(c *VM, v values.Value) (values.Value, error) {
 		if v == (values.Value{}) {
 			return v, nil
 		}

@@ -121,9 +121,9 @@ func (vm *VM) nativeMutableField(f frame, op *ExtendedOp, r kvo.Record, b *execu
 		return err
 	}
 	if op.Kind == ExtendedSetKey {
-		return storeNative(&vm.call, shape, ptr, vm.read(f, op.In[1]), &b.allocated, b.limits)
+		return storeNative(vm, shape, ptr, vm.read(f, op.In[1]), &b.allocated, b.limits)
 	}
-	value, err := loadNative(&vm.call, shape, ptr, &b.allocated, b.limits)
+	value, err := loadNative(vm, shape, ptr, &b.allocated, b.limits)
 	if err == nil {
 		vm.write(f, op.Out[0], value)
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/andreyvit/evm/evmbind/internal/modeldata"
 	"github.com/andreyvit/evm/evmbind/internal/modelfielddata"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/kvo/codec/row2"
 	"github.com/andreyvit/evm/values"
@@ -67,10 +68,10 @@ func Store(c *ctx.Context,row *db.Customer){c.Other=row}
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(program).RunWithBudget(context.Background(), "Read", []values.Value{arg}, nil, evm.Budget{Allocations: 100, AllocationBytes: 4096}); err != nil {
+	if err := evmtest.New(program).RunWithBudget(context.Background(), "Read", []values.Value{arg}, nil, evm.Budget{Allocations: 100, AllocationBytes: 4096}); err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(program).Run(context.Background(), "Run", []values.Value{arg}, nil); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", []values.Value{arg}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if c.Customer != nil || c.Other != row || row.Hidden != 42 || c.Value.Hidden != 42 {
@@ -78,7 +79,7 @@ func Store(c *ctx.Context,row *db.Customer){c.Other=row}
 	}
 	binding := kvo.Bind(reflect.TypeFor[BoundModel](), models.Records[0].Model)
 	encoded := binding.Encoded(row2.Trusted(binding.Encode(nil, reflect.ValueOf(row).Elem(), row2.Fast2)))
-	err = evm.New(program).Run(context.Background(), "Store", []values.Value{arg, encoded.Value()}, nil)
+	err = evmtest.New(program).Run(context.Background(), "Store", []values.Value{arg, encoded.Value()}, nil)
 	if err == nil || !strings.Contains(err.Error(), "explicit conversion") {
 		t.Fatal("encoded row silently decoded", err)
 	}

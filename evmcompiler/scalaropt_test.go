@@ -10,6 +10,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -50,7 +51,7 @@ func Branch(a []int, i int) int {
 	return x+a[i]
 }`
 	var cells [2]values.Value
-	mutate := func(*evm.Call) error {
+	mutate := func(*evm.VM) error {
 		cells[0] = values.Int(11)
 		return nil
 	}
@@ -69,7 +70,7 @@ func Branch(a []int, i int) int {
 		if err != nil {
 			t.Fatal(err)
 		}
-		vm := evm.New(p)
+		vm := evmtest.New(p)
 		slice := values.SliceValue(unsafe.Pointer(&cells[0]), 2, 2)
 		var out [1]values.Value
 		for _, tc := range []struct {
@@ -130,13 +131,13 @@ func TestScalarSimplification(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		vm := evm.New(p)
+		vm := evmtest.New(p)
 		var out [1]values.Value
 		if err := vm.Run(context.Background(), "Next", []values.Value{values.Int(4)}, out[:]); err != nil || out[0].R != 40 {
 			t.Fatalf("raw=%v Next(4): %v %v", raw, out, err)
 		}
-		for j := 1; j <= 3; j++ {
-			if err := vm.Run(context.Background(), "Run", []values.Value{values.Int(-9), values.Int(5)}, out[:]); err != nil || int(out[0].R) != -90+j {
+		for range 3 {
+			if err := vm.Run(context.Background(), "Run", []values.Value{values.Int(-9), values.Int(5)}, out[:]); err != nil || int(out[0].R) != -89 {
 				t.Fatalf("raw=%v side effects: %v %v", raw, out, err)
 			}
 		}

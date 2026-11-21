@@ -7,6 +7,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/kvo/codec/msgpack"
 	"github.com/andreyvit/evm/values"
@@ -42,16 +43,16 @@ func TestRecordObjectListsPreserveNils(t *testing.T) {
 				t.Fatal(err)
 			}
 			seen := 0
-			pkg.Functions = append(pkg.Functions, evm.ExternalFunction{Name: "Observe", Signature: evm.Signature{Params: []*values.Type{pkg.Record(root, false).Pointer, pkg.Record(child, false).Pointer}}, Call: func(c *evm.Call) error {
-				parent, err := c.Record(c.Argument(0), root)
+			pkg.Functions = append(pkg.Functions, evm.ExternalFunction{Name: "Observe", Signature: evm.Signature{Params: []*values.Type{pkg.Record(root, false).Pointer, pkg.Record(child, false).Pointer}}, Call: func(c *evm.VM) error {
+				parent, err := c.Record(c.CallArgument(0), root)
 				if err != nil {
 					return err
 				}
-				item, err := c.Record(c.Argument(1), child)
+				item, err := c.Record(c.CallArgument(1), child)
 				if err != nil {
 					return err
 				}
-				if _, err := c.Record(c.Argument(0), child); err == nil {
+				if _, err := c.Record(c.CallArgument(0), child); err == nil {
 					t.Fatal("wrong model accepted")
 				}
 				if zero, err := c.Record(values.Value{}, root); err != nil || !zero.Missing() {
@@ -75,7 +76,7 @@ func TestRecordObjectListsPreserveNils(t *testing.T) {
 			module, err := evmcompiler.Compile("objects.go", `import "db"
  var saved *db.Root
  var items []*db.Child
- func Run(row *db.Root){saved=row;items=row.children;Check()}
+ func Run(row *db.Root)func(){saved=row;items=row.children;Check();r,children:=saved,items;return func(){saved=r;items=children;Check()}}
  func Check(){if len(items)!=3 || items[0].name!="first" || items[1]!=nil || items[2].name!="last"{panic("object list changed")};n:=0;for _,item:=range saved.children{if item==nil{n++}};if n!=1{panic("nil iteration")};db.Observe(saved,items[0]);copy:=*saved;db.Observe(&copy,items[0])}
  func NativeLists(row *db.Root)bool {
   cells:=row.children
@@ -95,18 +96,23 @@ func TestRecordObjectListsPreserveNils(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			vm := evm.New(program)
+			vm := evmtest.New(program)
 			var raw []byte
 			row := projection.Record(reflect.ValueOf(source))
 			if !native {
 				raw = msgpack.Encode(nil, reflect.ValueOf(source))
 				row = projection.MessagePack(raw)
 			}
-			if err := vm.Run(context.Background(), "Run", []values.Value{row.Value()}, nil); err != nil {
+			var saved [1]values.Value
+			if err := vm.Run(context.Background(), "Run", []values.Value{row.Value()}, saved[:]); err != nil {
 				t.Fatal(err)
 			}
 			clear(raw)
-			if err := vm.Run(context.Background(), "Check", nil, nil); err != nil {
+			check, err := program.Callable(saved[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := vm.VM.Run(check, nil); err != nil {
 				t.Fatal(err)
 			}
 			if seen != 4 {

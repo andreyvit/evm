@@ -19,10 +19,10 @@ type DirectBinding struct {
 	Op   Opcode
 	Call DirectFunc
 	// Window also exposes the ordinary R/P argument window through Call.
-	// Generated package functions use it for their leading *evm.Call.
+	// Generated package functions use it for their leading *evm.VM.
 	Window bool
 }
-type DirectFunc func(*Call, values.Value, values.Value) (values.Value, error)
+type DirectFunc func(*VM, values.Value, values.Value) (values.Value, error)
 
 // DirectUnary binds an infallible word-to-word operation through DirectBinding.
 // Direct calls use a specialized instruction; indirect and deferred calls use
@@ -32,7 +32,7 @@ func DirectUnary(fn func(uint64) uint64) DirectBinding {
 	if fn == nil {
 		panic("evm: nil direct unary function")
 	}
-	return DirectBinding{Op: OpCallHostUU, word: fn, Call: func(_ *Call, x, _ values.Value) (values.Value, error) {
+	return DirectBinding{Op: OpCallHostUU, word: fn, Call: func(_ *VM, x, _ values.Value) (values.Value, error) {
 		return values.Uint(fn(x.R)), nil
 	}}
 }
@@ -291,23 +291,23 @@ func validateDirectBindings(packages []Package, kinds map[*values.Type]values.Re
 }
 
 // Indirect, deferred and wide-index calls enter with the ordinary ABI.
-func directWindowCall(c *Call) error {
+func directWindowCall(c *VM) error {
 	var x, y values.Value
 	switch len(c.native.Signature.Params) {
 	case 2:
-		y = c.Argument(1)
+		y = c.CallArgument(1)
 		fallthrough
 	case 1:
-		x = c.Argument(0)
+		x = c.CallArgument(0)
 	}
 	v, err := c.directResult(x, y)
 	if err == nil && len(c.native.Signature.Results) != 0 {
-		c.SetResult(0, v)
+		c.SetCallResult(0, v)
 	}
 	return err
 }
 
-func (c *Call) directResult(x, y values.Value) (v values.Value, err error) {
+func (c *VM) directResult(x, y values.Value) (v values.Value, err error) {
 	leaveNativeCall := c.enterNativeCall()
 	defer leaveNativeCall()
 	defer recoverGuestErrorPanic(c, &err)
@@ -360,13 +360,17 @@ func (vm *VM) invokeDirect(cur *frame, ins Instruction, budget *executionBudget)
 	default:
 		x = hostArg(h.first, b, r, p)
 	}
-	c := &vm.call
+	c := vm
+	c.usedR, c.usedP = cur.rb+f.rSize, cur.pb+f.pSize
 	c.native, c.Position, c.Context = g, f.position(cur.pc-1), budget.ctx
-	// A generated package function receives a public *Call. Preserve its
+	// A generated package function receives a public *VM. Preserve its
 	// complete window, including independently packed raw and pointer banks.
 	if g.Direct.Window {
-		c.R = vm.directR[:g.rSize:g.rSize]
-		c.P = vm.directP[:g.pSize:g.pSize]
+		if vm.direct == nil {
+			vm.direct = new(directWindow)
+		}
+		c.R = vm.direct.r[:g.rSize:g.rSize]
+		c.P = vm.direct.p[:g.pSize:g.pSize]
 		clear(c.R)
 		clear(c.P)
 		for i, slot := range g.params.Slots {

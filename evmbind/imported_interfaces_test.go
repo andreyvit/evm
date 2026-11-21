@@ -15,6 +15,7 @@ import (
 	"github.com/andreyvit/evm/evmbind/internal/interfaceconsumer"
 	"github.com/andreyvit/evm/evmbind/internal/interfacedep"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -29,14 +30,14 @@ func (v *importedNamedValue) Label() string {
 
 type importedNamedHost struct{ value interfacedep.Named }
 
-func (h *importedNamedHost) Get(*evm.Call) interfacedep.Named                          { return h.value }
-func (h *importedNamedHost) Echo(_ *evm.Call, x interfacedep.Named) interfacedep.Named { return x }
+func (h *importedNamedHost) Get(*evm.VM) interfacedep.Named                          { return h.value }
+func (h *importedNamedHost) Echo(_ *evm.VM, x interfacedep.Named) interfacedep.Named { return x }
 
-func (h *importedNamedHost) EchoLocal(_ *evm.Call, x interfaceconsumer.LocalNamed) interfaceconsumer.LocalNamed {
+func (h *importedNamedHost) EchoLocal(_ *evm.VM, x interfaceconsumer.LocalNamed) interfaceconsumer.LocalNamed {
 	return x
 }
 
-func (h *importedNamedHost) Any(*evm.Call) any { return h.value }
+func (h *importedNamedHost) Any(*evm.VM) any { return h.value }
 
 func TestImportedInterfaces(t *testing.T) {
 	dep, err := evmbind.New("domain", interfacedep.Source, evmbind.Options{Selective: true, Types: []reflect.Type{reflect.TypeFor[interfacedep.Named](), reflect.TypeFor[interfacedep.NamedValue]()}, Methods: map[string][]string{"NamedValue": {"Label"}}, Implementations: []evmbind.Implementation{evmbind.Pointer[importedNamedValue]()}})
@@ -75,34 +76,34 @@ func TestImportedInterfaces(t *testing.T) {
 			t.Fatal(err)
 		}
 		var out [1]values.Value
-		if err := evm.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
+		if err := evmtest.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
 			t.Fatal(err)
 		}
 		if out[0].R != 1 {
 			t.Fatal("imported interface identity or nil changed")
 		}
 		host.value = (*importedNamedValue)(nil)
-		if err := evm.New(program).Run(context.Background(), "TypedNil", nil, out[:]); err != nil {
+		if err := evmtest.New(program).Run(context.Background(), "TypedNil", nil, out[:]); err != nil {
 			t.Fatal(err)
 		}
 		if out[0].R != 1 {
 			t.Fatal("typed nil changed")
 		}
 		host.value = &interfacedep.NamedValue{Text: "native"}
-		if err := evm.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
+		if err := evmtest.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
 			t.Fatal(err)
 		}
 		if out[0].R != 1 {
 			t.Fatal("declared native interface identity changed")
 		}
-		if err := evm.New(program).Run(context.Background(), "Recover", nil, out[:]); err != nil {
+		if err := evmtest.New(program).Run(context.Background(), "Recover", nil, out[:]); err != nil {
 			t.Fatal(err)
 		}
 		if out[0].AsString() != "native" {
 			t.Fatal(out[0].AsString())
 		}
 		host.value = (*interfacedep.NamedValue)(nil)
-		if err := evm.New(program).Run(context.Background(), "TypedNil", nil, out[:]); err != nil {
+		if err := evmtest.New(program).Run(context.Background(), "TypedNil", nil, out[:]); err != nil {
 			t.Fatal(err)
 		}
 		if out[0].R != 1 {

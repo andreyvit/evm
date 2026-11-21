@@ -8,6 +8,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/nativebind"
 	"github.com/andreyvit/evm/values"
 )
@@ -31,16 +32,16 @@ func TestNativeGenericReceiverMethods(t *testing.T) {
 		ptr.Type = values.NewType("*"+shape.Type.Name(), values.Pair)
 		ptr.Native = nativebind.Layout(reflect.PointerTo(native), nil, true)
 		host.Types = append(host.Types, evm.TypeDecl{SourceName: "Index", TypeArgs: []*values.Type{tc.scalar.Type}, Shape: shape}, evm.TypeDecl{Shape: ptr})
-		host.Values = append(host.Values, evm.ExternalValue{Name: tc.name, Type: ptr.Type, Read: func(c *evm.Call) error {
-			c.SetResult(0, values.Value{R: values.NativeAddress, P: reflect.ValueOf(tc.value).UnsafePointer()})
+		host.Values = append(host.Values, evm.ExternalValue{Name: tc.name, Type: ptr.Type, Read: func(c *evm.VM) error {
+			c.SetCallResult(0, values.Value{R: values.NativeAddress, P: reflect.ValueOf(tc.value).UnsafePointer()})
 			return nil
 		}})
-		host.Methods = append(host.Methods, evm.ExternalMethod{Name: "Read", Receiver: ptr.Type, Signature: evm.Signature{Results: []*values.Type{tc.scalar.Type}}, Call: func(c *evm.Call) error {
-			v := reflect.NewAt(native, c.Argument(0).P).Elem().Field(0)
+		host.Methods = append(host.Methods, evm.ExternalMethod{Name: "Read", Receiver: ptr.Type, Signature: evm.Signature{Results: []*values.Type{tc.scalar.Type}}, Call: func(c *evm.VM) error {
+			v := reflect.NewAt(native, c.CallArgument(0).P).Elem().Field(0)
 			if v.Kind() == reflect.String {
-				c.SetResult(0, values.String(v.String()))
+				c.SetCallResult(0, values.String(v.String()))
 			} else {
-				c.SetResult(0, values.Int(v.Int()))
+				c.SetCallResult(0, values.Int(v.Int()))
 			}
 			return nil
 		}})
@@ -85,7 +86,7 @@ func TestNativeGenericReceiverMethods(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if out[0].R != 1 {

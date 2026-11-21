@@ -256,67 +256,61 @@ var Bindings = evmbind.Static{Fingerprint: "aeeeb42cd2556e4891640dc89ef7e07a45c5
 	Calls: map[string]evmbind.Wrapper{
 		"CheckSlices": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				CheckSlices(*evm.Call, []string, []byte, []int64) bool
-			}).CheckSlices(f.Call, readCollection12(f, f.Argument(0)), readCollection10(f, f.Argument(1)), readCollection11(f, f.Argument(2)))
-			f.SetResult(0, writeScalarBool(f, r0))
+				CheckSlices(*evm.VM, []string, []byte, []int64) bool
+			}).CheckSlices(f.VM, readCollection12(f, f.CallArgument(0)), readCollection10(f, f.CallArgument(1)), readCollection11(f, f.CallArgument(2)))
+			f.SetCallResult(0, writeScalarBool(f, r0))
 		},
 		"Echo": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				Echo(*evm.Call, *dep0.BoundModel) *dep0.BoundModel
-			}).Echo(f.Call, readMutableModel5(f, f.Argument(0)))
-			f.SetResult(0, writeMutableModel5(f, r0))
+				Echo(*evm.VM, *dep0.BoundModel) *dep0.BoundModel
+			}).Echo(f.VM, readMutableModel5(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeMutableModel5(f, r0))
 		},
 		"EchoAny": func(f *evmbind.Frame) {
-			r0 := f.Host.(interface{ EchoAny(*evm.Call, any) any }).EchoAny(f.Call, readScalarAny(f, f.Argument(0)))
-			f.SetResult(0, writeScalarAny(f, r0))
+			r0 := f.Host.(interface{ EchoAny(*evm.VM, any) any }).EchoAny(f.VM, readScalarAny(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeScalarAny(f, r0))
 		},
 		"Get": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				Get(*evm.Call) *dep0.BoundModel
-			}).Get(f.Call)
-			f.SetResult(0, writeMutableModel5(f, r0))
+				Get(*evm.VM) *dep0.BoundModel
+			}).Get(f.VM)
+			f.SetCallResult(0, writeMutableModel5(f, r0))
 		},
 		"InterfaceService": func(f *evmbind.Frame) {
-			r0 := f.Host.(interface {
-				InterfaceService(*evm.Call) api.RowService
-			}).InterfaceService(f.Call)
-			f.SetResult(0, writeTypeRowService(f, r0))
+			r0 := f.Host.(interface{ InterfaceService(*evm.VM) api.RowService }).InterfaceService(f.VM)
+			f.SetCallResult(0, writeTypeRowService(f, r0))
 		},
 		"Ordinary": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				Ordinary(*evm.Call) *dep0.BoundModel
-			}).Ordinary(f.Call)
-			f.SetResult(0, writePtrImported4(f, r0))
+				Ordinary(*evm.VM) *dep0.BoundModel
+			}).Ordinary(f.VM)
+			f.SetCallResult(0, writePtrImported4(f, r0))
 		},
 		"Other": func(f *evmbind.Frame) {
-			r0 := f.Host.(interface {
-				Other(*evm.Call) *dep0.Alternate
-			}).Other(f.Call)
-			f.SetResult(0, writeMutableModel3(f, r0))
+			r0 := f.Host.(interface{ Other(*evm.VM) *dep0.Alternate }).Other(f.VM)
+			f.SetCallResult(0, writeMutableModel3(f, r0))
 		},
 		"*Service.Replace": func(f *evmbind.Frame) {
-			r0 := readPtrService(f, f.Argument(0)).Replace(readMutableModel5(f, f.Argument(1)))
-			f.SetResult(0, writeMutableModel5(f, r0))
+			r0 := readPtrService(f, f.CallArgument(0)).Replace(readMutableModel5(f, f.CallArgument(1)))
+			f.SetCallResult(0, writeMutableModel5(f, r0))
 		},
 		"ServiceInstance": func(f *evmbind.Frame) {
-			r0 := f.Host.(interface{ ServiceInstance(*evm.Call) *api.Service }).ServiceInstance(f.Call)
-			f.SetResult(0, writePtrService(f, r0))
+			r0 := f.Host.(interface{ ServiceInstance(*evm.VM) *api.Service }).ServiceInstance(f.VM)
+			f.SetCallResult(0, writePtrService(f, r0))
 		},
 		"Sink": func(f *evmbind.Frame) {
-			r0 := f.Host.(interface {
-				Sink(*evm.Call) *api.SliceSink
-			}).Sink(f.Call)
-			f.SetResult(0, writePtrSliceSink(f, r0))
+			r0 := f.Host.(interface{ Sink(*evm.VM) *api.SliceSink }).Sink(f.VM)
+			f.SetCallResult(0, writePtrSliceSink(f, r0))
 		},
 		"RowService.Replace": func(f *evmbind.Frame) {
-			r0 := f.Receiver.(api.RowService).Replace(readMutableModel5(f, f.Argument(1)))
-			f.SetResult(0, writeMutableModel5(f, r0))
+			r0 := f.Receiver.(api.RowService).Replace(readMutableModel5(f, f.CallArgument(1)))
+			f.SetCallResult(0, writeMutableModel5(f, r0))
 		},
 	},
 	Direct: map[string]evmbind.DirectFactory{
 		"ServiceInstance": func(host any) evm.DirectFunc {
-			h := host.(interface{ ServiceInstance(*evm.Call) *api.Service })
-			return func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+			h := host.(interface{ ServiceInstance(*evm.VM) *api.Service })
+			return func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 				defer evmbind.Catch("ServiceInstance", &err)
 				out := h.ServiceInstance(c)
 				v = writePtrService(nil, out)
@@ -324,10 +318,8 @@ var Bindings = evmbind.Static{Fingerprint: "aeeeb42cd2556e4891640dc89ef7e07a45c5
 			}
 		},
 		"Sink": func(host any) evm.DirectFunc {
-			h := host.(interface {
-				Sink(*evm.Call) *api.SliceSink
-			})
-			return func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+			h := host.(interface{ Sink(*evm.VM) *api.SliceSink })
+			return func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 				defer evmbind.Catch("Sink", &err)
 				out := h.Sink(c)
 				v = writePtrSliceSink(nil, out)

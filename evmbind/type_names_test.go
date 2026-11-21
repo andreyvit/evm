@@ -9,6 +9,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -62,7 +63,7 @@ func TestNativeTypeExportNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := make([]values.Value, 1)
-	if err := evm.New(p).Run(context.Background(), "Run", nil, result); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, result); err != nil {
 		t.Fatal(err)
 	}
 	if service.count != 10 || data.Count != 10 || result[0].AsInt() != 20 {

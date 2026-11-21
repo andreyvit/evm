@@ -132,11 +132,11 @@ func (m *MapEditor[K, V]) Len() int {
 }
 
 func ownCodecValue[T any](codec values.Codec[T], v T) T {
-	x := codec.Encode(v)
+	x := codec.Pack(v)
 	if x.P != nil {
 		x = values.Bytes(bytes.Clone(x.AsBytes()))
 	}
-	return codec.Decode(x)
+	return codec.Unpack(x)
 }
 func (c *MapCodec[K, V]) capture(v V) V {
 	if c.captureValue != nil {
@@ -169,7 +169,7 @@ func (m *MapEditor[K, V]) remember(key K, change mapChange[V]) {
 func (m *MapEditor[K, V]) Set(key K, v V) {
 	m.check()
 	if typ := m.codec.typ.ItemType(); typ.ValueKind() == ValueKindWord || typ.ValueKind() == ValueKindScalarData {
-		if old, ok := m.Lookup(key); ok && equalCodecValue(m.codec.value.Encode(old), m.codec.value.Encode(v)) {
+		if old, ok := m.Lookup(key); ok && equalCodecValue(m.codec.value.Pack(old), m.codec.value.Pack(v)) {
 			return
 		}
 	}
@@ -183,7 +183,7 @@ func (m *MapEditor[K, V]) Set(key K, v V) {
 		} else if reflect.TypeFor[V]() == m.plan.typ.Elem() {
 			native = reflect.ValueOf(&v).Elem()
 		} else {
-			native = nativeCollectionAssignment(m.plan.elem, m.codec.value.Encode(v))
+			native = nativeCollectionAssignment(m.plan.elem, m.codec.value.Pack(v))
 		}
 	} else if m.plan != nil {
 		change.raw = m.encodeMessagePackValue(v)
@@ -249,7 +249,7 @@ func (m *MapEditor[K, V]) encodeMessagePackValue(v V) []byte {
 	if r, ok := any(v).(Record); ok {
 		return encodeRecordMessagePack(m.plan.elem, r)
 	}
-	return encodeMessagePackLeaf(m.plan.elem, row2.Step{Options: row2.Present}, m.codec.value.Encode(v))
+	return encodeMessagePackLeaf(m.plan.elem, row2.Step{Options: row2.Present}, m.codec.value.Pack(v))
 }
 func (m *MapEditor[K, V]) messagePack() []byte {
 	if m.cachedMessagePack != nil {
@@ -268,7 +268,7 @@ func (m *MapEditor[K, V]) messagePack() []byte {
 				if !ok {
 					break
 				}
-				k := m.codec.key.Decode(m.plan.mapKey.messagePackScalar(key))
+				k := m.codec.key.Unpack(m.plan.mapKey.messagePackScalar(key))
 				if _, changed := m.changes[k]; !changed && !yield(key, v) {
 					return
 				}
@@ -288,7 +288,7 @@ func (m *MapEditor[K, V]) messagePack() []byte {
 					raw = msgpack.Encode(nil, c.child.view.objectValue())
 				}
 			}
-			key := encodeMessagePackLeaf(m.plan.mapKey, row2.Step{Options: row2.Present}, m.codec.key.Encode(k))
+			key := encodeMessagePackLeaf(m.plan.mapKey, row2.Step{Options: row2.Present}, m.codec.key.Pack(k))
 			if !yield(msgpack.Trusted(key), msgpack.Trusted(raw)) {
 				return
 			}

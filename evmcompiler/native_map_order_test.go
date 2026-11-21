@@ -7,6 +7,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -26,7 +27,7 @@ func TestNativeMapKeyDeclarationOrder(t *testing.T) {
 			t.Fatal(err)
 		}
 		out := make([]values.Value, 1)
-		if err := evm.New(program).Run(context.Background(), "Run", nil, out); err != nil || out[0].AsInt() != 7 {
+		if err := evmtest.New(program).Run(context.Background(), "Run", nil, out); err != nil || out[0].AsInt() != 7 {
 			t.Fatal(out, err)
 		}
 	}
@@ -44,7 +45,7 @@ func TestNativeMapRejectsNoncomparableDeclaredKey(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "invalid map key") {
 		t.Fatal(err)
 	}
-	entry := evm.Package{Path: "entry", Functions: []evm.ExternalFunction{{Name: "Get", Signature: evm.Signature{Results: []*values.Type{values.AnyType}}, DynamicTypes: []*values.Type{dict.Type}, Call: func(*evm.Call) error { return nil }}}}
+	entry := evm.Package{Path: "entry", Functions: []evm.ExternalFunction{{Name: "Get", Signature: evm.Signature{Results: []*values.Type{values.AnyType}}, DynamicTypes: []*values.Type{dict.Type}, Call: func(*evm.VM) error { return nil }}}}
 	_, err = evmcompiler.Compile("dynamic.go", `import "entry";func Run(){entry.Get()}`, entry, pkg)
 	if err == nil || !strings.Contains(err.Error(), "invalid map key") {
 		t.Fatal("dynamic map key escaped validation", err)

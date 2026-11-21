@@ -141,7 +141,7 @@ func TestStringFromNativeRuneView(t *testing.T) {
 func TestBorrowedByteViewAliases(t *testing.T) {
 	data := []byte("abcd")
 	b := &executionBudget{limits: Limits{AllocationBytes: 1024, Allocations: 3}}
-	c := Call{budget: b}
+	c := VM{budget: b}
 	v, err := c.BorrowBytes(data[:3])
 	if err != nil {
 		t.Fatal(err)

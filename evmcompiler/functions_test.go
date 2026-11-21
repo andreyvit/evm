@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"runtime"
 	"testing"
 
@@ -74,8 +75,8 @@ func TestGoNilFunctionsAndMethodReceivers(t *testing.T) {
 }
 func TestGoNativeFunctionValueAndClosureGC(t *testing.T) {
 	pkg := evm.Package{Path: "h", Functions: []evm.ExternalFunction{
-		{Name: "Double", Signature: evm.Signature{Params: []*values.Type{values.Int64}, Results: []*values.Type{values.Int64}}, Call: func(c *evm.Call) error { c.R[0] *= 2; return nil }},
-		{Name: "GC", Call: func(*evm.Call) error { runtime.GC(); return nil }},
+		{Name: "Double", Signature: evm.Signature{Params: []*values.Type{values.Int64}, Results: []*values.Type{values.Int64}}, Call: func(c *evm.VM) error { c.R[0] *= 2; return nil }},
+		{Name: "GC", Call: func(*evm.VM) error { runtime.GC(); return nil }},
 	}}
 	m, err := evmcompiler.Compile("main.go", `import "h";func apply(f func(int64)int64,x int64)int64{return f(x)}
 func makeFunc(text string)func()string{return func()string{h.GC();return text}}
@@ -88,7 +89,7 @@ func Run()int64{f:=makeFunc("retained"+" text");h.GC();if f()!="retained text"{r
 		t.Fatal(err)
 	}
 	out := make([]values.Value, 1)
-	if err := evm.New(p).Run(context.Background(), "Run", nil, out); err != nil || out[0].R != 42 {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, out); err != nil || out[0].R != 42 {
 		t.Fatalf("function value: %v %v", err, out)
 	}
 }
@@ -98,7 +99,7 @@ func counter()func()int{x:=0;return func()int{x++;return x}}
 var f=counter()
 func Run()int{return f()+fact(5)+int(fact(int64(4)))}`)
 	out := make([]values.Value, 1)
-	for _, want := range []uint64{145, 146} {
+	for _, want := range []uint64{145, 145} {
 		if err := vm.Run(context.Background(), "Run", nil, out); err != nil || out[0].R != want {
 			t.Fatalf("generic/global closure: %v %v", err, out)
 		}
@@ -168,7 +169,7 @@ func TestGoFunctionLinkValidationAndSnapshot(t *testing.T) {
 		}
 	}
 	out := make([]values.Value, 1)
-	if err := evm.New(p).Run(context.Background(), "Run", nil, out); err != nil || out[0].R != 9 {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, out); err != nil || out[0].R != 9 {
 		t.Fatalf("snapshot: %v %v", err, out)
 	}
 }
@@ -216,7 +217,7 @@ func TestGoIndirectSignatureMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(p).Run(context.Background(), "Run", nil, make([]values.Value, 1)); !errors.Is(err, evm.ErrFunction) {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, make([]values.Value, 1)); !errors.Is(err, evm.ErrFunction) {
 		t.Fatalf("signature mismatch: %v", err)
 	}
 }
@@ -236,7 +237,7 @@ func TestGoStructuralCalleeDoesNotCreateFunctionValue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(p).Run(context.Background(), "Run", nil, make([]values.Value, 1)); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, make([]values.Value, 1)); err != nil {
 		t.Fatal(err)
 	}
 }

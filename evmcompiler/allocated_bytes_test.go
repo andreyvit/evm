@@ -6,14 +6,15 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
 func TestVMReportsAllocatedBytesDuringAndAfterRun(t *testing.T) {
-	var vm *evm.VM
+	var vm *evmtest.Session
 	var during uint64
 	host := evm.Package{Path: "host", Functions: []evm.ExternalFunction{
-		{Name: "Probe", Call: func(*evm.Call) error { during = vm.AllocatedBytes(); return nil }},
+		{Name: "Probe", Call: func(*evm.VM) error { during = vm.AllocatedBytes(); return nil }},
 	}}
 	module, err := evmcompiler.Compile("main.go", `import "host"
 func Run() int { s := make([]int, 1000); host.Probe(); t := make([]int, 1000); return len(s) + len(t) }`, host)
@@ -24,7 +25,7 @@ func Run() int { s := make([]int, 1000); host.Probe(); t := make([]int, 1000); r
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm = evm.New(program)
+	vm = evmtest.New(program)
 	if got := vm.AllocatedBytes(); got != 0 {
 		t.Fatalf("new VM reports %d bytes", got)
 	}

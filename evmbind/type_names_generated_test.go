@@ -14,6 +14,7 @@ import (
 	"github.com/andreyvit/evm/evmbind/internal/omittedfixture"
 	"github.com/andreyvit/evm/evmbind/internal/renamedbindings"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 )
 
 func TestGeneratedNativeTypeExportName(t *testing.T) {
@@ -44,7 +45,7 @@ func TestGeneratedNativeTypeExportName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if host.page.Count != 8 || host.page.Title != "changed" || host.page.Private != "untouched" {

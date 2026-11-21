@@ -50,8 +50,8 @@ func TestLegacyPropertyStorageContracts(t *testing.T) {
 	}
 	codec := kvo.LegacyTimeCodec()
 	for _, want := range []time.Time{{}, time.Date(2024, 1, 2, 3, 4, 5, 123456000, time.UTC)} {
-		v := codec.Encode(want)
-		if v.AsUint() != kvo.TimeToUint64(want) || !codec.Decode(v).Equal(want) {
+		v := codec.Pack(want)
+		if v.AsUint() != kvo.TimeToUint64(want) || !codec.Unpack(v).Equal(want) {
 			t.Fatal("changed legacy time words")
 		}
 		for _, layout := range []row2.Layout{row2.Fast2, row2.Compact2} {

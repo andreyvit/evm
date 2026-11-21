@@ -12,16 +12,16 @@ import (
 
 // LoadNative copies a value from its declared native layout into VM registers.
 // The caller keeps p alive for the call; reference fields retain their targets.
-func (c *Call) LoadNative(s *values.Shape, p unsafe.Pointer) (values.Value, error) {
+func (c *VM) LoadNative(s *values.Shape, p unsafe.Pointer) (values.Value, error) {
 	return loadNative(c, s, p, &c.budget.allocated, c.budget.limits)
 }
 
 // StoreNative copies a VM value into caller-owned storage of the declared layout.
-func (c *Call) StoreNative(s *values.Shape, p unsafe.Pointer, v values.Value) error {
+func (c *VM) StoreNative(s *values.Shape, p unsafe.Pointer, v values.Value) error {
 	return storeNative(c, s, p, v, &c.budget.allocated, c.budget.limits)
 }
 
-func nativeLoadedValue(c *Call, s *values.Shape, v values.Value, used *allocationUsage, limits Limits) (values.Value, error) {
+func nativeLoadedValue(c *VM, s *values.Shape, v values.Value, used *allocationUsage, limits Limits) (values.Value, error) {
 	if s.Native != nil && s.Native.Codec != nil {
 		return s.Native.Codec.Decode(v)
 	}
@@ -59,7 +59,7 @@ func nativeLoadedValue(c *Call, s *values.Shape, v values.Value, used *allocatio
 	return v, nil
 }
 
-func nativeStoredValue(c *Call, s *values.Shape, v values.Value, used *allocationUsage, limits Limits) (values.Value, error) {
+func nativeStoredValue(c *VM, s *values.Shape, v values.Value, used *allocationUsage, limits Limits) (values.Value, error) {
 	if s.Native != nil && s.Native.Codec != nil {
 		return s.Native.Codec.Encode(v, c.ChargeAllocation)
 	}
@@ -133,7 +133,7 @@ func nativeStoredValue(c *Call, s *values.Shape, v values.Value, used *allocatio
 	return v, nil
 }
 
-func loadNative(c *Call, s *values.Shape, p unsafe.Pointer, used *allocationUsage, limits Limits) (values.Value, error) {
+func loadNative(c *VM, s *values.Shape, p unsafe.Pointer, used *allocationUsage, limits Limits) (values.Value, error) {
 	if s.Native == nil {
 		return values.Value{}, ErrInvalidState
 	}
@@ -187,7 +187,7 @@ func loadNative(c *Call, s *values.Shape, p unsafe.Pointer, used *allocationUsag
 	}
 	return values.Value{P: dst}, nil
 }
-func storeNative(c *Call, s *values.Shape, p unsafe.Pointer, v values.Value, used *allocationUsage, limits Limits) error {
+func storeNative(c *VM, s *values.Shape, p unsafe.Pointer, v values.Value, used *allocationUsage, limits Limits) error {
 	if s.Native == nil {
 		return ErrInvalidState
 	}
@@ -256,7 +256,7 @@ func (p *Program) nativeSlotShape(logical *values.Shape, layout *values.NativeLa
 
 // A native aggregate result still addresses Go storage. Materialize it before
 // a pointer-only register discards the discriminator.
-func (c *Call) importBorrow(t *values.Type, v values.Value) (values.Value, error) {
+func (c *VM) importBorrow(t *values.Type, v values.Value) (values.Value, error) {
 	s := c.program.Shape(t)
 	if row, ok := c.program.borrowRecords[t]; ok {
 		ptr := v.BorrowedNative()
@@ -303,7 +303,7 @@ func (c *Call) importBorrow(t *values.Type, v values.Value) (values.Value, error
 	return v, nil
 }
 
-func (c *Call) borrowCell(v values.Value) (values.Value, error) {
+func (c *VM) borrowCell(v values.Value) (values.Value, error) {
 	p, err := c.AllocCells(1)
 	if err != nil {
 		return values.Value{}, err

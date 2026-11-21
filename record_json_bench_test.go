@@ -7,6 +7,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/kvo/codec/row2"
 	"github.com/andreyvit/evm/values"
@@ -61,7 +62,7 @@ func Export(r *m.Row) any { return r.ToJSON() }`, pkg)
 
 func BenchmarkRecordJSON(b *testing.B) {
 	p, r := recordJSONFixture(b)
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	// The benchmark reuses a VM across independent exports; do not exhaust
 	// its cumulative session budget while timing the conversion itself.
 	vm.Limits.AllocationBytes, vm.Limits.Allocations = ^uint64(0), ^uint64(0)

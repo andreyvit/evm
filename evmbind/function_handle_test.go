@@ -15,43 +15,44 @@ import (
 	"github.com/andreyvit/evm/evmbind/internal/functionbindings"
 	"github.com/andreyvit/evm/evmbind/internal/functionfixture"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
 type functionHost struct {
 	nativeBox                 functionfixture.NativeBox
 	slot                      functionfixture.FunctionSlot
-	number, text, value, rows *evm.NamedFunction
-	retained                  *evm.FunctionHandle
+	number, text, value, rows *evm.Callable
+	retained                  *evm.Callable
 }
 
-func (h *functionHost) NativeSlot(_ *evm.Call) *functionfixture.NativeBox { return &h.nativeBox }
-func (h *functionHost) EchoNative(_ *evm.Call, fn functionfixture.NativeUnary) functionfixture.NativeUnary {
+func (h *functionHost) NativeSlot(_ *evm.VM) *functionfixture.NativeBox { return &h.nativeBox }
+func (h *functionHost) EchoNative(_ *evm.VM, fn functionfixture.NativeUnary) functionfixture.NativeUnary {
 	return fn
 }
 
-func (h *functionHost) Keep(_ *evm.Call, fn *evm.FunctionOf[func(int) int])       { h.retained = fn }
-func (h *functionHost) KeepAny(_ *evm.Call, fn *evm.FunctionOf[any])              { h.retained = fn }
-func (h *functionHost) Get(_ *evm.Call) *evm.FunctionOf[func(int) int]            { return h.retained }
-func (h *functionHost) GetWrong(_ *evm.Call) *evm.FunctionOf[func(string) string] { return h.retained }
+func (h *functionHost) Keep(_ *evm.VM, fn *evm.FunctionOf[func(int) int])       { h.retained = fn }
+func (h *functionHost) KeepAny(_ *evm.VM, fn *evm.FunctionOf[any])              { h.retained = fn }
+func (h *functionHost) Get(_ *evm.VM) *evm.FunctionOf[func(int) int]            { return h.retained }
+func (h *functionHost) GetWrong(_ *evm.VM) *evm.FunctionOf[func(string) string] { return h.retained }
 
-func (h *functionHost) Slot(_ *evm.Call) *functionfixture.FunctionSlot { return &h.slot }
-func (h *functionHost) EchoSlot(_ *evm.Call, s functionfixture.FunctionSlot) functionfixture.FunctionSlot {
+func (h *functionHost) Slot(_ *evm.VM) *functionfixture.FunctionSlot { return &h.slot }
+func (h *functionHost) EchoSlot(_ *evm.VM, s functionfixture.FunctionSlot) functionfixture.FunctionSlot {
 	return s
 }
 
-func (h *functionHost) Register(_ *evm.Call, fn *evm.NamedFunctionOf[func(int) int]) { h.number = fn }
-func (h *functionHost) RegisterText(_ *evm.Call, fn *evm.NamedFunctionOf[func(string) string]) {
+func (h *functionHost) Register(_ *evm.VM, fn *evm.FunctionOf[func(int) int]) { h.number = fn }
+func (h *functionHost) RegisterText(_ *evm.VM, fn *evm.FunctionOf[func(string) string]) {
 	h.text = fn
 }
 
-func (h *functionHost) RegisterValue(_ *evm.Call, fn *evm.NamedFunctionOf[func(int) any]) {
+func (h *functionHost) RegisterValue(_ *evm.VM, fn *evm.FunctionOf[func(int) any]) {
 	h.value = fn
 }
 
-func (h *functionHost) Strings(_ *evm.Call, values []string) {}
+func (h *functionHost) Strings(_ *evm.VM, values []string) {}
 
-func (h *functionHost) RegisterRows(_ *evm.Call, fn *evm.NamedFunctionOf[func(func([]string), func([]any))]) {
+func (h *functionHost) RegisterRows(_ *evm.VM, fn *evm.FunctionOf[func(func([]string), func([]any))]) {
 	h.rows = fn
 }
 
@@ -122,7 +123,7 @@ func ReadNative()int{return callbacks.NativeSlot().Apply(1)}
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := evm.New(program).Run(context.Background(), "Register", nil, nil); err != nil {
+		if err := evmtest.New(program).Run(context.Background(), "Register", nil, nil); err != nil {
 			t.Fatal(err)
 		}
 		if host.rows == nil {
@@ -133,9 +134,9 @@ func ReadNative()int{return callbacks.NativeSlot().Apply(1)}
 		var gotText string
 		var args []values.Value
 		for i, callback := range []evm.Native{
-			func(c *evm.Call) error {
-				v := c.Argument(0)
-				shape := program.Shape(host.rows.Signature.Params[0]).Params[0]
+			func(c *evm.VM) error {
+				v := c.CallArgument(0)
+				shape := program.Shape(host.rows.Signature().Params[0]).Params[0]
 				for i := uint64(0); i < uint64(v.SliceLen()); i++ {
 					cell, err := c.SliceElement(shape, v, uint64(i))
 					if err != nil {
@@ -145,9 +146,9 @@ func ReadNative()int{return callbacks.NativeSlot().Apply(1)}
 				}
 				return nil
 			},
-			func(c *evm.Call) error {
-				v := c.Argument(0)
-				shape := program.Shape(host.rows.Signature.Params[1]).Params[0]
+			func(c *evm.VM) error {
+				v := c.CallArgument(0)
+				shape := program.Shape(host.rows.Signature().Params[1]).Params[0]
 				var cells [2]values.Value
 				for i := range cells {
 					cell, err := c.SliceElement(shape, v, uint64(i))
@@ -175,7 +176,7 @@ func ReadNative()int{return callbacks.NativeSlot().Apply(1)}
 				return nil
 			},
 		} {
-			shape := program.Shape(host.rows.Signature.Params[i])
+			shape := program.Shape(host.rows.Signature().Params[i])
 			typ, err := evm.NewNativeFunctionType(evm.Signature{Params: []*values.Type{shape.Params[0].Type}})
 			if err != nil {
 				t.Fatal(err)
@@ -186,7 +187,7 @@ func ReadNative()int{return callbacks.NativeSlot().Apply(1)}
 			}
 			args = append(args, v)
 		}
-		if err := evm.New(program).Run(context.Background(), host.rows.Name, args, nil); err != nil {
+		if err := evmtest.New(program).Run(context.Background(), host.rows.Name(), args, nil); err != nil {
 			t.Fatal(err)
 		}
 		if !reflect.DeepEqual(gotHeaders, []string{"name", "number"}) || gotText != "hello" || gotNumber != 9007199254740993 {
@@ -196,79 +197,79 @@ func ReadNative()int{return callbacks.NativeSlot().Apply(1)}
 		if host.number == nil || host.text == nil {
 			t.Fatal("missing retained handles")
 		}
-		if err := evm.New(program).Run(context.Background(), host.number.Name, []values.Value{values.Int(21)}, result[:]); err != nil {
+		if err := evmtest.New(program).Run(context.Background(), host.number.Name(), []values.Value{values.Int(21)}, result[:]); err != nil {
 			t.Fatal(err)
 		}
 		if result[0].AsInt() != 42 {
 			t.Fatal(result[0])
 		}
-		if err := evm.New(program).Run(context.Background(), host.text.Name, []values.Value{values.String("hello")}, result[:]); err != nil {
+		if err := evmtest.New(program).Run(context.Background(), host.text.Name(), []values.Value{values.String("hello")}, result[:]); err != nil {
 			t.Fatal(err)
 		}
 		if result[0].AsString() != "hello!" {
 			t.Fatal(result[0])
 		}
 		if host.value == nil {
-			t.Fatal("missing any-result function handle")
+			t.Fatal("missing any-result callable")
 		}
-		if err := evm.New(program).Run(context.Background(), host.value.Name, []values.Value{values.Int(42)}, result[:]); err != nil {
+		if err := evmtest.New(program).Run(context.Background(), host.value.Name(), []values.Value{values.Int(42)}, result[:]); err != nil {
 			t.Fatal(err)
 		}
 		shape, value, err := program.UnpackInterface(result[0])
 		if err != nil || shape.Type != values.IntType || value.AsInt() != 42 {
 			t.Fatalf("any result: %v %v %v", shape, value, err)
 		}
-		if err := evm.New(program).Run(context.Background(), "Clear", nil, nil); err != nil {
+		if err := evmtest.New(program).Run(context.Background(), "Clear", nil, nil); err != nil {
 			t.Fatal(err)
 		}
 		if host.number != nil || host.text != nil {
 			t.Fatal("nil callback did not clear handles")
 		}
-		if err := evm.New(program).Run(context.Background(), "BadAny", nil, nil); err == nil {
+		if err := evmtest.New(program).Run(context.Background(), "BadAny", nil, nil); err == nil {
 			t.Fatal("non-function accepted")
 		}
-		if err := evm.New(program).Run(context.Background(), "NilAny", nil, nil); err != nil || host.retained != nil {
+		if err := evmtest.New(program).Run(context.Background(), "NilAny", nil, nil); err != nil || host.retained != nil {
 			t.Fatalf("typed nil: %v", err)
 		}
-		if err := evm.New(program).Run(context.Background(), "KeepAny", nil, nil); err != nil {
+		if err := evmtest.New(program).Run(context.Background(), "KeepAny", nil, nil); err != nil {
 			t.Fatal(err)
 		}
-		if err := evm.New(program).Run(context.Background(), "Use", nil, result[:]); err != nil || result[0].AsInt() != 42 {
+		if err := evmtest.New(program).Run(context.Background(), "Use", nil, result[:]); err != nil || result[0].AsInt() != 42 {
 			t.Fatalf("dynamic closure: %v %v", result, err)
 		}
-		if err := evm.New(program).Run(context.Background(), "Keep", nil, nil); err != nil {
+		if err := evmtest.New(program).Run(context.Background(), "Keep", nil, nil); err != nil {
 			t.Fatal(err)
 		}
-		if err := evm.New(program).Run(context.Background(), "Use", nil, result[:]); err != nil || result[0].AsInt() != 42 {
+		if err := evmtest.New(program).Run(context.Background(), "Use", nil, result[:]); err != nil || result[0].AsInt() != 42 {
 			t.Fatalf("returned closure: %v %v", result, err)
 		}
-		if err := evm.New(program).Run(context.Background(), "WrongResult", nil, nil); err == nil {
+		if err := evmtest.New(program).Run(context.Background(), "WrongResult", nil, nil); err == nil {
 			t.Fatal("mismatched result signature accepted")
 		}
 		foreign, err := evm.Link(module, schema.Bind(host))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := evm.New(foreign).Run(context.Background(), "Use", nil, result[:]); err == nil {
+		if err := evmtest.New(foreign).Run(context.Background(), "Use", nil, result[:]); err == nil {
 			t.Fatal("foreign handle accepted")
 		}
-		if err := evm.New(program).Run(context.Background(), "ClearRetained", nil, result[:]); err != nil || result[0].R != 1 {
+		if err := evmtest.New(program).Run(context.Background(), "ClearRetained", nil, result[:]); err != nil || result[0].R != 1 {
 			t.Fatalf("nil retained function: %v %v", result, err)
 		}
-		if err := evm.New(program).Run(context.Background(), "Field", nil, result[:]); err != nil || result[0].AsInt() != 131 {
+		if err := evmtest.New(program).Run(context.Background(), "Field", nil, result[:]); err != nil || result[0].AsInt() != 131 {
 			t.Fatalf("native field: %v %v", result, err)
 		}
-		if err := evm.New(foreign).Run(context.Background(), "ReadField", nil, result[:]); err == nil {
+		if err := evmtest.New(foreign).Run(context.Background(), "ReadField", nil, result[:]); err == nil {
 			t.Fatal("foreign field accepted")
 		}
-		if err := evm.New(program).Run(context.Background(), "ClearField", nil, result[:]); err != nil || result[0].R != 1 || host.slot.Fn != nil {
+		if err := evmtest.New(program).Run(context.Background(), "ClearField", nil, result[:]); err != nil || result[0].R != 1 || host.slot.Fn != nil {
 			t.Fatalf("clear native field: %v %v", result, err)
 		}
-		nativeVM := evm.New(program)
+		nativeVM := evmtest.New(program)
 		if err := nativeVM.Run(context.Background(), "NativeField", nil, result[:]); err != nil || result[0].AsInt() != 22 {
 			t.Fatalf("native function field: %v %v", result, err)
 		}
-		if err := nativeVM.RunNative(context.Background(), func(*evm.Call) error {
+		if err := nativeVM.RunNative(context.Background(), func(*evm.VM) error {
 			if got := host.nativeBox.Apply(3); got != 25 {
 				t.Fatalf("native retained call: %d", got)
 			}
@@ -276,7 +277,7 @@ func ReadNative()int{return callbacks.NativeSlot().Apply(1)}
 		}, evm.Budget{}); err != nil {
 			t.Fatal(err)
 		}
-		if err := evm.New(foreign).Run(context.Background(), "ReadNative", nil, result[:]); !errors.Is(err, evm.ErrCallbackInactive) {
+		if err := evmtest.New(foreign).Run(context.Background(), "ReadNative", nil, result[:]); !errors.Is(err, evm.ErrCallbackInactive) {
 			t.Fatalf("foreign callback: %v", err)
 		}
 

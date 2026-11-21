@@ -19,6 +19,7 @@ import (
 type jsonFixture struct {
 	p             *evm.Program
 	vm            *evm.VM
+	functions     map[string]evm.Callable
 	ctx           context.Context
 	docs          [4]values.Value
 	rows          [4]values.Value
@@ -46,8 +47,15 @@ func DecodeRead(row *db.Document) int64 { return Read(row.data) }
 	}
 	ctx, scope := evm.WithRecords(context.Background())
 	t.Cleanup(scope.Close)
-	f := &jsonFixture{p: p, vm: evm.New(p), ctx: ctx}
-	f.vm.Limits.AllocationBytes, f.vm.Limits.Allocations = ^uint64(0), ^uint64(0)
+	f := &jsonFixture{p: p, vm: p.AcquireVM(ctx), functions: make(map[string]evm.Callable), ctx: ctx}
+	t.Cleanup(f.vm.Release)
+	for _, name := range append([]string{"Build", "Decode"}, jsonWorkloads...) {
+		fn, err := p.LookupFunction(name, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.functions[name] = fn
+	}
 	for seed := range 4 {
 		doc := jsonwork.Build(seed)
 		f.want[seed] = jsonwork.Read(doc)
@@ -60,18 +68,18 @@ func DecodeRead(row *db.Document) int64 { return Read(row.data) }
 		row.Put(data, "", values.Bytes(f.raw[seed]), row2.Data)
 		row.End()
 		f.rows[seed] = scope.Read(model, row2.Trusted(row.BytesWritten()))
-		var out [1]values.Value
-		if err := f.vm.Run(ctx, "Build", []values.Value{values.Int(int64(seed))}, out[:]); err != nil {
+		out := [2]values.Value{values.Int(int64(seed))}
+		if err := f.vm.Run(f.functions["Build"], out[:]); err != nil {
 			t.Fatal(err)
 		}
-		f.docs[seed] = out[0]
+		f.docs[seed] = out[1]
 		f.updated[seed] = jsonwork.Update(doc, seed)
 	}
 	return f
 }
 
 func (f *jsonFixture) run(name string, seed int) (int64, error) {
-	var args [2]values.Value
+	var args [3]values.Value
 	n := 1
 	want := f.want[seed]
 	switch name {
@@ -88,8 +96,9 @@ func (f *jsonFixture) run(name string, seed int) (int64, error) {
 	default:
 		return 0, fmt.Errorf("unknown JSON workload %s", name)
 	}
-	var out [1]values.Value
-	err := f.vm.RunWithBudget(f.ctx, name, args[:n], out[:], evm.Budget{AllocationBytes: 16 << 20, Allocations: 100000})
+	f.vm.SetBudget(evm.Limits{Steps: 1_000_000, AllocationBytes: 16 << 20, Allocations: 100000})
+	err := f.vm.Run(f.functions[name], args[:n+1])
+	out := args[n:]
 	if err == nil && out[0].AsInt() != want {
 		err = fmt.Errorf("%s seed %d: got %d, want %d", name, seed, out[0].AsInt(), want)
 	}
@@ -110,11 +119,11 @@ func TestJSONWorkload(t *testing.T) {
 			for seed := range 4 {
 				value := f.docs[seed]
 				if name == "DecodeRead" {
-					var out [1]values.Value
-					if err := f.vm.Run(f.ctx, "Decode", []values.Value{f.rows[seed]}, out[:]); err != nil {
+					out := [2]values.Value{f.rows[seed]}
+					if err := f.vm.Run(f.functions["Decode"], out[:]); err != nil {
 						t.Fatal(err)
 					}
-					value = out[0]
+					value = out[1]
 				}
 				raw, err := f.p.EncodeJSON(f.ctx, value, 1<<20)
 				if err != nil {

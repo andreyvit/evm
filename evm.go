@@ -5,7 +5,6 @@ package evm
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math"
 	"time"
 	"unsafe"
@@ -21,19 +20,40 @@ var (
 	ErrAllocations   = errors.New("allocation count limit exceeded")
 	ErrAllocation    = errors.New("allocation budget exceeded")
 	ErrNegativeShift = errors.New("negative shift amount")
-	ErrInvalidState  = errors.New("VM session failed; call Reset before reuse")
+	ErrInvalidState  = errors.New("invalid VM state")
 	ErrNilFunction   = errors.New("call of nil function")
 	ErrFunction      = errors.New("invalid function value")
 	ErrReentry       = errors.New("VM is already running")
 )
 
 type Limits struct {
-	Steps                 uint64 // one per dispatched bytecode instruction
-	Allocations           uint64
-	AllocationBytes       uint64
-	OutputBytes           uint64
-	Depth, RSlots, PSlots int
+	UnlimitedSteps                       bool
+	Duration, HardDuration               time.Duration
+	HardAllocations, HardAllocationBytes uint64
+	Steps                                uint64 // one per dispatched bytecode instruction
+	Allocations                          uint64
+	AllocationBytes                      uint64
+	OutputBytes                          uint64
+	Depth, RSlots, PSlots                int
 }
+
+func (l Limits) validate() error {
+	switch {
+	case l.Duration < 0 || l.HardDuration < 0:
+		return errors.New("negative execution duration")
+	case l.HardDuration > 0 && l.Duration > l.HardDuration:
+		return errors.New("execution duration exceeds the hard limit")
+	case l.HardAllocations > 0 && l.Allocations > l.HardAllocations:
+		return errors.New("allocation count exceeds the hard limit")
+	case l.HardAllocationBytes > 0 && l.AllocationBytes > l.HardAllocationBytes:
+		return errors.New("allocation bytes exceed the hard limit")
+	case l.Depth < 0 || l.RSlots < 0 || l.PSlots < 0:
+		return errors.New("negative call depth or register limit")
+	default:
+		return nil
+	}
+}
+
 type drainMode uint8
 
 const (
@@ -49,258 +69,105 @@ type frame struct {
 	mode                  drainMode
 }
 
-// VM owns reusable execution storage. It is neither concurrent nor reentrant.
-// Zero limit fields select defaults; positive fields override them.
+// A VM executes one program on one goroutine. A Go binding may call Run again synchronously.
 type VM struct {
 	// Output receives fmt/log/debug output. Nil uses the normal Go logger.
-	Output               func(string) error
+	Output func(string) error
+	executionBuffers
+	meter         executionBudget
+	budget        *executionBudget
+	invalidLimits error
+	baseContext   context.Context
+	cancel        context.CancelFunc
+	Context       context.Context
+	Position      SourcePosition
+	R             []uint64
+	P             []unsafe.Pointer
+	usedR, usedP  int
+	native        *linkedNative
+	program       *Program
+
+	running       bool
+	globals       []unsafe.Pointer
+	guestErrors   *guestErrorHost
+	callbackScope *CallbackScope
+	inNativeCall  bool
+
+	coverage *Coverage
+}
+type directWindow struct {
+	r [2]uint64
+	p [2]unsafe.Pointer
+}
+
+type executionBuffers struct {
+	direct               *directWindow
 	deferGeneration      uint32
 	deferStacks          []deferStack
 	deferred             []deferredCall
 	deferArgs            []values.Value
 	panics               []panicContext
-	budget               executionBudget
-	program              *Program
-	Limits               Limits
 	r                    []uint64
 	p                    []unsafe.Pointer
 	stack                []frame
-	directR              [2]uint64
-	directP              [2]unsafe.Pointer
-	call                 Call
-	running              bool
-	globals              []unsafe.Pointer
-	guestErrors          *guestErrorHost
-	callbackParent       *VM
-	callbackScope        *CallbackScope
-	activeNativeCall     *Call
-	initialized, failed  bool
-	allocated            allocationUsage
 	recordLists          []recordListIterator
 	recordListGeneration uint64
-	coverage             *Coverage
 }
 
-func New(p *Program) *VM {
-	vm := &VM{program: p}
-	if p != nil && p.recordListSlots != 0 {
-		vm.recordLists = make([]recordListIterator, p.recordListSlots)
-	}
-	return vm
-}
+// AllocatedBytes reports allocation charges since acquisition or SetBudget.
+func (vm *VM) AllocatedBytes() uint64 { return vm.budget.allocated.bytes }
 
-// AllocatedBytes reports the bytes charged to this VM's allocation limits
-// since New or Reset, including an invocation in progress. A host that starts
-// another VM inside a native call of this one reads it to bound them together.
-// Call it on the goroutine that runs the VM.
-func (vm *VM) AllocatedBytes() uint64 {
-	if vm.running {
-		return vm.allocated.bytes + vm.budget.allocated.bytes
-	}
-	return vm.allocated.bytes
-}
+// Budget is an alias for Limits retained for existing host configuration.
+type Budget = Limits
 
-// Budget applies to one RunWithBudget call, including first-use initialization.
-// Zero fields inherit VM defaults. Allocation limits also obey the remaining
-// session allowance configured by VM.Limits.
-type Budget struct {
-	Steps, Allocations, AllocationBytes  uint64
-	Duration                             time.Duration // soft wall-clock limit for the invocation
-	HardDuration                         time.Duration
-	HardAllocations, HardAllocationBytes uint64
-	UnlimitedSteps                       bool
-}
-
-// Run writes results only on success. Value types are the entry signature's
-// types, supplied externally; callers must honor them. Reusing a VM and output
-// storage avoids allocations after growth. Native panics propagate to the host.
-func (vm *VM) Run(ctx context.Context, entry string, args, results []values.Value) error {
-	return vm.RunWithBudget(ctx, entry, args, results, Budget{})
-}
-
-// RunWithBudget bounds this invocation without changing defaults for later calls.
-// Cancel the supplied context to interrupt an active invocation.
-func (vm *VM) RunWithBudget(ctx context.Context, entry string, args, results []values.Value, call Budget) error {
-	if vm.running {
-		return ErrReentry
-	}
-	if vm.failed {
-		return ErrInvalidState
-	}
-	idx, ok := vm.program.entries[entry]
-	if !ok {
-		return fmt.Errorf("unknown entry %q", entry)
-	}
-	return vm.runFunction(ctx, idx, values.Value{}, vm.program.functions[idx].Signature, args, results, call)
-}
-
-func (vm *VM) runFunction(ctx context.Context, idx int, value values.Value, signature Signature, args, results []values.Value, call Budget) error {
-	if vm.running {
-		return ErrReentry
-	}
-	if vm.failed {
-		return ErrInvalidState
-	}
-	if len(args) != len(signature.Params) || len(results) != len(signature.Results) {
-		return fmt.Errorf("argument/result count mismatch")
-	}
-	limits := vm.Limits
-	if limits.AllocationBytes == 0 {
-		limits.AllocationBytes = 64 << 20
-	}
-	if limits.Allocations == 0 {
-		limits.Allocations = 1_000_000
-	}
-	if call.HardDuration > 0 && call.Duration > call.HardDuration || call.HardAllocationBytes > 0 && call.AllocationBytes > call.HardAllocationBytes || call.HardAllocations > 0 && call.Allocations > call.HardAllocations {
-		return fmt.Errorf("soft budget exceeds hard budget")
-	}
-	// Charge this run against both ceilings without a second check at each allocation.
-	limits.AllocationBytes -= min(limits.AllocationBytes, vm.allocated.bytes)
-	limits.Allocations -= min(limits.Allocations, vm.allocated.count)
-	sessionBytes, sessionAllocs := limits.AllocationBytes, limits.Allocations
-	if call.AllocationBytes != 0 {
-		limits.AllocationBytes = min(limits.AllocationBytes, call.AllocationBytes)
-	}
-	if call.Allocations != 0 {
-		limits.Allocations = min(limits.Allocations, call.Allocations)
-	}
-	if call.Steps != 0 {
-		limits.Steps = call.Steps
-	}
-	if limits.OutputBytes == 0 {
-		limits.OutputBytes = 1 << 20
-	}
-	if call.UnlimitedSteps {
-		limits.Steps = math.MaxUint64
-	}
-	if limits.Steps == 0 {
-		limits.Steps = 1_000_000
-	}
-	if limits.Depth == 0 {
-		limits.Depth = 1024
-	}
-	if limits.RSlots == 0 {
-		limits.RSlots = 1 << 20
-	}
-	if limits.PSlots == 0 {
-		limits.PSlots = 1 << 20
-	}
-	if limits.Depth < 1 || limits.RSlots < 0 || limits.PSlots < 0 {
-		return fmt.Errorf("invalid execution limits")
-	}
-	if vm.deferGeneration == math.MaxUint32 {
-		return fmt.Errorf("defer generation exhausted")
-	}
-	vm.deferGeneration++
-	vm.running = true
-	defer func() {
-		clear(vm.p)
-		vm.call = Call{}
-		clear(vm.directP[:])
-		vm.stack = vm.stack[:0]
-		clear(vm.deferred)
-		vm.deferred = vm.deferred[:0]
-		clear(vm.deferArgs)
-		vm.deferArgs = vm.deferArgs[:0]
-		clear(vm.panics)
-		vm.panics = vm.panics[:0]
-		vm.deferStacks = vm.deferStacks[:0]
-		vm.running = false
-	}()
-	vm.failed = true
-	started := time.Now()
-	hardDuration := max(call.Duration, call.HardDuration)
-	if hardDuration > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, hardDuration)
-		defer cancel()
-	}
-	vm.budget = executionBudget{limits: limits, remaining: limits.Steps, ctx: ctx, canCancel: ctx.Done() != nil}
-	budget := &vm.budget
-	budget.started, budget.duration, budget.hardDuration = started, call.Duration, hardDuration
-	budget.hardBytes = min(max(limits.AllocationBytes, call.HardAllocationBytes), sessionBytes)
-	budget.hardAllocs = min(max(limits.Allocations, call.HardAllocations), sessionAllocs)
-	vm.call = Call{vm: vm, program: vm.program, budget: budget, Context: ctx, output: vm.Output}
-	defer func() {
-		vm.allocated.bytes += budget.allocated.bytes
-		vm.allocated.count += budget.allocated.count
-		for budget.scope != nil {
-			budget.scope.release()
-		}
-		budget.ctx = nil
-		budget.records = nil
-	}()
+func (vm *VM) runBody(idx int, value values.Value, args, results []values.Value, budget *executionBudget) error {
+	limits := budget.limits
 	if err := budget.contextErr(); err != nil {
 		return err
 	}
-	if !vm.initialized {
+	if len(vm.program.globals) > 0 {
 		if err := charge(uint64(len(vm.program.globals))*uint64(unsafe.Sizeof(unsafe.Pointer(nil))), &budget.allocated, limits); err != nil {
 			return err
 		}
-		vm.globals = make([]unsafe.Pointer, len(vm.program.globals))
-		for i, s := range vm.program.globals {
-			if i&255 == 255 {
-				if err := budget.contextErr(); err != nil {
-					return err
-				}
-			}
-			var ptr unsafe.Pointer
-			var err error
-			if s.NativeStorage() {
-				err = charge(s.Native.Size, &budget.allocated, limits)
-				if err == nil {
-					ptr = s.Native.New()
-				}
-			} else {
-				ptr, err = allocCells(s.Cells, &budget.allocated, limits)
-			}
-			if err != nil {
-				return err
-			}
-			vm.globals[i] = ptr
-		}
-		if vm.program.init >= 0 {
-			if err := vm.executeSelected(vm.program.init, nil, nil, nil, budget); err != nil {
+	}
+	vm.globals = append(vm.globals[:0], make([]unsafe.Pointer, len(vm.program.globals))...)
+	for i, s := range vm.program.globals {
+		if i&255 == 255 {
+			if err := budget.contextErr(); err != nil {
 				return err
 			}
 		}
-		vm.initialized = true
+		var ptr unsafe.Pointer
+		var err error
+		if s.NativeStorage() {
+			err = charge(s.Native.Size, &budget.allocated, limits)
+			if err == nil {
+				ptr = s.Native.New()
+			}
+		} else {
+			ptr, err = allocCells(s.Cells, &budget.allocated, limits)
+		}
+		if err != nil {
+			return err
+		}
+		vm.globals[i] = ptr
+	}
+	if vm.program.init >= 0 {
+		if err := vm.executeSelected(vm.program.init, nil, nil, nil, budget); err != nil {
+			return err
+		}
 	}
 	var err error
 	if idx >= 0 {
 		err = vm.executeSelected(idx, value.P, args, results, budget)
 	} else {
-		err = vm.call.RunCallbackArgs(value, args, results)
+		err = vm.runValue(value, args, results)
 	}
 	if err != nil {
 		return err
 	}
 	clear(vm.recordLists)
 	vm.recordListGeneration = 0
-	vm.failed = false
-	return nil
-}
-
-// Reset discards session globals and initialization state, and releases retained
-// pointers. A failed or interrupted session must be reset before it can run again.
-func (vm *VM) Reset() error {
-	if vm.running {
-		return ErrReentry
-	}
-	if vm.callbackScope != nil {
-		vm.callbackScope.vm = nil
-		vm.callbackScope.context = nil
-		vm.callbackScope = nil
-	}
-	clear(vm.p)
-	clear(vm.r)
-	clear(vm.globals)
-	vm.globals = nil
-	vm.guestErrors = nil
-	vm.stack = vm.stack[:0]
-	vm.initialized = false
-	vm.failed = false
-	vm.allocated = allocationUsage{}
 	return nil
 }
 
@@ -351,7 +218,7 @@ func (vm *VM) execute(idx int, env unsafe.Pointer, args, results []values.Value,
 	for i, arg := range args {
 		if arg.R == values.NativeBorrow && arg.P != nil {
 			var err error
-			arg, err = vm.call.importBorrow(f.Signature.Params[i], arg)
+			arg, err = vm.importBorrow(f.Signature.Params[i], arg)
 			if err != nil {
 				return err
 			}
@@ -371,6 +238,7 @@ func (vm *VM) execute(idx int, env unsafe.Pointer, args, results []values.Value,
 	var failure error
 	// External callbacks share the meter with their suspended caller.
 	remaining := budget.remaining
+	defer func() { budget.remaining = min(remaining, budget.remaining) }()
 	var r []uint64
 	var p []unsafe.Pointer
 resumeFrame:
@@ -818,7 +686,10 @@ dispatch:
 			goto resumeFrame
 
 		case opTestDirect:
-			if failure = vm.invokeDirect(&cur, ins, budget); failure != nil {
+			budget.remaining = remaining
+			failure = vm.invokeDirect(&cur, ins, budget)
+			remaining = budget.remaining
+			if failure != nil {
 				goto nativeFault
 			}
 			ins = f.Code[cur.pc]
@@ -838,7 +709,9 @@ dispatch:
 				cur.pc += int(int32(ins.BC()))
 			}
 		case opCallDirect:
+			budget.remaining = remaining
 			failure = vm.invokeDirect(&cur, ins, budget)
+			remaining = budget.remaining
 			if failure != nil {
 				goto nativeFault
 			}
@@ -898,7 +771,7 @@ dispatch:
 		{
 			var guestFailure guestErrorPanic
 			if errors.As(failure, &guestFailure) {
-				failure = vm.call.guestErrorFailure(guestFailure.err)
+				failure = vm.guestErrorFailure(guestFailure.err)
 			}
 		}
 		switch failure.(type) {
@@ -944,7 +817,7 @@ func (vm *VM) invokeFunctionNative(cur *frame, ref FunctionRef, env unsafe.Point
 }
 
 func (vm *VM) invokeNativeCall(cur *frame, g *linkedNative, call Native, budget *executionBudget, position SourcePosition) (err error) {
-	defer recoverGuestErrorPanic(&vm.call, &err)
+	defer recoverGuestErrorPanic(vm, &err)
 	if err := budget.contextErr(); err != nil {
 		return err
 	}
@@ -957,17 +830,17 @@ func (vm *VM) invokeNativeCall(cur *frame, g *linkedNative, call Native, budget 
 	if g.params.PCount < pn {
 		clear(vm.p[pb+g.params.PCount : pb+pn])
 	}
-	vm.call.native, vm.call.Context, vm.call.Position = g, budget.ctx, position
-	vm.call.output = vm.Output
-	vm.call.R = vm.r[rb : rb+rn : rb+rn]
-	vm.call.P = vm.p[pb : pb+pn : pb+pn]
-	vm.call.usedR, vm.call.usedP = rb+rn, pb+pn
+	vm.native, vm.Context, vm.Position = g, budget.ctx, position
 
-	defer func() { vm.call.R, vm.call.P = nil, nil }()
-	leaveNativeCall := vm.call.enterNativeCall()
+	vm.R = vm.r[rb : rb+rn : rb+rn]
+	vm.P = vm.p[pb : pb+pn : pb+pn]
+	vm.usedR, vm.usedP = rb+rn, pb+pn
+
+	defer func() { vm.R, vm.P = nil, nil }()
+	leaveNativeCall := vm.enterNativeCall()
 	defer leaveNativeCall()
-	err = call(&vm.call)
-	vm.call.R, vm.call.P = nil, nil
+	err = call(vm)
+	vm.R, vm.P = nil, nil
 	if g.results.PCount < pn {
 		clear(vm.p[pb+g.results.PCount : pb+pn])
 	}

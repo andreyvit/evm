@@ -59,15 +59,18 @@ func checkedModule(name, check, src string, pkg evm.Package, options evmcompiler
 		src += "\nfunc BookCheck() bool {\n    return " + check + "\n}"
 	}
 	m := must(options.Compile(name+".go", src, pkg))
-	vm := evm.New(must(evm.Link(m, pkg)))
+	p := must(evm.Link(m, pkg))
+	vm := p.AcquireVM(context.Background())
+	defer vm.Release()
 	if isSpin {
-		err := vm.RunWithBudget(context.Background(), name, nil, nil, evm.Budget{Steps: 8})
+		vm.SetBudget(evm.Limits{Steps: 8})
+		err := vm.Run(must(p.LookupFunction(name, &evm.Signature{})), nil)
 		if !errors.Is(err, evm.ErrSteps) {
 			panic(fmt.Sprintf("expected fuel exhaustion, got %v", err))
 		}
 	} else {
 		out := make([]values.Value, 1)
-		if err := vm.Run(context.Background(), "BookCheck", nil, out); err != nil || out[0].R != 1 {
+		if err := vm.Run(must(p.LookupFunction("BookCheck", &evm.Signature{Results: []*values.Type{values.BoolType}})), out); err != nil || out[0].R != 1 {
 			panic(fmt.Sprintf("%s: %s => %v, %v", name, check, out, err))
 		}
 	}
@@ -87,9 +90,9 @@ func main() {
 		panic("update the filter listing and operands in the optimization chapter:\n" + filter)
 	}
 	var manuscript strings.Builder
-	pkg := evm.Package{Path: "meter", Functions: []evm.ExternalFunction{{Name: "Take", Signature: evm.Signature{Params: []*values.Type{values.StringType, values.IntType}, Results: []*values.Type{values.IntType}}, Call: func(c *evm.Call) error {
-		n := len(c.Argument(0).AsString()) + int(c.Argument(1).AsInt())
-		c.SetResult(0, values.Int(int64(n)))
+	pkg := evm.Package{Path: "meter", Functions: []evm.ExternalFunction{{Name: "Take", Signature: evm.Signature{Params: []*values.Type{values.StringType, values.IntType}, Results: []*values.Type{values.IntType}}, Call: func(c *evm.VM) error {
+		n := len(c.CallArgument(0).AsString()) + int(c.CallArgument(1).AsInt())
+		c.SetCallResult(0, values.Int(int64(n)))
 		return nil
 	}}}}
 
@@ -98,7 +101,7 @@ func main() {
 	pkg.Types = []evm.TypeDecl{{Name: "Sensor", Shape: sensor}, {Shape: sensorPtr}}
 	pkg.Methods = []evm.ExternalMethod{{Name: "HasLabel", Receiver: sensorPtr.Type,
 		Signature: evm.Signature{Params: []*values.Type{values.StringType}, Results: []*values.Type{values.Boolean}},
-		Direct: evm.DirectBinding{Op: evm.OpCallHostMethodSU, Call: func(_ *evm.Call, recv, label values.Value) (values.Value, error) {
+		Direct: evm.DirectBinding{Op: evm.OpCallHostMethodSU, Call: func(_ *evm.VM, recv, label values.Value) (values.Value, error) {
 			return values.Bool(recv.P != nil && sensor.GetField(recv.P, 0).AsString() == label.AsString()), nil
 		}},
 	}}

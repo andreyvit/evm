@@ -26,7 +26,7 @@ func (c *largeStringCursor) Next() (string, bool) {
 		return "", false
 	}
 	c.remaining--
-	return c.codec.Decode(v), true
+	return c.codec.Unpack(v), true
 }
 func largeStringGet(r kvo.Record, key uint64, codec *values.Codec[string]) largeStringCursor {
 	l := r.ListValue(key)

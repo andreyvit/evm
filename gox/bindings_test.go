@@ -10,6 +10,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmbind"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/gox"
 	"github.com/andreyvit/evm/values"
 )
@@ -71,7 +72,7 @@ import "github.com/andreyvit/evm/gox"
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(program.EVM())
+	vm := evmtest.New(program.EVM())
 	if err := vm.Run(context.Background(), "Initialize", []values.Value{arg}, nil); err != nil {
 		t.Fatal(err)
 	}

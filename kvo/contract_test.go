@@ -98,7 +98,7 @@ func TestRecordAssignmentErrorContract(t *testing.T) {
 	binding := kvo.Bind(reflect.TypeFor[statrow.State](), model)
 	cause := &assignmentFailure{"earned"}
 	codec := values.SignedCodec[int64]()
-	codec.Encode = func(int64) values.Value { panic(cause) }
+	codec.Pack = func(int64) values.Value { panic(cause) }
 	prop := kvo.BindProp(schema, 19, codec)
 	for _, tc := range recordContractCases(binding, model) {
 		t.Run(tc.name, func(t *testing.T) {
@@ -122,7 +122,7 @@ func TestRecordAssignmentErrorContract(t *testing.T) {
 				t.Fatal("failed assignment changed the record")
 			}
 			textCodec := values.SignedCodec[int64]()
-			textCodec.Encode = func(int64) values.Value { panic("invalid assignment") }
+			textCodec.Pack = func(int64) values.Value { panic("invalid assignment") }
 			if err := ed.TrySet(kvo.BindProp(schema, 19, textCodec), int64(1)); err == nil || !strings.Contains(err.Error(), "invalid assignment") {
 				t.Fatalf("non-error panic = %v", err)
 			}

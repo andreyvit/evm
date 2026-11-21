@@ -6,7 +6,7 @@ import (
 	"math"
 )
 
-func standardMath(c *Call) error {
+func standardMath(c *VM) error {
 	switch c.native.Name {
 	case "Abs":
 		v0 := math.Abs(c.argument(0).AsFloat())

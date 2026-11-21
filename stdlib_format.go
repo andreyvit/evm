@@ -23,7 +23,7 @@ type standardPanic struct{ message string }
 
 func (e *standardPanic) Error() string { return e.message }
 
-func standardComparable(c *Call) error {
+func standardComparable(c *VM) error {
 	v := c.argument(0)
 	id := c.program.typeShapes.Index(v)
 	if id >= uint64(len(c.program.types)) {
@@ -40,7 +40,7 @@ func standardComparable(c *Call) error {
 	c.result(0, values.Bool(c.program.typeShapes.Comparable(id)))
 	return nil
 }
-func standardFormat(c *Call) error {
+func standardFormat(c *VM) error {
 	name := c.native.Name
 	switch name {
 	case "decodeRune":
@@ -61,7 +61,7 @@ func standardFormat(c *Call) error {
 			return ErrOutput
 		}
 		c.budget.output += uint64(len(text))
-		sink := c.output
+		sink := c.Output
 		if sink == nil {
 			sink = defaultOutput
 		}
@@ -155,7 +155,7 @@ func goTypeName(s *values.Shape) string {
 	}
 	return s.Type.Name()
 }
-func (c *Call) formatScalar(s *values.Shape, v values.Value) error {
+func (c *VM) formatScalar(s *values.Shape, v values.Value) error {
 	flags := c.argument(1).AsString()
 	width, precision := int(c.argument(2).R), int(c.argument(3).R)
 	hasWidth, hasPrecision := c.argument(4).R != 0, c.argument(5).R != 0
@@ -354,7 +354,7 @@ func (c *Call) formatScalar(s *values.Shape, v values.Value) error {
 	c.result(0, values.String(text))
 	return nil
 }
-func (c *Call) packInterface(s *values.Shape, v values.Value) (values.Value, error) {
+func (c *VM) packInterface(s *values.Shape, v values.Value) (values.Value, error) {
 	if s.Kind == values.InterfaceKind {
 		return v, nil
 	}
@@ -368,7 +368,7 @@ func (c *Call) packInterface(s *values.Shape, v values.Value) (values.Value, err
 	}
 	return c.program.packInterface(uint64(id), v, &c.budget.allocated, c.budget.limits)
 }
-func (c *Call) formatChildren(s *values.Shape, v values.Value) error {
+func (c *VM) formatChildren(s *values.Shape, v values.Value) error {
 	n := uint64(0)
 	if s != nil {
 		switch s.LogicalKind() {
@@ -581,7 +581,7 @@ func compareFormatKey(ctx context.Context, s *values.Shape, a, b values.Value, t
 	return cmp.Compare(a.R, b.R), nil
 }
 
-func standardPrint(c *Call) error {
+func standardPrint(c *VM) error {
 	g := c.native
 	newline := g.Name == "println"
 	newlineBytes := uint64(0)
@@ -648,7 +648,7 @@ func standardPrint(c *Call) error {
 		return ErrOutput
 	}
 	c.budget.output += uint64(text.Len())
-	sink := c.output
+	sink := c.Output
 	if sink == nil {
 		sink = defaultOutput
 	}

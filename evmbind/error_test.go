@@ -9,6 +9,7 @@ import (
 	"github.com/andreyvit/evm/evmbind"
 	"github.com/andreyvit/evm/evmbind/internal/errorbindings"
 	"github.com/andreyvit/evm/evmbind/internal/errorfixture"
+	"github.com/andreyvit/evm/evmtest"
 	"os"
 	"reflect"
 	"strings"
@@ -81,8 +82,8 @@ func testNativeErrorBindings(t *testing.T, schema *evmbind.Schema) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(program)
-	scope, err := vm.OpenCallbackScope(context.Background(), evm.Budget{})
+	vm := evmtest.New(program)
+	scope, err := vm.OpenCallbackScope()
 	if err != nil {
 		t.Fatal(err)
 	}

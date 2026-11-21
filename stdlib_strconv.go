@@ -6,7 +6,7 @@ import (
 	"strconv"
 )
 
-func standardStrconv(c *Call) error {
+func standardStrconv(c *VM) error {
 	name := c.native.Name
 	var args [4]values.Value
 	for i := range c.native.Signature.Params {

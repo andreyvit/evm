@@ -21,8 +21,8 @@ func RegisterNativeCopies(pkg *Package) {
 		pkg.Methods = append(pkg.Methods, ExternalMethod{
 			Name: "NativeCopy", Receiver: row.Pointer,
 			Signature: Signature{Results: []*values.Type{row.Pointer}},
-			Call: func(c *Call) error {
-				record, err := c.Record(c.Argument(0), row.Model)
+			Call: func(c *VM) error {
+				record, err := c.Record(c.CallArgument(0), row.Model)
 				if err != nil {
 					return err
 				}

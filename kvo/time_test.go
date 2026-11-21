@@ -8,6 +8,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/kvo/codec/msgpack"
 	"github.com/andreyvit/evm/kvo/codec/row2"
@@ -103,7 +104,7 @@ func TestTimestampEVM(t *testing.T) {
 	r := b.MessagePack(msgpack.Encode(nil, reflect.ValueOf(src)))
 	ctx, scope := evm.WithRecords(context.Background())
 	defer scope.Close()
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	out := make([]values.Value, 1)
 	if err := vm.Run(ctx, "Read", []values.Value{scope.ReadRecord(m, r)}, out); err != nil || out[0].AsInt() != src.At.UnixNano() {
 		t.Fatal(out, err)

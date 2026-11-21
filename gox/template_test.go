@@ -11,6 +11,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/gox"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/kvo/codec/row2"
@@ -511,7 +512,7 @@ func Page(b *gox.Builder) {
 		t.Fatal(err)
 	}
 	for _, label := range []string{"one", "two"} {
-		pkg.Functions[0].Call = func(c *evm.Call) error { c.SetResult(0, values.String(label)); return nil }
+		pkg.Functions[0].Call = func(c *evm.VM) error { c.SetCallResult(0, values.String(label)); return nil }
 		p, err := tmpl.Link(pkg)
 		if err != nil {
 			t.Fatal(err)
@@ -1147,11 +1148,12 @@ func Invalid()func()int{return func()int{return 1}}
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	vm := evm.New(p.EVM())
+	vm := evmtest.New(p.EVM())
 	if err := vm.Run(context.Background(), "Choose", []values.Value{values.String("<hello>")}, out[:]); err != nil {
 		t.Fatal(err)
 	}
-	fn, err := p.EVM().FunctionValue(out[0])
+	fnValue, err := p.EVM().Callable(out[0])
+	fn := &fnValue
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1196,7 +1198,8 @@ func Invalid()func()int{return func()int{return 1}}
 	if err := vm.Run(context.Background(), "Invalid", nil, out[:]); err != nil {
 		t.Fatal(err)
 	}
-	invalid, err := p.EVM().FunctionValue(out[0])
+	invalidValue, err := p.EVM().Callable(out[0])
+	invalid := &invalidValue
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -34,7 +34,7 @@ func (f *Frame) modelSliceResult(n *node, data unsafe.Pointer, length, capacity 
 	if n.nativeLayout == nil || n.elem.nativeLayout == nil {
 		panic(fmt.Errorf("missing model slice layout %s", n.name))
 	}
-	v, err := f.Call.NativeSlice(n.nativeLayout, n.elem.nativeLayout, data, uint32(length), uint32(capacity))
+	v, err := f.VM.NativeSlice(n.nativeLayout, n.elem.nativeLayout, data, uint32(length), uint32(capacity))
 	if err != nil {
 		panic(err)
 	}

@@ -15,8 +15,8 @@ func appPackage() evm.Package {
 	return evm.Package{Path: "example.com/app", Functions: []evm.ExternalFunction{{
 		Name: "Badge", ParamNames: []string{"title"},
 		Signature: evm.Signature{Params: []*values.Type{values.StringType}, Results: []*values.Type{values.StringType}},
-		Call: func(c *evm.Call) error {
-			c.SetResult(0, c.Argument(0))
+		Call: func(c *evm.VM) error {
+			c.SetCallResult(0, c.CallArgument(0))
 			return nil
 		},
 	}}}

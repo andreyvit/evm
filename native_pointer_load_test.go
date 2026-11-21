@@ -26,7 +26,7 @@ func TestLinkedNativePointerLoad(t *testing.T) {
 				ptr.Native.Codec = &values.NativeValueCodec{Decode: decode, Encode: identity}
 			}
 			if mode == "program-codec" {
-				packages = []Package{{Path: "native", Types: []TypeDecl{{Shape: ptr, NativeCodec: &NativeValueCodec{Decode: func(_ *Call, v values.Value) (values.Value, error) { return decode(v) }, Encode: func(_ *Call, v values.Value) (values.Value, error) { return v, nil }}}}}}
+				packages = []Package{{Path: "native", Types: []TypeDecl{{Shape: ptr, NativeCodec: &NativeValueCodec{Decode: func(_ *VM, v values.Value) (values.Value, error) { return decode(v) }, Encode: func(_ *VM, v values.Value) (values.Value, error) { return v, nil }}}}}}
 			}
 			module := &Module{NoOptimization: mode == "unoptimized", Shapes: []*values.Shape{ptr}, ExtendedOps: []ExtendedOp{{Kind: ExtendedAddressLoad, Shape: ptr, In: []Operand{{Slot: 0, Repr: values.Pair}}, Out: []Operand{{Slot: 0, Repr: values.Pair}}}}, Functions: []Function{{Name: "read", Signature: Signature{Params: []*values.Type{ptr.Type}, Results: []*values.Type{ptr.Type}}, RCount: 1, PCount: 1, Code: []Instruction{WithBC(OpExtended, 0, 0), ABC(OpReturn, 0, 0, 0)}}}}
 			program, err := Link(module, packages...)

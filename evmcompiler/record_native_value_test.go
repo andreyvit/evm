@@ -8,6 +8,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/values"
 )
@@ -35,10 +36,13 @@ func TestNativeRecordValueStorage(t *testing.T) {
 	var hidden []int
 	var references []*int
 	db.Functions = []evm.ExternalFunction{
-		{Name: "Get", Signature: evm.Signature{Results: []*values.Type{row.Pointer}}, Call: func(c *evm.Call) error { c.SetResult(0, binding.Record(reflect.ValueOf(original)).Value()); return nil }},
-		{Name: "Change", Signature: evm.Signature{}, Call: func(c *evm.Call) error { original.Name = "after"; *original.Shared = 20; return nil }},
-		{Name: "Retain", Signature: evm.Signature{Params: []*values.Type{row.Pointer}}, Call: func(c *evm.Call) error {
-			r, err := c.Record(c.Argument(0), model)
+		{Name: "Get", Signature: evm.Signature{Results: []*values.Type{row.Pointer}}, Call: func(c *evm.VM) error {
+			c.SetCallResult(0, binding.Record(reflect.ValueOf(original)).Value())
+			return nil
+		}},
+		{Name: "Change", Signature: evm.Signature{}, Call: func(c *evm.VM) error { original.Name = "after"; *original.Shared = 20; return nil }},
+		{Name: "Retain", Signature: evm.Signature{Params: []*values.Type{row.Pointer}}, Call: func(c *evm.VM) error {
+			r, err := c.Record(c.CallArgument(0), model)
 			if err != nil {
 				return err
 			}
@@ -47,7 +51,7 @@ func TestNativeRecordValueStorage(t *testing.T) {
 			references = append(references, retained.Shared)
 			return nil
 		}},
-		{Name: "Mutate", Signature: evm.Signature{}, Call: func(c *evm.Call) error { retained.Name = "mutated"; return nil }},
+		{Name: "Mutate", Signature: evm.Signature{}, Call: func(c *evm.VM) error { retained.Name = "mutated"; return nil }},
 	}
 	for _, source := range []string{
 		`import "db"; func Run(p *db.Row) { *p = db.Row{} }`,
@@ -107,7 +111,7 @@ func TestNativeRecordValueStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := make([]values.Value, 1)
-	if err := evm.New(program).Run(context.Background(), "Run", nil, out); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", nil, out); err != nil {
 		t.Fatal(err)
 	}
 	if !out[0].AsBool() {
@@ -155,7 +159,7 @@ func TestNativeRecordValueComparability(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if !out[0].AsBool() {
@@ -187,7 +191,7 @@ func Copy(p *db.Row) string {saved:=*p;return saved.name}
 	arg := kvo.Bind(reflect.TypeFor[nativeValueRow](), model).Record(reflect.ValueOf(original)).Value()
 	for _, fn := range []string{"Pointer", "Copy"} {
 		b.Run(fn, func(b *testing.B) {
-			vm := evm.New(program)
+			vm := evmtest.New(program)
 			vm.Limits.Allocations = ^uint64(0)
 			vm.Limits.AllocationBytes = ^uint64(0)
 			args := []values.Value{arg}

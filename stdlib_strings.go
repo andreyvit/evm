@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-func standardStrings(c *Call) error {
+func standardStrings(c *VM) error {
 	name := c.native.Name
 	var args [4]values.Value
 	g := c.native
@@ -201,7 +201,7 @@ func standardStrings(c *Call) error {
 	}
 	return nil
 }
-func (c *Call) stringSliceResult(i int, ss []string) error {
+func (c *VM) stringSliceResult(i int, ss []string) error {
 	if len(ss) > math.MaxUint32 {
 		return ErrAllocation
 	}

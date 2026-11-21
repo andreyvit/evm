@@ -12,6 +12,7 @@ import (
 	"github.com/andreyvit/evm/evmbind"
 	"github.com/andreyvit/evm/evmbind/internal/rangefixture"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -40,7 +41,7 @@ func TestNativePackageFunctionsFromSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil || out[0].R != 1 {
+	if err := evmtest.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil || out[0].R != 1 {
 		t.Fatal(out, err)
 	}
 }
@@ -87,15 +88,15 @@ func TestNativePackageFunctionValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil || out[0].R != 12 || calls != 1 {
+	if err := evmtest.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil || out[0].R != 12 || calls != 1 {
 		t.Fatal(out, calls, err)
 	}
 }
 
 type packageFunctionHost struct{}
 
-func (*packageFunctionHost) ViaHost(_ *evm.Call, n int) int      { return n + 4 }
-func (*packageFunctionHost) Direct(_ *evm.Call, s string) string { return s }
+func (*packageFunctionHost) ViaHost(_ *evm.VM, n int) int      { return n + 4 }
+func (*packageFunctionHost) Direct(_ *evm.VM, s string) string { return s }
 
 func TestNativePackageFunctionAndHostMethods(t *testing.T) {
 	files := fstest.MapFS{"api.go": {Data: []byte(`package native
@@ -116,7 +117,7 @@ func TestNativePackageFunctionAndHostMethods(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil || out[0].R != 19 {
+	if err := evmtest.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil || out[0].R != 19 {
 		t.Fatal(out, err)
 	}
 }
@@ -177,7 +178,7 @@ func TestNativePackageFunctionImportedTypes(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil || out[0].R != 1 {
+	if err := evmtest.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil || out[0].R != 1 {
 		t.Fatal(out, err)
 	}
 }

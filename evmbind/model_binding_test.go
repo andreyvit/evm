@@ -15,6 +15,7 @@ import (
 	"github.com/andreyvit/evm/evmbind/internal/modeldata"
 	"github.com/andreyvit/evm/evmbind/internal/modelhost"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/values"
 )
@@ -26,13 +27,13 @@ type modelHost struct {
 	rows []*BoundModel
 }
 
-func (h *modelHost) Get(c *evm.Call) *BoundModel                 { return h.row }
-func (h *modelHost) Echo(c *evm.Call, r *BoundModel) *BoundModel { return r }
-func (h *modelHost) Other(*evm.Call) *modeldata.Alternate {
+func (h *modelHost) Get(c *evm.VM) *BoundModel                 { return h.row }
+func (h *modelHost) Echo(c *evm.VM, r *BoundModel) *BoundModel { return r }
+func (h *modelHost) Other(*evm.VM) *modeldata.Alternate {
 	return &modeldata.Alternate{Label: "other"}
 }
-func (h *modelHost) Copy(c *evm.Call, r BoundModel) BoundModel { r.Name = "copy"; return r }
-func (h *modelHost) Same(c *evm.Call, r *BoundModel) bool      { return r == h.row }
+func (h *modelHost) Copy(c *evm.VM, r BoundModel) BoundModel { r.Name = "copy"; return r }
+func (h *modelHost) Same(c *evm.VM, r *BoundModel) bool      { return r == h.row }
 
 func TestNativeModelSignatures(t *testing.T) {
 	schema := kvo.NewSchema()
@@ -81,8 +82,34 @@ func TestNativeModelSignatures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	codec, err := evmbind.Codec[*BoundModel](dep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vm := p.AcquireVM(t.Context())
+	defer vm.Release()
+	encoded, err := codec.PackIn(vm, instance.row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := codec.UnpackIn(vm, encoded)
+	if err != nil || decoded != instance.row {
+		t.Fatal("model pointer identity", err)
+	}
+	copies, err := evmbind.Codec[BoundModel](host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := copies.PackIn(vm, *instance.row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyRow, err := copies.UnpackIn(vm, snapshot)
+	if err != nil || copyRow.Name != instance.row.Name || copyRow.Hidden != 42 {
+		t.Fatal(copyRow, err)
+	}
 	var out [1]values.Value
-	if err = evm.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
+	if err = evmtest.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if !out[0].AsBool() {
@@ -127,7 +154,7 @@ func TestModelPackageInference(t *testing.T) {
 	}
 }
 
-func (h *modelHost) Pair(_ *evm.Call, a, b *BoundModel) bool { return a == b }
+func (h *modelHost) Pair(_ *evm.VM, a, b *BoundModel) bool { return a == b }
 
 func TestModelSelectionAmbiguity(t *testing.T) {
 	schema := kvo.NewSchema()
@@ -185,10 +212,10 @@ func TestGenericNativeModelSourceRegistry(t *testing.T) {
 
 type genericRegistryHost struct{ row *GenericRegistryModel[string] }
 
-func (h *genericRegistryHost) Echo(_ *evm.Call, r *GenericRegistryModel[string]) *GenericRegistryModel[string] {
+func (h *genericRegistryHost) Echo(_ *evm.VM, r *GenericRegistryModel[string]) *GenericRegistryModel[string] {
 	return r
 }
-func (h *genericRegistryHost) Get(_ *evm.Call) *GenericRegistryModel[string] { return h.row }
+func (h *genericRegistryHost) Get(_ *evm.VM) *GenericRegistryModel[string] { return h.row }
 
 func TestGenericNativeModelSignatures(t *testing.T) {
 	schema := kvo.NewSchema()
@@ -228,7 +255,7 @@ func TestGenericNativeModelSignatures(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if !out[0].AsBool() {
@@ -269,7 +296,7 @@ func TestGenericNativeModelSignatures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(program).Run(context.Background(), "Run", []values.Value{holder, row}, out[:]); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", []values.Value{holder, row}, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if !out[0].AsBool() {
@@ -295,13 +322,13 @@ func TestGenericNativeModelSignatures(t *testing.T) {
 	}
 }
 
-func (h *modelHost) GenericGet(*evm.Call) *modeldata.Generic[string] {
+func (h *modelHost) GenericGet(*evm.VM) *modeldata.Generic[string] {
 	return &modeldata.Generic[string]{Name: "generic", Hidden: "preserved"}
 }
-func (h *modelHost) GenericEcho(_ *evm.Call, r *modeldata.Generic[string]) *modeldata.Generic[string] {
+func (h *modelHost) GenericEcho(_ *evm.VM, r *modeldata.Generic[string]) *modeldata.Generic[string] {
 	return r
 }
-func (h *modelHost) GenericCopy(_ *evm.Call, r modeldata.Generic[string]) modeldata.Generic[string] {
+func (h *modelHost) GenericCopy(_ *evm.VM, r modeldata.Generic[string]) modeldata.Generic[string] {
 	if r.Hidden != "preserved" {
 		panic("lost hidden field")
 	}
@@ -311,11 +338,11 @@ func (h *modelHost) GenericCopy(_ *evm.Call, r modeldata.Generic[string]) modeld
 type Transform func(*GenericRegistryModel[string]) *GenericRegistryModel[string]
 type GenericHolder struct{ Transform Transform }
 
-func (h *modelHost) GenericNamed(*evm.Call) *modeldata.Generic[modeldata.BoundModel] {
+func (h *modelHost) GenericNamed(*evm.VM) *modeldata.Generic[modeldata.BoundModel] {
 	return &modeldata.Generic[modeldata.BoundModel]{Name: "named"}
 }
 
-func (h *modelHost) GenericDuration(*evm.Call) *modeldata.Generic[time.Duration] {
+func (h *modelHost) GenericDuration(*evm.VM) *modeldata.Generic[time.Duration] {
 	return &modeldata.Generic[time.Duration]{Name: "duration"}
 }
 
@@ -357,7 +384,7 @@ func TestGenericModelArgumentShapes(t *testing.T) {
 type LocalArgument string
 type localGenericHost struct{}
 
-func (*localGenericHost) Get(*evm.Call) *GenericRegistryModel[LocalArgument] {
+func (*localGenericHost) Get(*evm.VM) *GenericRegistryModel[LocalArgument] {
 	return &GenericRegistryModel[LocalArgument]{Name: "local"}
 }
 
@@ -410,18 +437,18 @@ func TestGenericConsumerLocalArgument(t *testing.T) {
 
 type LocalTransform func(*GenericRegistryModel[LocalArgument])
 
-func (h *modelHost) Rows(*evm.Call) []*BoundModel {
+func (h *modelHost) Rows(*evm.VM) []*BoundModel {
 	if h.rows == nil {
 		h.rows = make([]*BoundModel, 2, 4)
 		h.rows[0] = h.row
 	}
 	return h.rows
 }
-func (h *modelHost) EchoRows(_ *evm.Call, rows []*BoundModel) []*BoundModel { return rows }
+func (h *modelHost) EchoRows(_ *evm.VM, rows []*BoundModel) []*BoundModel { return rows }
 
-func (*modelHost) Mutate(_ *evm.Call, row *BoundModel) { row.Name = "mutated" }
+func (*modelHost) Mutate(_ *evm.VM, row *BoundModel) { row.Name = "mutated" }
 
-func (h *modelHost) AliasRows(_ *evm.Call, part, all []*BoundModel) []*BoundModel {
+func (h *modelHost) AliasRows(_ *evm.VM, part, all []*BoundModel) []*BoundModel {
 	part[0] = nil
 	if all[1] != nil {
 		panic("overlapping slice arguments lost aliasing")
@@ -429,17 +456,17 @@ func (h *modelHost) AliasRows(_ *evm.Call, part, all []*BoundModel) []*BoundMode
 	all[2] = h.row
 	return all[1:3]
 }
-func (h *modelHost) AnyRows(c *evm.Call) any            { return h.Rows(c) }
-func (h *modelHost) EchoAny(_ *evm.Call, value any) any { return value }
+func (h *modelHost) AnyRows(c *evm.VM) any            { return h.Rows(c) }
+func (h *modelHost) EchoAny(_ *evm.VM, value any) any { return value }
 
-func (h *modelHost) SwapRows(_ *evm.Call, rows []*BoundModel) { rows[0], rows[1] = rows[1], rows[0] }
-func (h *modelHost) NilRows(_ *evm.Call) []*BoundModel        { return nil }
-func (h *modelHost) IsRows(_ *evm.Call, value any) bool       { _, ok := value.([]*BoundModel); return ok }
-func (h *modelHost) TailRows(_ *evm.Call, rows []*BoundModel) []*BoundModel {
+func (h *modelHost) SwapRows(_ *evm.VM, rows []*BoundModel) { rows[0], rows[1] = rows[1], rows[0] }
+func (h *modelHost) NilRows(_ *evm.VM) []*BoundModel        { return nil }
+func (h *modelHost) IsRows(_ *evm.VM, value any) bool       { _, ok := value.([]*BoundModel); return ok }
+func (h *modelHost) TailRows(_ *evm.VM, rows []*BoundModel) []*BoundModel {
 	return rows[cap(rows):cap(rows)]
 }
 
-func (h *modelHost) WithRows(_ *evm.Call, rows []*BoundModel, visit func([]*BoundModel) []*BoundModel) {
+func (h *modelHost) WithRows(_ *evm.VM, rows []*BoundModel, visit func([]*BoundModel) []*BoundModel) {
 	rows[0] = h.row
 	returned := visit(rows)
 	if &returned[0] != &rows[0] {
@@ -450,7 +477,7 @@ func (h *modelHost) WithRows(_ *evm.Call, rows []*BoundModel, visit func([]*Boun
 	}
 	returned[2] = h.row
 }
-func (h *modelHost) VisitRows(_ *evm.Call, rows []*BoundModel, visit func()) {
+func (h *modelHost) VisitRows(_ *evm.VM, rows []*BoundModel, visit func()) {
 	rows[0] = h.row
 	visit()
 	if rows[1] != nil {
@@ -458,62 +485,62 @@ func (h *modelHost) VisitRows(_ *evm.Call, rows []*BoundModel, visit func()) {
 	}
 }
 
-func (h *modelHost) ProduceRows(_ *evm.Call, produce func() []*BoundModel) []*BoundModel {
+func (h *modelHost) ProduceRows(_ *evm.VM, produce func() []*BoundModel) []*BoundModel {
 	rows := produce()
 	rows[1] = h.row
 	return rows
 }
 
-func (h *modelHost) DirectVisit(c *evm.Call, rows []*BoundModel, visit *evm.FunctionHandle) {
+func (h *modelHost) DirectVisit(c *evm.VM, rows []*BoundModel, visit *evm.Callable) {
 	rows[0] = h.row
 	fn, err := visit.Value(c.Program(), evm.Signature{})
 	if err != nil {
 		panic(err)
 	}
-	if err := c.RunCallbackArgs(fn, nil, nil); err != nil {
+	if err := evmtest.Callback(c, fn, nil, nil); err != nil {
 		panic(err)
 	}
 	if rows[1] != nil {
 		panic("direct callback mutation not visible to host")
 	}
 }
-func (h *modelHost) PanicRows(_ *evm.Call, rows []*BoundModel) { rows[0] = h.row; panic("host panic") }
+func (h *modelHost) PanicRows(_ *evm.VM, rows []*BoundModel) { rows[0] = h.row; panic("host panic") }
 
-func (h *modelHost) Matrix(c *evm.Call) [][]*BoundModel                           { return [][]*BoundModel{h.Rows(c)} }
-func (h *modelHost) EchoMatrix(_ *evm.Call, rows [][]*BoundModel) [][]*BoundModel { return rows }
-func (h *modelHost) Groups(c *evm.Call) map[string][]*BoundModel {
+func (h *modelHost) Matrix(c *evm.VM) [][]*BoundModel                           { return [][]*BoundModel{h.Rows(c)} }
+func (h *modelHost) EchoMatrix(_ *evm.VM, rows [][]*BoundModel) [][]*BoundModel { return rows }
+func (h *modelHost) Groups(c *evm.VM) map[string][]*BoundModel {
 	return map[string][]*BoundModel{"rows": h.Rows(c)}
 }
 
-func (h *modelHost) NamedRows(c *evm.Call) modelhost.NamedRowsType {
+func (h *modelHost) NamedRows(c *evm.VM) modelhost.NamedRowsType {
 	return modelhost.NamedRowsType(h.Rows(c))
 }
-func (h *modelHost) NamedEcho(_ *evm.Call, rows modelhost.NamedRowsType) modelhost.NamedRowsType {
+func (h *modelHost) NamedEcho(_ *evm.VM, rows modelhost.NamedRowsType) modelhost.NamedRowsType {
 	if &rows[0] != &h.rows[0] {
 		panic("named generated argument copied backing")
 	}
 	return rows
 }
-func (h *modelHost) NamedIs(_ *evm.Call, value any) bool {
+func (h *modelHost) NamedIs(_ *evm.VM, value any) bool {
 	_, ok := value.(modelhost.NamedRowsType)
 	return ok
 }
-func (h *modelHost) NamedProduce(_ *evm.Call, produce func() modelhost.NamedRowsType) modelhost.NamedRowsType {
+func (h *modelHost) NamedProduce(_ *evm.VM, produce func() modelhost.NamedRowsType) modelhost.NamedRowsType {
 	rows := produce()
 	if &rows[0] != &h.rows[0] {
 		panic("named callback copied backing")
 	}
 	return rows
 }
-func (h *modelHost) NamedMatrix(c *evm.Call) modelhost.NamedMatrixType {
+func (h *modelHost) NamedMatrix(c *evm.VM) modelhost.NamedMatrixType {
 	return modelhost.NamedMatrixType{h.Rows(c)}
 }
-func (h *modelHost) NamedMatrixEcho(_ *evm.Call, rows modelhost.NamedMatrixType) modelhost.NamedMatrixType {
+func (h *modelHost) NamedMatrixEcho(_ *evm.VM, rows modelhost.NamedMatrixType) modelhost.NamedMatrixType {
 	return rows
 }
 
-func (h *modelHost) Hidden(_ *evm.Call, r BoundModel) int { return r.Hidden }
-func (h *modelHost) WithValue(_ *evm.Call, r BoundModel, visit func(BoundModel) BoundModel) BoundModel {
+func (h *modelHost) Hidden(_ *evm.VM, r BoundModel) int { return r.Hidden }
+func (h *modelHost) WithValue(_ *evm.VM, r BoundModel, visit func(BoundModel) BoundModel) BoundModel {
 	result := visit(r)
 	result.Name = "after callback"
 	return result
@@ -553,4 +580,4 @@ func TestModelValueDeclarationRequiresNativeLayout(t *testing.T) {
 	}
 }
 
-func (h *modelHost) EchoValues(_ *evm.Call, rows []BoundModel) []BoundModel { return rows }
+func (h *modelHost) EchoValues(_ *evm.VM, rows []BoundModel) []BoundModel { return rows }

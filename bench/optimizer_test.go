@@ -7,6 +7,7 @@ import (
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/bench/internal/optwork"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -31,7 +32,7 @@ func optimizerProgram(t testing.TB) *evm.Program {
 }
 
 func TestOptimizerKernels(t *testing.T) {
-	vm := evm.New(optimizerProgram(t))
+	vm := evmtest.New(optimizerProgram(t))
 	for _, k := range optCases {
 		for _, n := range []int{0, 1, 3, 16, 37, 512} {
 			for seed := range 4 {
@@ -50,7 +51,7 @@ func BenchmarkOptimizer(b *testing.B) {
 	for _, k := range optCases {
 		b.Run(k.name, func(b *testing.B) {
 			const n = 512
-			vm := evm.New(p)
+			vm := evmtest.New(p)
 			ctx := context.Background()
 			var out [1]values.Value
 			var want [4]int

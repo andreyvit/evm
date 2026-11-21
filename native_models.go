@@ -64,7 +64,7 @@ func (p *Program) linkNativeModels(packages []Package) error {
 	return nil
 }
 
-func (c *Call) modelAnyValue(x any) (values.Value, bool, error) {
+func (c *VM) modelAnyValue(x any) (values.Value, bool, error) {
 	if r, ok := x.(kvo.Record); ok {
 		s := c.program.Shape(kvo.Type(r.Model()))
 		if s == nil {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -52,7 +53,7 @@ func TestSelectedNativeMethods(t *testing.T) {
 		t.Fatal(err)
 	}
 	var result [1]values.Value
-	if err := evm.New(program).Run(context.Background(), "Run", []values.Value{arg}, result[:]); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", []values.Value{arg}, result[:]); err != nil {
 		t.Fatal(err)
 	}
 	if host.Value != 7 || result[0].AsInt() != 14 {

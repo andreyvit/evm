@@ -19,6 +19,7 @@ type LinkEnvironment struct {
 
 // LinkOptions configures a link environment.
 type LinkOptions struct {
+	DefaultLimits *evm.Limits
 	// Compilers are the compile environments that produce the templates and
 	// modules to link. Programs of what they compile also share the linked
 	// form of the host storage shapes. Anything else links the same way,
@@ -40,7 +41,7 @@ func (o LinkOptions) NewEnvironment(packages ...evm.Package) (*LinkEnvironment, 
 		shapes = append(shapes, compiler.Shapes()...)
 		methods = append(methods, compiler.MethodTables())
 	}
-	links, err := evm.LinkOptions{Shapes: shapes, Methods: methods}.NewEnvironment(withBuiltinPackages(packages)...)
+	links, err := evm.LinkOptions{DefaultLimits: o.DefaultLimits, Shapes: shapes, Methods: methods}.NewEnvironment(withBuiltinPackages(packages)...)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +62,7 @@ func (l *LinkEnvironment) Link(t *Template) (*Program, error) {
 	if err != nil {
 		return nil, err
 	}
-	linked.program = p
+	linked.setProgram(p)
 	return linked, nil
 }
 

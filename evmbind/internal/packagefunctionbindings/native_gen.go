@@ -246,61 +246,61 @@ var Bindings = evmbind.Static{Fingerprint: "4ee6d21d17ffb51a99ad404d4284fed206b4
 	},
 	Calls: map[string]evmbind.Wrapper{
 		"AsAdder": func(f *evmbind.Frame) {
-			r0 := f.Host.(func(*api.Counter) api.Adder)(readPtrCounter(f, f.Argument(0)))
-			f.SetResult(0, writeTypeAdder(f, r0))
+			r0 := f.Host.(func(*api.Counter) api.Adder)(readPtrCounter(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeTypeAdder(f, r0))
 		},
 		"*Counter.Add": func(f *evmbind.Frame) {
-			r0 := readPtrCounter(f, f.Argument(0)).Add(readCollection9(f, f.Argument(1))...)
-			f.SetResult(0, writeScalarInt(f, r0))
+			r0 := readPtrCounter(f, f.CallArgument(0)).Add(readCollection9(f, f.CallArgument(1))...)
+			f.SetCallResult(0, writeScalarInt(f, r0))
 		},
 		"Double": func(f *evmbind.Frame) {
-			r0 := f.Host.(func(int) int)(readScalarInt(f, f.Argument(0)))
-			f.SetResult(0, writeScalarInt(f, r0))
+			r0 := f.Host.(func(int) int)(readScalarInt(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeScalarInt(f, r0))
 		},
 		"Increment": func(f *evmbind.Frame) {
-			r0 := f.Host.(func(*api.Counter, int) int)(readPtrCounter(f, f.Argument(0)), readScalarInt(f, f.Argument(1)))
-			f.SetResult(0, writeScalarInt(f, r0))
+			r0 := f.Host.(func(*api.Counter, int) int)(readPtrCounter(f, f.CallArgument(0)), readScalarInt(f, f.CallArgument(1)))
+			f.SetCallResult(0, writeScalarInt(f, r0))
 		},
 		"NewCounter": func(f *evmbind.Frame) {
-			r0 := f.Host.(func(int) *api.Counter)(readScalarInt(f, f.Argument(0)))
-			f.SetResult(0, writePtrCounter(f, r0))
+			r0 := f.Host.(func(int) *api.Counter)(readScalarInt(f, f.CallArgument(0)))
+			f.SetCallResult(0, writePtrCounter(f, r0))
 		},
 		"NewGroup": func(f *evmbind.Frame) {
-			r0 := f.Host.(func(...api.Adder) *api.Group)(readCollection7(f, f.Argument(0))...)
-			f.SetResult(0, writePtrGroup(f, r0))
+			r0 := f.Host.(func(...api.Adder) *api.Group)(readCollection7(f, f.CallArgument(0))...)
+			f.SetCallResult(0, writePtrGroup(f, r0))
 		},
 		"RangeOf": func(f *evmbind.Frame) {
-			r0 := f.Host.(func([]byte, []byte) api.Bounds)(readCollection8(f, f.Argument(0)), readCollection8(f, f.Argument(1)))
-			f.SetResult(0, writeTypeBounds(f, r0))
+			r0 := f.Host.(func([]byte, []byte) api.Bounds)(readCollection8(f, f.CallArgument(0)), readCollection8(f, f.CallArgument(1)))
+			f.SetCallResult(0, writeTypeBounds(f, r0))
 		},
 		"Reset": func(f *evmbind.Frame) {
-			f.Host.(func(*api.Counter))(readPtrCounter(f, f.Argument(0)))
+			f.Host.(func(*api.Counter))(readPtrCounter(f, f.CallArgument(0)))
 		},
 		"SetFirst": func(f *evmbind.Frame) {
-			f.Host.(func(...int))(readCollection9(f, f.Argument(0))...)
+			f.Host.(func(...int))(readCollection9(f, f.CallArgument(0))...)
 		},
 		"Split": func(f *evmbind.Frame) {
-			r0, r1 := f.Host.(func([]int) (int, error))(readCollection9(f, f.Argument(0)))
-			f.SetResult(0, writeScalarInt(f, r0))
-			f.SetResult(1, writeScalarError(f, r1))
+			r0, r1 := f.Host.(func([]int) (int, error))(readCollection9(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeScalarInt(f, r0))
+			f.SetCallResult(1, writeScalarError(f, r1))
 		},
 		"Sum": func(f *evmbind.Frame) {
-			r0 := f.Host.(func(int, ...int) int)(readScalarInt(f, f.Argument(0)), readCollection9(f, f.Argument(1))...)
-			f.SetResult(0, writeScalarInt(f, r0))
+			r0 := f.Host.(func(int, ...int) int)(readScalarInt(f, f.CallArgument(0)), readCollection9(f, f.CallArgument(1))...)
+			f.SetCallResult(0, writeScalarInt(f, r0))
 		},
 		"Visit": func(f *evmbind.Frame) {
-			r0 := f.Host.(func(*api.Counter, func(int) bool) int)(readPtrCounter(f, f.Argument(0)), f.DecodeNativeCallback("func(int) bool", f.Argument(1)).(func(int) bool))
-			f.SetResult(0, writeScalarInt(f, r0))
+			r0 := f.Host.(func(*api.Counter, func(int) bool) int)(readPtrCounter(f, f.CallArgument(0)), f.DecodeNativeCallback("func(int) bool", f.CallArgument(1)).(func(int) bool))
+			f.SetCallResult(0, writeScalarInt(f, r0))
 		},
 		"Adder.Add": func(f *evmbind.Frame) {
-			r0 := f.Receiver.(api.Adder).Add(readCollection9(f, f.Argument(1))...)
-			f.SetResult(0, writeScalarInt(f, r0))
+			r0 := f.Receiver.(api.Adder).Add(readCollection9(f, f.CallArgument(1))...)
+			f.SetCallResult(0, writeScalarInt(f, r0))
 		},
 	},
 	Direct: map[string]evmbind.DirectFactory{
 		"Double": func(host any) evm.DirectFunc {
 			h := host.(func(int) int)
-			return func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+			return func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 				defer evmbind.Catch("Double", &err)
 				argx := readScalarInt(nil, x)
 				out := h(argx)
@@ -310,10 +310,10 @@ var Bindings = evmbind.Static{Fingerprint: "4ee6d21d17ffb51a99ad404d4284fed206b4
 		},
 		"Increment": func(host any) evm.DirectFunc {
 			h := host.(func(*api.Counter, int) int)
-			return func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+			return func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 				defer evmbind.Catch("Increment", &err)
 				if x.P != nil && x.R != values.NativeAddress {
-					f := evmbind.Frame{Call: c}
+					f := evmbind.Frame{VM: c}
 					argx := readPtrCounter(&f, x)
 					argy := readScalarInt(&f, y)
 					out := h(argx, argy)
@@ -329,7 +329,7 @@ var Bindings = evmbind.Static{Fingerprint: "4ee6d21d17ffb51a99ad404d4284fed206b4
 		},
 		"NewCounter": func(host any) evm.DirectFunc {
 			h := host.(func(int) *api.Counter)
-			return func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+			return func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 				defer evmbind.Catch("NewCounter", &err)
 				argx := readScalarInt(nil, x)
 				out := h(argx)
@@ -339,10 +339,10 @@ var Bindings = evmbind.Static{Fingerprint: "4ee6d21d17ffb51a99ad404d4284fed206b4
 		},
 		"Reset": func(host any) evm.DirectFunc {
 			h := host.(func(*api.Counter))
-			return func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+			return func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 				defer evmbind.Catch("Reset", &err)
 				if x.P != nil && x.R != values.NativeAddress {
-					f := evmbind.Frame{Call: c}
+					f := evmbind.Frame{VM: c}
 					argx := readPtrCounter(&f, x)
 					h(argx)
 					return v, nil

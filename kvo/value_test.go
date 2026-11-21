@@ -8,6 +8,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/internal/valuebench"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/kvo/codec/msgpack"
@@ -50,7 +51,7 @@ func TestFloat32UsesSharedRuntimeBits(t *testing.T) {
 				t.Fatalf("unexpected float32: %+v", v)
 			}
 			ctx, scope := evm.WithRecords(context.Background())
-			vm := evm.New(program)
+			vm := evmtest.New(program)
 			out := make([]values.Value, 1)
 			if err := vm.Run(ctx, "Read", []values.Value{scope.ReadRecord(m, r)}, out); err != nil || out[0].AsFloat32() != src.N {
 				t.Fatal(out, err)
@@ -139,7 +140,7 @@ func TestSharedStringOwnership(t *testing.T) {
 				t.Fatal("incorrect string ownership/copy")
 			}
 			ctx, scope := evm.WithRecords(context.Background())
-			vm := evm.New(program)
+			vm := evmtest.New(program)
 			out := make([]values.Value, 1)
 			if err := vm.Run(ctx, "Read", []values.Value{scope.ReadRecord(model, r)}, out); err != nil {
 				t.Fatal(err)

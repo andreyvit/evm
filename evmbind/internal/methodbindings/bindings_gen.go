@@ -14,113 +14,113 @@ import (
 
 var MethodBindings = evmbind.StaticMethods{
 	"github.com/andreyvit/evm/evmbind/internal/methodfixture.Customer_Add": {Signature: "record-method-v1(github.com/andreyvit/evm/evmbind/internal/methodfixture.Delta;)(int64;)",
-		Call: func(c *evm.Call) (err error) {
+		Call: func(c *evm.VM) (err error) {
 			defer evmbind.Catch("github.com/andreyvit/evm/evmbind/internal/methodfixture.Customer_Add", &err)
-			r0 := api0.Customer_Add(kvo.FromValue(c.Argument(0)), api0.Delta(c.Argument(1).AsInt()))
-			c.SetResult(0, values.Int(int64(r0)))
+			r0 := api0.Customer_Add(kvo.FromValue(c.CallArgument(0)), api0.Delta(c.CallArgument(1).AsInt()))
+			c.SetCallResult(0, values.Int(int64(r0)))
 			return nil
 		},
-		Direct: evm.DirectBinding{Op: evm.OpCallHostSUU, Call: func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+		Direct: evm.DirectBinding{Op: evm.OpCallHostSUU, Call: func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 			defer evmbind.Catch("github.com/andreyvit/evm/evmbind/internal/methodfixture.Customer_Add", &err)
 			r := api0.Customer_Add(kvo.FromValue(x), api0.Delta(y.AsInt()))
 			return values.Int(int64(r)), nil
 		}},
 	},
 	"github.com/andreyvit/evm/evmbind/internal/methodfixture.Customer_Balance": {Signature: "record-method-v1()(int64;)",
-		Call: func(c *evm.Call) (err error) {
+		Call: func(c *evm.VM) (err error) {
 			defer evmbind.Catch("github.com/andreyvit/evm/evmbind/internal/methodfixture.Customer_Balance", &err)
-			r0 := api0.Customer_Balance(kvo.FromValue(c.Argument(0)))
-			c.SetResult(0, values.Int(int64(r0)))
+			r0 := api0.Customer_Balance(kvo.FromValue(c.CallArgument(0)))
+			c.SetCallResult(0, values.Int(int64(r0)))
 			return nil
 		},
-		Direct: evm.DirectBinding{Op: evm.OpCallHostSU, Call: func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+		Direct: evm.DirectBinding{Op: evm.OpCallHostSU, Call: func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 			defer evmbind.Catch("github.com/andreyvit/evm/evmbind/internal/methodfixture.Customer_Balance", &err)
 			r := api0.Customer_Balance(kvo.FromValue(x))
 			return values.Int(int64(r)), nil
 		}},
 	},
 	"github.com/andreyvit/evm/evmbind/internal/methodfixture.Customer_Check": {Signature: "record-method-v1(bool;)(bool;uint16;)",
-		Call: func(c *evm.Call) (err error) {
+		Call: func(c *evm.VM) (err error) {
 			defer evmbind.Catch("github.com/andreyvit/evm/evmbind/internal/methodfixture.Customer_Check", &err)
-			r0, r1 := api0.Customer_Check(kvo.FromValue(c.Argument(0)), bool(c.Argument(1).AsBool()))
-			c.SetResult(0, values.Bool(bool(r0)))
-			c.SetResult(1, values.Uint(uint64(r1)))
+			r0, r1 := api0.Customer_Check(kvo.FromValue(c.CallArgument(0)), bool(c.CallArgument(1).AsBool()))
+			c.SetCallResult(0, values.Bool(bool(r0)))
+			c.SetCallResult(1, values.Uint(uint64(r1)))
 			return nil
 		},
 	},
 	"github.com/andreyvit/evm/evmbind/internal/methodfixture.Customer_Fail": {Signature: "record-method-v1()()",
-		Call: func(c *evm.Call) (err error) {
+		Call: func(c *evm.VM) (err error) {
 			defer evmbind.Catch("github.com/andreyvit/evm/evmbind/internal/methodfixture.Customer_Fail", &err)
-			api0.Customer_Fail(kvo.FromValue(c.Argument(0)))
+			api0.Customer_Fail(kvo.FromValue(c.CallArgument(0)))
 			return nil
 		},
-		Direct: evm.DirectBinding{Op: evm.OpCallHostSV, Call: func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+		Direct: evm.DirectBinding{Op: evm.OpCallHostSV, Call: func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 			defer evmbind.Catch("github.com/andreyvit/evm/evmbind/internal/methodfixture.Customer_Fail", &err)
 			api0.Customer_Fail(kvo.FromValue(x))
 			return values.Value{}, nil
 		}},
 	},
 	"github.com/andreyvit/evm/evmbind/internal/methodfixture.Customer_Label": {Signature: "record-method-v1(string;)(string;)",
-		Call: func(c *evm.Call) (err error) {
+		Call: func(c *evm.VM) (err error) {
 			defer evmbind.Catch("github.com/andreyvit/evm/evmbind/internal/methodfixture.Customer_Label", &err)
-			r0 := api0.Customer_Label(kvo.FromValue(c.Argument(0)), string(c.Argument(1).AsString()))
+			r0 := api0.Customer_Label(kvo.FromValue(c.CallArgument(0)), string(c.CallArgument(1).AsString()))
 			if err := c.ChargeAllocation(uint64(len(r0))); err != nil {
 				return err
 			}
-			c.SetResult(0, values.String(strings.Clone(string(r0))))
+			c.SetCallResult(0, values.String(strings.Clone(string(r0))))
 			return nil
 		},
-		Direct: evm.DirectBinding{Op: evm.OpCallHostSSS, Call: func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+		Direct: evm.DirectBinding{Op: evm.OpCallHostSSS, Call: func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 			defer evmbind.Catch("github.com/andreyvit/evm/evmbind/internal/methodfixture.Customer_Label", &err)
 			r := api0.Customer_Label(kvo.FromValue(x), string(y.AsString()))
 			return values.String(strings.Clone(string(r))), nil
 		}},
 	},
 	"github.com/andreyvit/evm/evmbind/internal/methodfixture.Customer_Name": {Signature: "record-method-v1()(string;)",
-		Call: func(c *evm.Call) (err error) {
+		Call: func(c *evm.VM) (err error) {
 			defer evmbind.Catch("github.com/andreyvit/evm/evmbind/internal/methodfixture.Customer_Name", &err)
-			r0 := api0.Customer_Name(kvo.FromValue(c.Argument(0)))
+			r0 := api0.Customer_Name(kvo.FromValue(c.CallArgument(0)))
 			if err := c.ChargeAllocation(uint64(len(r0))); err != nil {
 				return err
 			}
-			c.SetResult(0, values.String(strings.Clone(string(r0))))
+			c.SetCallResult(0, values.String(strings.Clone(string(r0))))
 			return nil
 		},
-		Direct: evm.DirectBinding{Op: evm.OpCallHostSS, Call: func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+		Direct: evm.DirectBinding{Op: evm.OpCallHostSS, Call: func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 			defer evmbind.Catch("github.com/andreyvit/evm/evmbind/internal/methodfixture.Customer_Name", &err)
 			r := api0.Customer_Name(kvo.FromValue(x))
 			return values.String(strings.Clone(string(r))), nil
 		}},
 	},
 	"github.com/andreyvit/evm/evmbind/internal/methodfixture.Customer_Observe": {Signature: "record-method-v1()()",
-		Call: func(c *evm.Call) (err error) {
+		Call: func(c *evm.VM) (err error) {
 			defer evmbind.Catch("github.com/andreyvit/evm/evmbind/internal/methodfixture.Customer_Observe", &err)
-			api0.Customer_Observe(kvo.FromValue(c.Argument(0)))
+			api0.Customer_Observe(kvo.FromValue(c.CallArgument(0)))
 			return nil
 		},
-		Direct: evm.DirectBinding{Op: evm.OpCallHostSV, Call: func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+		Direct: evm.DirectBinding{Op: evm.OpCallHostSV, Call: func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 			defer evmbind.Catch("github.com/andreyvit/evm/evmbind/internal/methodfixture.Customer_Observe", &err)
 			api0.Customer_Observe(kvo.FromValue(x))
 			return values.Value{}, nil
 		}},
 	},
 	"github.com/andreyvit/evm/evmbind/internal/methodfixture.Customer_Summary": {Signature: "record-method-v1(int8;float32;)(int64;float32;)",
-		Call: func(c *evm.Call) (err error) {
+		Call: func(c *evm.VM) (err error) {
 			defer evmbind.Catch("github.com/andreyvit/evm/evmbind/internal/methodfixture.Customer_Summary", &err)
-			r0, r1 := api0.Customer_Summary(kvo.FromValue(c.Argument(0)), int8(c.Argument(1).AsInt()), float32(c.Argument(2).AsFloat32()))
-			c.SetResult(0, values.Int(int64(r0)))
-			c.SetResult(1, values.Float32(float32(r1)))
+			r0, r1 := api0.Customer_Summary(kvo.FromValue(c.CallArgument(0)), int8(c.CallArgument(1).AsInt()), float32(c.CallArgument(2).AsFloat32()))
+			c.SetCallResult(0, values.Int(int64(r0)))
+			c.SetCallResult(1, values.Float32(float32(r1)))
 			return nil
 		},
 	},
 	"github.com/andreyvit/evm/evmbind/internal/methodfixture.Customer_WithFlag": {Signature: "record-method-v1(github.com/andreyvit/evm/kvo.PropFlag;)(int64;)",
-		Call: func(c *evm.Call) (err error) {
+		Call: func(c *evm.VM) (err error) {
 			defer evmbind.Catch("github.com/andreyvit/evm/evmbind/internal/methodfixture.Customer_WithFlag", &err)
-			r0 := api0.Customer_WithFlag(kvo.FromValue(c.Argument(0)), kvo.PropFlag(c.Argument(1).AsInt()))
-			c.SetResult(0, values.Int(int64(r0)))
+			r0 := api0.Customer_WithFlag(kvo.FromValue(c.CallArgument(0)), kvo.PropFlag(c.CallArgument(1).AsInt()))
+			c.SetCallResult(0, values.Int(int64(r0)))
 			return nil
 		},
-		Direct: evm.DirectBinding{Op: evm.OpCallHostSUU, Call: func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+		Direct: evm.DirectBinding{Op: evm.OpCallHostSUU, Call: func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 			defer evmbind.Catch("github.com/andreyvit/evm/evmbind/internal/methodfixture.Customer_WithFlag", &err)
 			r := api0.Customer_WithFlag(kvo.FromValue(x), kvo.PropFlag(y.AsInt()))
 			return values.Int(int64(r)), nil

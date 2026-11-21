@@ -65,6 +65,7 @@ var (
 	Uint64     = NewType("u64", Raw)
 	Float64    = NewType("f64", Raw)
 	Boolean    = NewType("bool", Raw)
+	BoolType   = Boolean
 	StringType = NewOwnedType("string", Pair, ownString)
 	AnyType    = NewType("any", Pair)
 	ErrorType  = NewType("error", Pair)

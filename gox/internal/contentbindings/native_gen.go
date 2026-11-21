@@ -94,11 +94,11 @@ var Bindings = evmbind.Static{Fingerprint: "511215f582b6d0f42f77690926bf70c52949
 	},
 	Calls: map[string]evmbind.Wrapper{
 		"Echo": func(f *evmbind.Frame) {
-			r0 := f.Host.(func(dep0.Content) dep0.Content)(readImported3(f, f.Argument(0)))
-			f.SetResult(0, writeImported3(f, r0))
+			r0 := f.Host.(func(dep0.Content) dep0.Content)(readImported3(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeImported3(f, r0))
 		},
 		"Wrap": func(f *evmbind.Frame) {
-			r0 := f.Host.(func(dep0.Content) api.Envelope)(readImported3(f, f.Argument(0)))
-			f.SetResult(0, writeTypeEnvelope(f, r0))
+			r0 := f.Host.(func(dep0.Content) api.Envelope)(readImported3(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeTypeEnvelope(f, r0))
 		},
 	}}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 	"testing"
 )
@@ -24,7 +25,7 @@ func Run(x int) int {
 		t.Fatal(err)
 	}
 	c := evm.NewCoverage(p)
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	vm.SetCoverage(c)
 	var out [1]values.Value
 	if err := vm.Run(context.Background(), "Run", []values.Value{values.Int(10)}, out[:]); err != nil {
@@ -68,7 +69,7 @@ func Run(flag bool) int {
 			t.Fatal(err)
 		}
 		c := evm.NewCoverage(p)
-		vm := evm.New(p)
+		vm := evmtest.New(p)
 		vm.SetCoverage(c)
 		for _, flag := range []bool{false, true} {
 			var out [1]values.Value

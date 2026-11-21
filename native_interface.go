@@ -7,7 +7,7 @@ import (
 
 // Interface reads a native argument by ABI slot, preserving nil versus typed nil.
 // Returned values and type identities belong to this Program.
-func (c *Call) Interface(slot int) (*values.Type, values.Value, error) {
+func (c *VM) Interface(slot int) (*values.Type, values.Value, error) {
 	if c.program == nil {
 		return nil, values.Value{}, fmt.Errorf("inactive native call")
 	}
@@ -21,7 +21,7 @@ func (c *Call) Interface(slot int) (*values.Type, values.Value, error) {
 	}
 	return s.Type, v, nil
 }
-func (c *Call) interfaceSlot(slot int, ts []*values.Type, l Layout) bool {
+func (c *VM) interfaceSlot(slot int, ts []*values.Type, l Layout) bool {
 	for i, t := range ts {
 		if int(l.Slots[i]) == slot {
 			s := c.program.Shape(t)
@@ -36,7 +36,7 @@ func (c *Call) interfaceSlot(slot int, ts []*values.Type, l Layout) bool {
 // SetInterface writes an interface result by ABI slot. Dynamic types must be
 // declared in the wrapper's DynamicTypes (or used by source) before linking.
 // Boxing and value copies are charged to this execution's allocation budget.
-func (c *Call) SetInterface(slot int, t *values.Type, v values.Value) (err error) {
+func (c *VM) SetInterface(slot int, t *values.Type, v values.Value) (err error) {
 	defer func() {
 		if c.budget != nil && (err == ErrAllocation || err == ErrAllocations) {
 			c.budget.err = err

@@ -135,16 +135,16 @@ var Bindings = evmbind.Static{Fingerprint: "1bd3243c2b3e904bc0abd73e8fc5cbc2f360
 	},
 	Calls: map[string]evmbind.Wrapper{
 		"*SetHolder.Has": func(f *evmbind.Frame) {
-			r0 := readPtrSetHolder(f, f.Argument(0)).Has(readScalarString(f, f.Argument(1)))
-			f.SetResult(0, writeScalarBool(f, r0))
+			r0 := readPtrSetHolder(f, f.CallArgument(0)).Has(readScalarString(f, f.CallArgument(1)))
+			f.SetCallResult(0, writeScalarBool(f, r0))
 		},
 	},
 	Direct: map[string]evmbind.DirectFactory{
 		"*SetHolder.Has": func(host any) evm.DirectFunc {
-			return func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+			return func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 				defer evmbind.Catch("*SetHolder.Has", &err)
 				if x.P != nil && x.R != values.NativeAddress {
-					f := evmbind.Frame{Call: c}
+					f := evmbind.Frame{VM: c}
 					argx := readPtrSetHolder(&f, x)
 					argy := readScalarString(&f, y)
 					out := argx.Has(argy)

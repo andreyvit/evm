@@ -11,6 +11,7 @@ import (
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmbind"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -56,21 +57,21 @@ func TestNativeErrorHandoff(t *testing.T) {
 	native := []error{nil, sentinel, fmt.Errorf("wrapped: %w", sentinel), errors.Join(sentinel, errors.New("other")), nativeTestError(7), typedNil, nativeTestSliceError{1}, nativeTestMatchError{sentinel}, (*nativeTestPanicError)(nil), &nativeTestPanicError{1}, nativeEmptyError(false), nativeEmptyError(true)}
 	returned := 0
 	pkg := evm.Package{Path: "host", Functions: []evm.ExternalFunction{
-		{Name: "AnyGet", Signature: evm.Signature{Params: []*values.Type{values.IntType}, Results: []*values.Type{values.AnyType}}, Call: func(c *evm.Call) error {
-			v, err := c.AnyValue(native[c.Argument(0).AsInt()])
+		{Name: "AnyGet", Signature: evm.Signature{Params: []*values.Type{values.IntType}, Results: []*values.Type{values.AnyType}}, Call: func(c *evm.VM) error {
+			v, err := c.AnyValue(native[c.CallArgument(0).AsInt()])
 			if err != nil {
 				return err
 			}
-			c.SetResult(0, v)
+			c.SetCallResult(0, v)
 			return nil
 		}},
-		{Name: "Get", Signature: evm.Signature{Params: []*values.Type{values.IntType}, Results: []*values.Type{values.ErrorType}}, Call: func(c *evm.Call) error { return c.SetError(0, native[c.Argument(0).AsInt()]) }},
-		{Name: "Check", Signature: evm.Signature{Params: []*values.Type{values.ErrorType, values.IntType}}, Call: func(c *evm.Call) error {
-			x, err := c.NativeAny(c.Argument(0))
+		{Name: "Get", Signature: evm.Signature{Params: []*values.Type{values.IntType}, Results: []*values.Type{values.ErrorType}}, Call: func(c *evm.VM) error { return c.SetError(0, native[c.CallArgument(0).AsInt()]) }},
+		{Name: "Check", Signature: evm.Signature{Params: []*values.Type{values.ErrorType, values.IntType}}, Call: func(c *evm.VM) error {
+			x, err := c.NativeAny(c.CallArgument(0))
 			if err != nil {
 				return err
 			}
-			i := int(c.Argument(1).AsInt())
+			i := int(c.CallArgument(1).AsInt())
 			if i != 6 && x != native[i] {
 				return fmt.Errorf("native identity changed at %d", i)
 			}
@@ -112,20 +113,20 @@ func TestNativeErrorHandoff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(program).Run(context.Background(), "Run", nil, nil); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(program).Run(context.Background(), "PanicNative", nil, nil); !errors.Is(err, sentinel) {
+	if err := evmtest.New(program).Run(context.Background(), "PanicNative", nil, nil); !errors.Is(err, sentinel) {
 		t.Fatal("native panic error identity lost", err)
 	}
 	var out [1]values.Value
-	if err := evm.New(program).Run(context.Background(), "ComparePanic", nil, out[:]); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "ComparePanic", nil, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if out[0].R != 1 {
 		t.Fatal("uncomparable native error did not panic")
 	}
-	if err := evm.New(program).Run(context.Background(), "DirectPanic", nil, out[:]); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "DirectPanic", nil, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if out[0].R != 1 || returned != 8 {
@@ -150,13 +151,13 @@ func TestNativeErrorGuestTargetRetention(t *testing.T) {
 	sentinel := errors.New("retained sentinel")
 	var wrapped, joined error
 	pkg := evm.Package{Path: "host", Functions: []evm.ExternalFunction{
-		{Name: "Sentinel", Signature: evm.Signature{Results: []*values.Type{values.ErrorType}}, Call: func(c *evm.Call) error { return c.SetError(0, sentinel) }},
-		{Name: "Keep", Signature: evm.Signature{Params: []*values.Type{values.ErrorType, values.ErrorType}}, Call: func(c *evm.Call) error {
-			a, err := c.NativeAny(c.Argument(0))
+		{Name: "Sentinel", Signature: evm.Signature{Results: []*values.Type{values.ErrorType}}, Call: func(c *evm.VM) error { return c.SetError(0, sentinel) }},
+		{Name: "Keep", Signature: evm.Signature{Params: []*values.Type{values.ErrorType, values.ErrorType}}, Call: func(c *evm.VM) error {
+			a, err := c.NativeAny(c.CallArgument(0))
 			if err != nil {
 				return err
 			}
-			b, err := c.NativeAny(c.Argument(1))
+			b, err := c.NativeAny(c.CallArgument(1))
 			if err != nil {
 				return err
 			}
@@ -165,8 +166,8 @@ func TestNativeErrorGuestTargetRetention(t *testing.T) {
 			return nil
 		}},
 
-		{Name: "Invoke", Signature: evm.Signature{Params: []*values.Type{values.ErrorType}}, Call: func(c *evm.Call) error {
-			x, err := c.NativeAny(c.Argument(0))
+		{Name: "Invoke", Signature: evm.Signature{Params: []*values.Type{values.ErrorType}}, Call: func(c *evm.VM) error {
+			x, err := c.NativeAny(c.CallArgument(0))
 			if err != nil {
 				return err
 			}
@@ -174,8 +175,8 @@ func TestNativeErrorGuestTargetRetention(t *testing.T) {
 			return nil
 		}},
 
-		{Name: "Matcher", Signature: evm.Signature{Results: []*values.Type{values.ErrorType}}, Call: func(c *evm.Call) error { return c.SetError(0, native) }},
-		{Name: "Held", Signature: evm.Signature{Results: []*values.Type{values.ErrorType}}, Call: func(c *evm.Call) error { return c.SetError(0, native.target) }},
+		{Name: "Matcher", Signature: evm.Signature{Results: []*values.Type{values.ErrorType}}, Call: func(c *evm.VM) error { return c.SetError(0, native) }},
+		{Name: "Held", Signature: evm.Signature{Results: []*values.Type{values.ErrorType}}, Call: func(c *evm.VM) error { return c.SetError(0, native.target) }},
 	}}
 	module, err := evmcompiler.Compile("guest_errors.go", `import("host";"errors";"fmt")
  var text string
@@ -190,14 +191,14 @@ func TestNativeErrorGuestTargetRetention(t *testing.T) {
  type Bad struct{}
  func(e *Bad)Error()string{panic("guest boom")}
  func PanicGuest()(caught bool){defer func(){caught=recover()=="guest boom"}();errors.Is(host.Matcher(),&Bad{});return}
- type Guest struct{}
- func(e *Guest)Error()string{return text}
+ type Guest struct{message string}
+ func(e *Guest)Error()string{return e.message}
  func Run(){
-  text="first";current=&Guest{}
+  text="first";g:=&Guest{message:text};current=g
   if !errors.Is(host.Matcher(),current){panic("guest target")}
   if host.Held()!=current{panic("guest roundtrip")}
   if !errors.Is(host.Matcher(),current){panic("repeated guest target")}
-  text="later"
+  g.message="later"
   host.Keep(fmt.Errorf("wrapped: %w",host.Sentinel()),errors.Join(host.Sentinel(),errors.New("extra")))
  }
  `, pkg)
@@ -208,8 +209,8 @@ func TestNativeErrorGuestTargetRetention(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(program)
-	scope, err := vm.OpenCallbackScope(context.Background(), evm.Budget{})
+	vm := evmtest.New(program)
+	scope, err := vm.OpenCallbackScope()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,6 +244,9 @@ func TestNativeErrorGuestTargetRetention(t *testing.T) {
 	if native.target == nil || native.target.Error() != "later" {
 		t.Fatal("retained guest error lost its state")
 	}
+	if err := scope.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if err := vm.Reset(); err != nil {
 		t.Fatal(err)
 	}
@@ -254,12 +258,12 @@ func TestNativeErrorGuestTargetRetention(t *testing.T) {
 		}()
 		_ = native.target.Error()
 	}()
-	depthVM := evm.New(program)
+	depthVM := evmtest.New(program)
 	depthVM.Limits.Depth = 8
 	if err := depthVM.Run(context.Background(), "Recursive", nil, nil); !errors.Is(err, evm.ErrDepth) {
 		t.Fatal("native/guest recursion bypassed depth limit", err)
 	}
-	depthVM = evm.New(program)
+	depthVM = evmtest.New(program)
 	depthVM.Limits.Depth = 8
 	if err := depthVM.Run(context.Background(), "RecursiveNative", nil, nil); !errors.Is(err, evm.ErrDepth) {
 		t.Fatal("generic native recursion bypassed depth limit", err)
@@ -275,8 +279,8 @@ func TestNativeErrorFieldRetention(t *testing.T) {
 	}
 	box := &NativeErrorBox{}
 	host := evm.Package{Path: "host", Functions: []evm.ExternalFunction{
-		{Name: "Box", Signature: evm.Signature{Results: []*values.Type{schema.NativeType(reflect.TypeFor[*NativeErrorBox]())}}, Call: func(c *evm.Call) error { v, err := schema.NativePointer(box); c.SetResult(0, v); return err }},
-		{Name: "Read", Signature: evm.Signature{Results: []*values.Type{values.StringType}}, Call: func(c *evm.Call) error { c.SetResult(0, values.String(box.Value.(error).Error())); return nil }},
+		{Name: "Box", Signature: evm.Signature{Results: []*values.Type{schema.NativeType(reflect.TypeFor[*NativeErrorBox]())}}, Call: func(c *evm.VM) error { v, err := schema.NativePointer(box); c.SetCallResult(0, v); return err }},
+		{Name: "Read", Signature: evm.Signature{Results: []*values.Type{values.StringType}}, Call: func(c *evm.VM) error { c.SetCallResult(0, values.String(box.Value.(error).Error())); return nil }},
 	}}
 	module, err := evmcompiler.Compile("box.go", `import "host"
  type Guest struct{}
@@ -291,8 +295,8 @@ func TestNativeErrorFieldRetention(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(program)
-	scope, err := vm.OpenCallbackScope(context.Background(), evm.Budget{})
+	vm := evmtest.New(program)
+	scope, err := vm.OpenCallbackScope()
 	if err != nil {
 		t.Fatal(err)
 	}

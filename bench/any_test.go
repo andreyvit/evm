@@ -7,6 +7,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -34,7 +35,7 @@ func Function(n int, p *int) int {
 			if err != nil {
 				b.Fatal(err)
 			}
-			vm := evm.New(p)
+			vm := evmtest.New(p)
 			vm.Limits.AllocationBytes, vm.Limits.Allocations = ^uint64(0), ^uint64(0)
 			cell := values.Int(7)
 			args := []values.Value{values.Int(1024), {P: unsafe.Pointer(&cell)}}

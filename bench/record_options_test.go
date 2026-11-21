@@ -8,6 +8,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/internal/statrow"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/kvo/codec/msgpack"
@@ -76,7 +77,7 @@ func benchmarkRecordWriteOptions(b *testing.B, scale uint64) {
 		for _, entry := range []string{"Direct", "Nested"} {
 			b.Run(tc.name+"/"+entry, func(b *testing.B) {
 				e := tc.open(statrow.Sample(7)).Edit()
-				vm := evm.New(program)
+				vm := evmtest.New(program)
 				vm.Limits.AllocationBytes, vm.Limits.Allocations = ^uint64(0), ^uint64(0)
 				run := func() {
 					ctx, scope := evm.WithRecords(context.Background())

@@ -10,6 +10,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -63,7 +64,7 @@ func TestCountedLoopFusion(t *testing.T) {
 			t.Fatal(listing)
 		}
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	out := make([]values.Value, 1)
 	for _, tc := range []struct {
 		fn               string
@@ -102,7 +103,7 @@ func TestNilBranchFusion(t *testing.T) {
 			t.Fatal(listing)
 		}
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	out := make([]values.Value, 1)
 	if err := vm.Run(context.Background(), "Make", nil, out); err != nil {
 		t.Fatal(err)
@@ -147,7 +148,7 @@ func TestCountedLoopWithLongBackEdge(t *testing.T) {
 		}
 	}
 	out := make([]values.Value, 1)
-	if err := evm.New(p).Run(context.Background(), "Run", []values.Value{values.Int(2)}, out); err != nil || out[0].AsInt() != 2*calls {
+	if err := evmtest.New(p).Run(context.Background(), "Run", []values.Value{values.Int(2)}, out); err != nil || out[0].AsInt() != 2*calls {
 		t.Fatalf("long loop: %v, %v", out, err)
 	}
 }
@@ -173,7 +174,7 @@ func TestSteppedLoopFallsBackForLongBody(t *testing.T) {
 	}
 	out := make([]values.Value, 1)
 	args := []values.Value{values.Int(7), values.Int(3)}
-	if err := evm.New(p).Run(context.Background(), "Run", args, out); err != nil || out[0].AsInt() != 3*calls {
+	if err := evmtest.New(p).Run(context.Background(), "Run", args, out); err != nil || out[0].AsInt() != 3*calls {
 		t.Fatal(out, err)
 	}
 }
@@ -183,7 +184,7 @@ func TestFusedHostFailureIsStillFatal(t *testing.T) {
 	// same error from a Go callback must abort before the result move.
 	pkg := evm.Package{Path: "h", Functions: []evm.ExternalFunction{{
 		Name: "Read", Signature: evm.Signature{Params: []*values.Type{values.IntType}, Results: []*values.Type{values.IntType}},
-		Call: func(c *evm.Call) error { c.R[0] = 17; return evm.ErrBounds },
+		Call: func(c *evm.VM) error { c.R[0] = 17; return evm.ErrBounds },
 	}}}
 	m, err := evmcompiler.Compile("read.go", `import "h"
 func Run(i int) (v int) {
@@ -201,7 +202,7 @@ func Run(i int) (v int) {
 		t.Fatal(err)
 	}
 	out := []values.Value{values.Int(-1)}
-	err = evm.New(p).Run(context.Background(), "Run", []values.Value{values.Int(3)}, out)
+	err = evmtest.New(p).Run(context.Background(), "Run", []values.Value{values.Int(3)}, out)
 	var trap *evm.ExecutionError
 	if !errors.Is(err, evm.ErrBounds) || !errors.As(err, &trap) || trap.Position.Line != 4 || out[0].AsInt() != -1 {
 		t.Fatalf("fused failure: result %v, error %v", out, err)
@@ -244,7 +245,7 @@ func Strings(xs []string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	out := make([]values.Value, 1)
 	if err := vm.Run(context.Background(), "Run", nil, out); err != nil || out[0].AsInt() != -97 {
 		t.Fatal(out, err)
@@ -302,7 +303,7 @@ func Forward(n int) int { return Swap(n-1,n) }
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	out := make([]values.Value, 1)
 	run := func(name string, want values.Value, args ...values.Value) {
 		t.Helper()
@@ -350,7 +351,7 @@ func TestDirectUnaryCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	out := make([]values.Value, 1)
 	if err := vm.Run(ctx, "Run", []values.Value{values.Int(3)}, out); err != nil || out[0].R != 12 || !slices.Equal(seen, []uint64{5, 3, 6, 7}) {
 		t.Fatal(out, seen, err)
@@ -360,7 +361,7 @@ func TestDirectUnaryCalls(t *testing.T) {
 	}
 	// Like every DirectBinding, an optional Call overrides the ordinary ABI.
 	windowCalls := 0
-	pkg.Functions[0].Call = func(c *evm.Call) error {
+	pkg.Functions[0].Call = func(c *evm.VM) error {
 		windowCalls++
 		c.R[0] *= 3
 		return nil
@@ -369,7 +370,7 @@ func TestDirectUnaryCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(p).Run(context.Background(), "Run", []values.Value{values.Int(3)}, out); err != nil || out[0].R != 18 || windowCalls != 2 {
+	if err := evmtest.New(p).Run(context.Background(), "Run", []values.Value{values.Int(3)}, out); err != nil || out[0].R != 18 || windowCalls != 2 {
 		t.Fatal(out, windowCalls, err)
 	}
 	pkg.Functions[0].Direct.Op = evm.OpCallHostU
@@ -418,7 +419,7 @@ func Stepped(end, step int64) int64 {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm, out := evm.New(p), make([]values.Value, 1)
+	vm, out := evmtest.New(p), make([]values.Value, 1)
 	for i, fn := range m.Functions {
 		if fn.Name == "Count" && !strings.Contains(m.DisassembleFunction(i), "loop.le.i64") ||
 			fn.Name == "Stepped" && !strings.Contains(m.DisassembleFunction(i), "loop.add.lt.i64") {

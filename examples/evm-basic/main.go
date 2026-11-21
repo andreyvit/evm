@@ -21,6 +21,7 @@ import (
 	"github.com/andreyvit/evm/evmbind"
 	"github.com/andreyvit/evm/evmcompiler"
 	"github.com/andreyvit/evm/evmstd"
+	"github.com/andreyvit/evm/values"
 )
 
 // The host's own source tells the compiler what package "shop" declares.
@@ -42,21 +43,20 @@ func run(out io.Writer) {
 	// constant in shop.go becomes visible. Go cannot look functions or types
 	// up by name, so the options supply the functions, plus the types that
 	// no function, method or field leads to.
-	shop := must(evmbind.New("shop", shopSource, evmbind.Options{
+	shopSchema := must(evmbind.New("shop", shopSource, evmbind.Options{
 		Functions: map[string]any{"TierThreshold": TierThreshold},
 		Types:     []reflect.Type{reflect.TypeFor[Customer](), reflect.TypeFor[Order]()},
 	}))
 	// What a plugin can import: the host package and the standard packages.
-	packages := append(evmstd.Packages(), shop.Bind(nil))
+	packages := append(evmstd.Packages(), shopSchema.Bind(nil))
 
 	// Compile and link once. A linked program is immutable and can be shared.
 	module := must(evmcompiler.Compile("bonus.go", pluginSource, packages...))
-	program := must(evm.Link(module, packages...))
-
-	// A VM is one session: it owns the plugin's package variables. Each call
-	// gets a budget, so a runaway plugin stops with an error.
-	vm := evm.New(program)
-	budget := evm.Budget{Steps: 1_000_000, Duration: time.Second}
+	limits := evm.Limits{Steps: 1_000_000, Duration: time.Second}
+	program := must(evm.LinkOptions{DefaultLimits: &limits}.Link(module, packages...))
+	customerCodec := must(evmbind.Codec[*Customer](shopSchema))
+	orderCodec := must(evmbind.Codec[*Order](shopSchema))
+	onOrder := must(program.LookupFunction("OnOrder", &evm.Signature{Params: []*values.Type{customerCodec.Type(), orderCodec.Type(), values.TimeType}, Results: []*values.Type{values.StringType}}))
 
 	ada := &Customer{Name: "Ada", Tier: "basic", Joined: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC)}
 	now := time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC)
@@ -65,11 +65,13 @@ func run(out io.Writer) {
 		{ID: "A-2", Cents: 9900, Items: []Item{{SKU: "GIFT-CARD", Qty: 1}}},
 		{ID: "A-3", Cents: 1500, Items: []Item{{SKU: "LMP-3", Qty: 1}}},
 	} {
-		// Arguments and results are ordinary Go values. The plugin works on
-		// the host's own *Customer, not on a copy.
-		var result [1]any
-		ensure(vm.RunEntryNative(context.Background(), "OnOrder", []any{ada, order, now}, result[:], budget))
-		fmt.Fprintln(out, result[0])
+		func() {
+			vm := program.AcquireVM(context.Background())
+			defer vm.Release()
+			slots := [4]values.Value{customerCodec.Pack(ada), orderCodec.Pack(order), values.NativeTime(now)}
+			ensure(vm.Run(onOrder, slots[:]))
+			fmt.Fprintln(out, slots[3].AsString())
+		}()
 	}
 	fmt.Fprintln(out, ada.Name, "has", ada.Points, "points after", ada.History)
 }

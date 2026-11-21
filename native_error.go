@@ -57,29 +57,29 @@ func (p *Program) linkNativeErrors(shapes *shapeSnapshots) error {
 			var call Native
 			switch name {
 			case "Error":
-				call = func(c *Call) error {
-					text := c.Argument(0).AsNativeValue().(error).Error()
+				call = func(c *VM) error {
+					text := c.CallArgument(0).AsNativeValue().(error).Error()
 					if err := c.ChargeAllocation(uint64(len(text))); err != nil {
 						return err
 					}
-					c.SetResult(0, values.String(text))
+					c.SetCallResult(0, values.String(text))
 					return nil
 				}
 			case "Unwrap":
 				sig.Results = []*values.Type{values.ErrorType}
 				if i%3 == 1 {
-					call = func(c *Call) error {
-						return c.SetError(0, c.Argument(0).AsNativeValue().(interface{ Unwrap() error }).Unwrap())
+					call = func(c *VM) error {
+						return c.SetError(0, c.CallArgument(0).AsNativeValue().(interface{ Unwrap() error }).Unwrap())
 					}
 				} else {
 					sig.Results = []*values.Type{ErrorSliceType}
-					call = func(c *Call) error {
-						errs := c.Argument(0).AsNativeValue().(interface{ Unwrap() []error }).Unwrap()
+					call = func(c *VM) error {
+						errs := c.CallArgument(0).AsNativeValue().(interface{ Unwrap() []error }).Unwrap()
 						if uint64(len(errs)) > math.MaxUint32 {
 							return ErrAllocation
 						}
 						if errs == nil {
-							c.SetResult(0, values.Value{})
+							c.SetCallResult(0, values.Value{})
 							return nil
 						}
 						ptr, err := c.AllocCells(uint64(max(1, len(errs))))
@@ -93,19 +93,19 @@ func (p *Program) linkNativeErrors(shapes *shapeSnapshots) error {
 							}
 							*(*values.Value)(values.CellAt(ptr, uint64(j))) = v
 						}
-						c.SetResult(0, values.SliceValue(ptr, uint32(len(errs)), uint32(len(errs))))
+						c.SetCallResult(0, values.SliceValue(ptr, uint32(len(errs)), uint32(len(errs))))
 						return nil
 					}
 				}
 			case "Is":
 				sig.Params = append(sig.Params, values.ErrorType)
 				sig.Results = []*values.Type{values.Boolean}
-				call = func(c *Call) error {
-					e, err := c.nativeErrorArgument(c.Argument(1))
+				call = func(c *VM) error {
+					e, err := c.nativeErrorArgument(c.CallArgument(1))
 					if err != nil {
 						return err
 					}
-					c.SetResult(0, values.Bool(c.Argument(0).AsNativeValue().(interface{ Is(error) bool }).Is(e)))
+					c.SetCallResult(0, values.Bool(c.CallArgument(0).AsNativeValue().(interface{ Is(error) bool }).Is(e)))
 					return nil
 				}
 			}
@@ -128,7 +128,7 @@ func (p *Program) linkNativeErrors(shapes *shapeSnapshots) error {
 }
 
 // ErrorValue preserves a native error's identity and optional error methods.
-func (c *Call) ErrorValue(err error) (values.Value, error) {
+func (c *VM) ErrorValue(err error) (values.Value, error) {
 	if err == nil {
 		return values.Value{}, nil
 	}
@@ -150,7 +150,7 @@ func (c *Call) ErrorValue(err error) (values.Value, error) {
 	}
 	return c.nativeErrorValue(err)
 }
-func (c *Call) nativeErrorValue(err error) (values.Value, error) {
+func (c *VM) nativeErrorValue(err error) (values.Value, error) {
 	s := nativeErrorShapes[nativeErrorProtocol(err)]
 	id := c.program.typeIDs[s.Type]
 	if id == 0 {
@@ -163,12 +163,12 @@ func (c *Call) nativeErrorValue(err error) (values.Value, error) {
 }
 
 // SetError writes an error result by result index, rather than ABI slot.
-func (c *Call) SetError(result int, err error) error {
+func (c *VM) SetError(result int, err error) error {
 	v, e := c.ErrorValue(err)
 	if e != nil {
 		return e
 	}
-	c.SetResult(result, v)
+	c.SetCallResult(result, v)
 	return nil
 }
 
@@ -185,7 +185,7 @@ func (p *nativePanic) Error() string {
 }
 
 func nativeErrorCall(fn Native) Native {
-	return func(c *Call) (err error) {
+	return func(c *VM) (err error) {
 		defer func() {
 			if p := recover(); p != nil {
 				if guest, ok := p.(guestErrorPanic); ok {
@@ -199,14 +199,14 @@ func nativeErrorCall(fn Native) Native {
 	}
 }
 
-func (c *Call) guestErrorFailure(err error) error {
+func (c *VM) guestErrorFailure(err error) error {
 	var p *PanicError
 	if errors.As(err, &p) && c.program.typeIDs[p.Type] != 0 {
 		return &nativePanic{guest: p}
 	}
 	return err
 }
-func recoverGuestErrorPanic(c *Call, err *error) {
+func recoverGuestErrorPanic(c *VM, err *error) {
 	if p := recover(); p != nil {
 		if guest, ok := p.(guestErrorPanic); ok {
 			*err = c.guestErrorFailure(guest.err)
@@ -218,8 +218,8 @@ func recoverGuestErrorPanic(c *Call, err *error) {
 
 // NativeErrorCodec stores native error interfaces using their Go layout.
 var NativeErrorCodec = &NativeValueCodec{
-	Decode: func(c *Call, v values.Value) (values.Value, error) { return c.ErrorValue(*(*error)(v.P)) },
-	Encode: func(c *Call, v values.Value) (values.Value, error) {
+	Decode: func(c *VM, v values.Value) (values.Value, error) { return c.ErrorValue(*(*error)(v.P)) },
+	Encode: func(c *VM, v values.Value) (values.Value, error) {
 		result, err := c.NativeError(v)
 		if err != nil {
 			return values.Value{}, err
@@ -233,7 +233,7 @@ var NativeErrorCodec = &NativeValueCodec{
 
 // CallbackError preserves an in-flight guest panic across a native callback.
 // Execution failures retain their trap behavior.
-func (c *Call) CallbackError(err error) error { return c.guestErrorFailure(err) }
+func (c *VM) CallbackError(err error) error { return c.guestErrorFailure(err) }
 
 // PreserveCallbackPanic returns an in-flight callback panic unchanged.
 // Wrapped or replaced native panics must not recover the original guest value.
@@ -246,7 +246,7 @@ func PreserveCallbackPanic(value any) error {
 
 // PanicCallback propagates callback execution failure through a native function
 // whose Go signature cannot return that failure. VM native dispatch recovers it.
-func (c *Call) PanicCallback(err error) {
+func (c *VM) PanicCallback(err error) {
 	var guest *PanicError
 	if !errors.As(err, &guest) {
 		c.budget.err = err

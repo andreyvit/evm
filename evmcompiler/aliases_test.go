@@ -32,7 +32,7 @@ func TestExternalAliasValidation(t *testing.T) {
 
 func TestAliasCannotAdoptFallbackType(t *testing.T) {
 	missing := values.NewType("missing.ID", values.Raw)
-	pkg := evm.Package{Path: "aliases", Aliases: []evm.TypeAlias{{Name: "PromoID", Target: missing}}, Functions: []evm.ExternalFunction{{Name: "Use", Signature: evm.Signature{Params: []*values.Type{missing}}, Call: func(*evm.Call) error { return nil }}}}
+	pkg := evm.Package{Path: "aliases", Aliases: []evm.TypeAlias{{Name: "PromoID", Target: missing}}, Functions: []evm.ExternalFunction{{Name: "Use", Signature: evm.Signature{Params: []*values.Type{missing}}, Call: func(*evm.VM) error { return nil }}}}
 	_, err := evmcompiler.Compile("alias.go", `import "aliases";func Run(){var x aliases.PromoID;aliases.Use(x)}`, pkg)
 	if err == nil || !strings.Contains(err.Error(), "undeclared target") {
 		t.Fatalf("alias accepted implicit fallback type: %v", err)

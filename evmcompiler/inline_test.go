@@ -7,6 +7,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -41,7 +42,7 @@ func TestInlineLeafBudget(t *testing.T) {
 		}
 		for _, x := range []uint8{0, 3, 113, 250, 255} {
 			var out [1]values.Value
-			err = evm.New(p).Run(context.Background(), "run", []values.Value{values.Uint(uint64(x))}, out[:])
+			err = evmtest.New(p).Run(context.Background(), "run", []values.Value{values.Uint(uint64(x))}, out[:])
 			y := x + 140
 			if err != nil || out[0].R != uint64(19/y+y) {
 				t.Fatalf("raw=%v x=%d: %v, %v", raw, x, out, err)

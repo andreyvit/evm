@@ -106,7 +106,7 @@ func TestCoverageNativeCallback(t *testing.T) {
 	if err := vm.SetCoverage(c); err != nil {
 		t.Fatal(err)
 	}
-	if err := vm.RunNative(context.Background(), func(call *Call) error { return call.RunCallback(values.Value{R: 1}) }, Budget{}); err != nil {
+	if err := vm.RunNative(context.Background(), func(call *VM) error { return call.runValue(values.Value{R: 1}, nil, nil) }, Budget{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := c.Instructions()[0].Count; got != 1 {

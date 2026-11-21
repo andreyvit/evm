@@ -1,110 +1,178 @@
 package evm
 
 import (
-	"context"
+	"fmt"
+	"strings"
+	"unsafe"
 
 	"github.com/andreyvit/evm/values"
 )
 
-// FunctionHandle retains a callable and its captures after an invocation returns.
-// It belongs to one linked Program and can run in any VM of that program.
-// Captures remain shared; callers must serialize access to mutable captures.
-// Host resources in captures retain their own lifetime requirements.
-type FunctionHandle struct {
-	program   *Program
-	value     values.Value
-	index     int
-	signature Signature
+// Callable retains a linked function and its optional captures or bound receiver.
+// Copies share the same captures. The zero value is a nil function.
+type Callable struct {
+	*callTarget
+	captures unsafe.Pointer
 }
 
-// FunctionOf annotates a native handle with its script signature.
-// Binding generators expose *FunctionOf[func(...)] as the function itself.
-// FunctionOf[any] is an input-only binding for host-checked signatures.
-// It accepts named functions and closures; it does not convert arbitrary values.
-type FunctionOf[Signature any] = FunctionHandle
+type callTarget struct {
+	program   *Program
+	index     int
+	number    uint64
+	signature *Signature
+}
 
-// Value returns the callable for a matching program and signature.
-func (f *FunctionHandle) Value(p *Program, signature Signature) (values.Value, error) {
-	if f == nil {
+// FunctionOf annotates a retained callable in a binding declaration. S is the
+// required function signature. Use any for host-checked registrations.
+type FunctionOf[S any] = Callable
+
+// linkCallables gives host entries stable function references, including entries
+// that never occur as function values in bytecode. Existing numbers stay valid.
+func (p *Program) linkCallables() {
+	p.entryNumbers = make([]uint64, len(p.functions))
+	for i, ref := range p.functionRefs {
+		if !ref.Native {
+			p.entryNumbers[ref.Index] = uint64(i + 1)
+		}
+	}
+	for i := range p.functions {
+		f := &p.functions[i]
+		if index, ok := p.entries[f.Name]; ok && index == i && p.entryNumbers[i] == 0 {
+			p.functionRefs = append(p.functionRefs, FunctionRef{Index: uint32(i)})
+			p.entryNumbers[i] = uint64(len(p.functionRefs))
+		}
+	}
+	p.targets = make([]callTarget, len(p.functionRefs))
+	for i, ref := range p.functionRefs {
+		var sig *Signature
+		idx := -1
+		if ref.Native {
+			sig = &p.native(ref.Index).Signature
+		} else {
+			idx = int(ref.Index)
+			sig = &p.functions[idx].Signature
+		}
+		p.targets[i] = callTarget{p, idx, uint64(i + 1), sig}
+	}
+}
+
+// LookupFunction resolves a named entry and checks its full signature when want is non-nil.
+func (p *Program) LookupFunction(name string, want *Signature) (Callable, error) {
+	idx, ok := p.entries[name]
+	if !ok {
+		return Callable{}, fmt.Errorf("unknown function %q: %w", name, ErrFunction)
+	}
+	fn := Callable{callTarget: &p.targets[p.entryNumbers[idx]-1]}
+	if want != nil {
+		if err := fn.CheckSignature(*want); err != nil {
+			return Callable{}, err
+		}
+	}
+	return fn, nil
+}
+
+func signatureText(sig Signature) string {
+	names := func(types []*values.Type) string {
+		out := make([]string, len(types))
+		for i, t := range types {
+			if t == nil {
+				out[i] = "<nil>"
+			} else {
+				out[i] = t.Name()
+			}
+		}
+		return strings.Join(out, ", ")
+	}
+	return "func(" + names(sig.Params) + ") (" + names(sig.Results) + ")"
+}
+
+func (f Callable) CheckSignature(want Signature) error {
+	if f.callTarget == nil {
+		return ErrNilFunction
+	}
+	if !sameSignature(*f.signature, want) {
+		return fmt.Errorf("%w: %s has %s, want %s", ErrFunction, f.Name(), signatureText(*f.signature), signatureText(want))
+	}
+	return nil
+}
+
+func (f Callable) guestValue() values.Value {
+	return values.Value{R: f.number, P: f.captures}
+}
+
+func (f *Callable) Value(p *Program, signature Signature) (values.Value, error) {
+	if f == nil || f.callTarget == nil {
 		return values.Value{}, nil
 	}
-	if f.program != p || !sameSignature(f.signature, signature) {
+	if f.program != p || !sameSignature(*f.signature, signature) {
 		return values.Value{}, ErrFunction
 	}
-	return f.value, nil
+	if f.number == boundMethodValue {
+		b := (*boundMethod)(f.captures)
+		typ, err := NewNativeFunctionType(*f.signature)
+		if err != nil {
+			return values.Value{}, err
+		}
+		nargs, nresults := len(f.signature.Params), len(f.signature.Results)
+		return p.NativeFunction(typ, func(vm *VM) error {
+			if err := vm.ChargeAllocation(uint64(nargs+nresults) * uint64(unsafe.Sizeof(values.Value{}))); err != nil {
+				return err
+			}
+			args := make([]values.Value, nargs)
+			for i := range args {
+				args[i] = vm.CallArgument(i)
+			}
+			out := make([]values.Value, nresults)
+			if err := vm.runBoundMethod(b, args, out); err != nil {
+				return err
+			}
+			for i, v := range out {
+				vm.SetCallResult(i, v)
+			}
+			return nil
+		})
+	}
+	return f.guestValue(), nil
 }
 
-// FunctionValue retains a statically typed function value, including closures,
-// bound methods and native functions. It does not copy captured data.
-func (p *Program) FunctionValue(v values.Value) (*FunctionHandle, error) {
+// Callable retains an argument whose declared guest type is a function.
+func (p *Program) Callable(v values.Value) (Callable, error) {
 	if v.R == 0 {
-		return nil, ErrNilFunction
+		return Callable{}, ErrNilFunction
 	}
-	f := &FunctionHandle{program: p, value: v, index: -1}
 	if v.R == nativeFunctionValue {
 		n, err := p.nativeFunction(v)
 		if err != nil {
-			return nil, err
+			return Callable{}, err
 		}
-		f.signature = n.typ.native.Signature
-	} else {
-		if v.R > uint64(len(p.functionRefs)) {
-			return nil, ErrFunction
-		}
-		ref := p.functionRefs[v.R-1]
-		if ref.Native {
-			if v.P != nil {
-				return nil, ErrFunction
-			}
-		} else {
-			fn := &p.functions[ref.Index]
-			if len(fn.Captures) > 0 && v.P == nil {
-				return nil, ErrFunction
-			}
-			f.index = int(ref.Index)
-		}
-		var ok bool
-		f.signature, ok = p.functionSignature(ref)
-		if !ok {
-			return nil, ErrFunction
-		}
+		return Callable{&n.target, v.P}, nil
 	}
-	return f, nil
+	if v.R > uint64(len(p.targets)) {
+		return Callable{}, ErrFunction
+	}
+	t := &p.targets[v.R-1]
+	if (t.index >= 0 && len(p.functions[t.index].Captures) != 0) != (v.P != nil) {
+		return Callable{}, ErrFunction
+	}
+	return Callable{t, v.P}, nil
 }
 
-// HasCaptures reports whether the callable carries cells shared by all of its
-// calls: closure captures or a bound receiver. A VM is no boundary for them,
-// so a host that runs such a handle from several goroutines serializes it.
-func (f *FunctionHandle) HasCaptures() bool { return f.index >= 0 && f.value.P != nil }
-
-// Program returns the linked program that owns the callable and its captures.
-// Hosts can use it to select program-specific execution metadata.
-func (f *FunctionHandle) Program() *Program { return f.program }
-
-// Name returns the compiled function name, or empty for a native callable.
-func (f *FunctionHandle) Name() string {
-	if f.index < 0 {
+func (f Callable) HasCaptures() bool { return f.callTarget != nil && f.captures != nil }
+func (f Callable) Program() *Program {
+	if f.callTarget == nil {
+		return nil
+	}
+	return f.program
+}
+func (f Callable) Name() string {
+	if f.callTarget == nil || f.index < 0 {
 		return ""
 	}
 	return f.program.functions[f.index].Name
 }
-
-// Signature returns a copy of the callable's signature.
-func (f *FunctionHandle) Signature() Signature { return copySignature(f.signature) }
-
-// RunFunction invokes a retained callable using this VM's globals and limits.
-func (vm *VM) RunFunction(ctx context.Context, f *FunctionHandle, args, results []values.Value) error {
-	return vm.RunFunctionWithBudget(ctx, f, args, results, Budget{})
-}
-
-// RunFunctionWithBudget applies the same invocation budgets and initialization
-// rules as RunWithBudget. A handle from another linked program is rejected.
-func (vm *VM) RunFunctionWithBudget(ctx context.Context, f *FunctionHandle, args, results []values.Value, budget Budget) error {
-	if f == nil {
-		return ErrNilFunction
+func (f Callable) Signature() Signature {
+	if f.callTarget == nil {
+		return Signature{}
 	}
-	if f.program != vm.program {
-		return ErrFunction
-	}
-	return vm.runFunction(ctx, f.index, f.value, f.signature, args, results, budget)
+	return copySignature(*f.signature)
 }

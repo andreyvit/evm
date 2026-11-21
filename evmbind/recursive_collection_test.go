@@ -9,6 +9,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -65,7 +66,7 @@ func TestRecursivePointerCollectionIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(program).Run(context.Background(), "Check", []values.Value{value}, nil); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Check", []values.Value{value}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if n.Value != 12 {

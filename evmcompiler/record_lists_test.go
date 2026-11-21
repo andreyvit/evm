@@ -9,6 +9,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/kvo/codec/msgpack"
 	"github.com/andreyvit/evm/values"
@@ -26,7 +27,7 @@ func TestBorrowedRecordList(t *testing.T) {
 	projection := kvo.Project(reflect.TypeFor[borrowedListRow](), m, kvo.FieldMap{reflect.TypeFor[borrowedListRow](): {1: "Tags"}})
 	pkg := evm.Package{Path: "db", Records: []*evm.RecordType{evm.NewRecordType("Customer", m, false)}}
 	var invalidate func()
-	pkg.Functions = []evm.ExternalFunction{{Name: "End", Signature: evm.Signature{}, Call: func(c *evm.Call) error { invalidate(); return nil }}}
+	pkg.Functions = []evm.ExternalFunction{{Name: "End", Signature: evm.Signature{}, Call: func(c *evm.VM) error { invalidate(); return nil }}}
 	mod, err := evmcompiler.Compile("lists.go", `import "db"
 func Count(c *db.Customer, n int) int { sum:=0; for i:=0;i<n;i++ {for _,t:=range c.tags {if t=="two" {sum++;break}}};return sum }
 func Length(c *db.Customer) int {t:=c.tags;return len(t)+cap(t)}
@@ -74,7 +75,7 @@ func Retain(c *db.Customer) bool {t:=c.tags;db.End();return t[1]=="two"}
 			t.Fatal("invalid list acquisition flags accepted", flags)
 		}
 	}
-	vm := evm.New(prog)
+	vm := evmtest.New(prog)
 	ctx := context.Background()
 	raw := msgpack.Encode(nil, reflect.ValueOf(&borrowedListRow{[]string{"one", "two", "three"}}))
 	r := projection.MessagePack(raw)

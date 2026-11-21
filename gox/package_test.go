@@ -229,8 +229,8 @@ func Page(b *gox.Builder) {
 }
 
 func TestNamedComponentTags(t *testing.T) {
-	host := evm.Package{Path: "widgets", Functions: []evm.ExternalFunction{{Name: "Badge", ParamNames: []string{"pageTitle"}, Signature: evm.Signature{Params: []*values.Type{values.StringType}, Results: []*values.Type{values.StringType}}, Call: func(c *evm.Call) error {
-		c.SetResult(0, c.Argument(0))
+	host := evm.Package{Path: "widgets", Functions: []evm.ExternalFunction{{Name: "Badge", ParamNames: []string{"pageTitle"}, Signature: evm.Signature{Params: []*values.Type{values.StringType}, Results: []*values.Type{values.StringType}}, Call: func(c *evm.VM) error {
+		c.SetCallResult(0, c.CallArgument(0))
 		return nil
 	}}}}
 	tmpl, err := gox.CompileSources(map[string]string{"page.gox": `package plugin

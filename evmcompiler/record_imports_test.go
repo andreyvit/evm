@@ -8,6 +8,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/values"
 )
@@ -22,9 +23,9 @@ func TestRecordReferencesDoNotImportOwnerSource(t *testing.T) {
 	}
 	row := db.Record(model, false)
 	key := values.NewType("host.Key", values.Raw)
-	host := evm.Package{Path: "host", Types: []evm.TypeDecl{{Name: "Key", Shape: &values.Shape{Type: key, Kind: values.UintKind, Bits: 64, Cells: 1}}}, Functions: []evm.ExternalFunction{{Name: "Read", Signature: evm.Signature{Results: []*values.Type{row.Pointer}}, Call: func(c *evm.Call) error { c.SetResult(0, values.Value{}); return nil }}}}
+	host := evm.Package{Path: "host", Types: []evm.TypeDecl{{Name: "Key", Shape: &values.Shape{Type: key, Kind: values.UintKind, Bits: 64, Cells: 1}}}, Functions: []evm.ExternalFunction{{Name: "Read", Signature: evm.Signature{Results: []*values.Type{row.Pointer}}, Call: func(c *evm.VM) error { c.SetCallResult(0, values.Value{}); return nil }}}}
 	db.Source = `package db; import "host"; func Lookup() host.Key`
-	db.Functions = append(db.Functions, evm.ExternalFunction{Name: "Lookup", Signature: evm.Signature{Results: []*values.Type{key}}, Call: func(c *evm.Call) error { c.SetResult(0, values.Uint(7)); return nil }})
+	db.Functions = append(db.Functions, evm.ExternalFunction{Name: "Lookup", Signature: evm.Signature{Results: []*values.Type{key}}, Call: func(c *evm.VM) error { c.SetCallResult(0, values.Uint(7)); return nil }})
 	for _, pkgs := range [][]evm.Package{{host, db}, {db, host}} {
 		for _, source := range []string{
 			`import("host";"db");func Run()uint64{if host.Read()!=nil {panic("row")};return uint64(db.Lookup())}`,
@@ -39,7 +40,7 @@ func TestRecordReferencesDoNotImportOwnerSource(t *testing.T) {
 				t.Fatal(err)
 			}
 			out := make([]values.Value, 1)
-			if err := evm.New(p).Run(context.Background(), "Run", nil, out); err != nil || out[0].R != 7 {
+			if err := evmtest.New(p).Run(context.Background(), "Run", nil, out); err != nil || out[0].R != 7 {
 				t.Fatal(out, err)
 			}
 		}
@@ -89,11 +90,11 @@ func TestRecordOwnerCompletesAfterSourceImports(t *testing.T) {
 	}
 	row := y.Record(model, false)
 	k := values.NewType("h.K", values.Raw)
-	h := evm.Package{Path: "h", Types: []evm.TypeDecl{{Name: "K", Shape: &values.Shape{Type: k, Kind: values.UintKind, Bits: 64, Cells: 1}}}, Functions: []evm.ExternalFunction{{Name: "Read", Signature: evm.Signature{Results: []*values.Type{row.Pointer}}, Call: func(c *evm.Call) error { return nil }}}}
+	h := evm.Package{Path: "h", Types: []evm.TypeDecl{{Name: "K", Shape: &values.Shape{Type: k, Kind: values.UintKind, Bits: 64, Cells: 1}}}, Functions: []evm.ExternalFunction{{Name: "Read", Signature: evm.Signature{Results: []*values.Type{row.Pointer}}, Call: func(c *evm.VM) error { return nil }}}}
 	xt := values.NewType("x.T", values.Raw)
-	x := evm.Package{Path: "x", Source: `package x; import "h"; type T uint64; func G() h.K`, SharedTypes: []evm.SharedType{{Name: "T", Type: xt, Native: reflect.TypeFor[uint64]()}}, Functions: []evm.ExternalFunction{{Name: "G", Signature: evm.Signature{Results: []*values.Type{k}}, Call: func(c *evm.Call) error { return nil }}}}
+	x := evm.Package{Path: "x", Source: `package x; import "h"; type T uint64; func G() h.K`, SharedTypes: []evm.SharedType{{Name: "T", Type: xt, Native: reflect.TypeFor[uint64]()}}, Functions: []evm.ExternalFunction{{Name: "G", Signature: evm.Signature{Results: []*values.Type{k}}, Call: func(c *evm.VM) error { return nil }}}}
 	y.Source = `package y; import "x"; func F() x.T`
-	y.Functions = append(y.Functions, evm.ExternalFunction{Name: "F", Signature: evm.Signature{Results: []*values.Type{xt}}, Call: func(c *evm.Call) error { return nil }})
+	y.Functions = append(y.Functions, evm.ExternalFunction{Name: "F", Signature: evm.Signature{Results: []*values.Type{xt}}, Call: func(c *evm.VM) error { return nil }})
 	for _, src := range []string{`import "x";func Run(){_=x.G()}`, `import("y";"x");func Run(){_=x.G();_=y.F()}`} {
 		_, err = evmcompiler.Compile("use.go", src, h, x, y)
 		if err != nil {
@@ -128,7 +129,7 @@ func TestNativeInterfaceReferencesDoNotImportOwnerSource(t *testing.T) {
 	sig := &values.Shape{Type: values.NewType("func()db.Txish", values.Pair), Kind: values.FunctionKind, Cells: 1, Results: []*values.Shape{tx}}
 	ctx := &values.Shape{Type: values.NewType("host.Context", values.Pair), Kind: values.InterfaceKind, Cells: 1, Methods: []values.Method{{ID: "Tx", Signature: sig}}}
 	host := evm.Package{Path: "host", Types: []evm.TypeDecl{{Name: "Context", Shape: ctx}}}
-	db := evm.Package{Path: "db", Types: []evm.TypeDecl{{Name: "Txish", Shape: tx}, {Name: "Record", Shape: record}, {Shape: pointer}}, Source: `package db; import "host"; func From(c host.Context) Txish`, Functions: []evm.ExternalFunction{{Name: "From", Signature: evm.Signature{Params: []*values.Type{ctx.Type}, Results: []*values.Type{tx.Type}}, Call: func(c *evm.Call) error { return nil }}}}
+	db := evm.Package{Path: "db", Types: []evm.TypeDecl{{Name: "Txish", Shape: tx}, {Name: "Record", Shape: record}, {Shape: pointer}}, Source: `package db; import "host"; func From(c host.Context) Txish`, Functions: []evm.ExternalFunction{{Name: "From", Signature: evm.Signature{Params: []*values.Type{ctx.Type}, Results: []*values.Type{tx.Type}}, Call: func(c *evm.VM) error { return nil }}}}
 	for _, pkgs := range [][]evm.Package{{host, db}, {db, host}} {
 		for _, src := range []string{
 			`import("host";"db");func Run(c host.Context) db.Txish {return db.From(c)}`,
@@ -148,8 +149,8 @@ func TestNativeInterfaceReferencesDoNotImportOwnerSource(t *testing.T) {
 
 func TestNativeMethodsThroughIndirectSourceImport(t *testing.T) {
 	row := &values.Shape{Type: values.NewType("rows.Row", values.Raw), Kind: values.IntKind, Bits: 64, Cells: 1}
-	rows := evm.Package{Path: "rows", Types: []evm.TypeDecl{{Name: "Row", Shape: row}}, Methods: []evm.ExternalMethod{{Name: "Value", Receiver: row.Type, Signature: evm.Signature{Results: []*values.Type{values.IntType}}, Call: func(c *evm.Call) error { c.SetResult(0, values.Int(7)); return nil }}}}
-	provider := evm.Package{Path: "provider", Functions: []evm.ExternalFunction{{Name: "Get", Signature: evm.Signature{Results: []*values.Type{row.Type}}, Call: func(c *evm.Call) error { return nil }}}}
+	rows := evm.Package{Path: "rows", Types: []evm.TypeDecl{{Name: "Row", Shape: row}}, Methods: []evm.ExternalMethod{{Name: "Value", Receiver: row.Type, Signature: evm.Signature{Results: []*values.Type{values.IntType}}, Call: func(c *evm.VM) error { c.SetCallResult(0, values.Int(7)); return nil }}}}
+	provider := evm.Package{Path: "provider", Functions: []evm.ExternalFunction{{Name: "Get", Signature: evm.Signature{Results: []*values.Type{row.Type}}, Call: func(c *evm.VM) error { return nil }}}}
 	source := evm.Package{Path: "source", Source: `package source;import "provider";func Read[T any]()int{return provider.Get().Value()}`}
 	_, err := evmcompiler.Compile("use.go", `import "source";func Run()int{return source.Read[int]()}`, source, provider, rows)
 	if err != nil {
@@ -162,7 +163,7 @@ func TestNativeSourceDependentCycle(t *testing.T) {
 	field := &values.Shape{Type: key, Kind: values.StringKind, Cells: 1}
 	wrapper := &values.Shape{Type: values.NewType("p.Wrapper", values.Pointer), Kind: values.StructKind, Cells: 1, Fields: []values.Field{{Name: "Key", Shape: field}}}
 	p := evm.Package{Path: "p", Source: `package p;import "q";type Key string;type Marker=q.Marker`, SharedTypes: []evm.SharedType{{Name: "Key", Type: key, Native: reflect.TypeFor[string]()}}, Types: []evm.TypeDecl{{Name: "Wrapper", Shape: wrapper}}}
-	q := evm.Package{Path: "q", Types: []evm.TypeDecl{{Name: "Marker", Shape: &values.Shape{Type: values.NewType("q.Marker", values.Raw), Kind: values.IntKind, Bits: 64, Cells: 1}}}, Functions: []evm.ExternalFunction{{Name: "Get", Signature: evm.Signature{Results: []*values.Type{wrapper.Type}}, Call: func(*evm.Call) error { return nil }}}}
+	q := evm.Package{Path: "q", Types: []evm.TypeDecl{{Name: "Marker", Shape: &values.Shape{Type: values.NewType("q.Marker", values.Raw), Kind: values.IntKind, Bits: 64, Cells: 1}}}, Functions: []evm.ExternalFunction{{Name: "Get", Signature: evm.Signature{Results: []*values.Type{wrapper.Type}}, Call: func(*evm.VM) error { return nil }}}}
 	_, err := evmcompiler.Compile("use.go", `import "p";func Run(){var x p.Marker;_=x}`, p, q)
 	if err == nil || !strings.Contains(err.Error(), "import cycle") {
 		t.Fatal(err)
@@ -173,8 +174,8 @@ func TestDuplicateNativeValueAndPointerMethods(t *testing.T) {
 	scalar := &values.Shape{Type: values.NewType("native.Number", values.Raw), Kind: values.IntKind, Bits: 64, Cells: 1}
 	pointer := values.NewPointerShape(scalar)
 	p := evm.Package{Path: "native", Source: "package native", Types: []evm.TypeDecl{{Name: "Number", Shape: scalar}, {Shape: pointer}}, Methods: []evm.ExternalMethod{
-		{Name: "M", Receiver: scalar.Type, Call: func(*evm.Call) error { return nil }},
-		{Name: "M", Receiver: pointer.Type, Call: func(*evm.Call) error { return nil }},
+		{Name: "M", Receiver: scalar.Type, Call: func(*evm.VM) error { return nil }},
+		{Name: "M", Receiver: pointer.Type, Call: func(*evm.VM) error { return nil }},
 	}}
 	_, err := evmcompiler.Compile("use.go", `import "native";func Run(){var n native.Number;n.M()}`, p)
 	if err == nil || !strings.Contains(err.Error(), "duplicate method") {

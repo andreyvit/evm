@@ -12,6 +12,7 @@ import (
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmasm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -87,7 +88,7 @@ func TestDirectHostMatrix(t *testing.T) {
 						sig.Params = append(sig.Params, vmType[k])
 					}
 					dst := v(result, 5)
-					direct := evm.DirectBinding{Op: op, Call: func(c *evm.Call, x, y values.Value) (values.Value, error) {
+					direct := evm.DirectBinding{Op: op, Call: func(c *evm.VM, x, y values.Value) (values.Value, error) {
 						got := [2]values.Value{x, y}
 						for j := range got {
 							var want values.Value
@@ -136,7 +137,7 @@ func TestDirectHostMatrix(t *testing.T) {
 						want = append([]values.Value{dst}, keep...)
 					}
 					got := make([]values.Value, len(want))
-					if err := evm.New(p).Run(context.Background(), "Run", inputs, got); err != nil {
+					if err := evmtest.New(p).Run(context.Background(), "Run", inputs, got); err != nil {
 						t.Fatal(err)
 					}
 					for j := range got {
@@ -199,7 +200,7 @@ func TestDirectCancelAndStringLifetime(t *testing.T) {
 	defer cancel()
 	var calls int
 	sig := evm.Signature{Params: []*values.Type{values.Uint64}, Results: []*values.Type{values.StringType}}
-	pkg := evm.Package{Path: "h", Functions: []evm.ExternalFunction{{Name: "Name", Signature: sig, Direct: evm.DirectBinding{Op: evm.OpCallHostUS, Call: func(c *evm.Call, x, _ values.Value) (values.Value, error) {
+	pkg := evm.Package{Path: "h", Functions: []evm.ExternalFunction{{Name: "Name", Signature: sig, Direct: evm.DirectBinding{Op: evm.OpCallHostUS, Call: func(c *evm.VM, x, _ values.Value) (values.Value, error) {
 		calls++
 		if c.Position.Line == 0 || c.Context != ctx {
 			t.Fatal("missing call metadata")
@@ -222,7 +223,7 @@ func Discard(){h.Name(6)}`, pkg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	var out [1]values.Value
 	for _, name := range []string{"Direct", "Indirect", "Deferred", "Discard"} {
 		var args, results []values.Value
@@ -261,7 +262,7 @@ func TestDirectOverlappingOperands(t *testing.T) {
 	pkg := evm.Package{Path: "h", Types: []evm.TypeDecl{{Name: "Cell", Shape: cell}, {Shape: cellPtr}}}
 	// Both inputs occupy V0. The wrapper must see the old string twice,
 	// even though the raw result replaces its length and kills its pointer.
-	pkg.Functions = []evm.ExternalFunction{{Name: "Compare", Signature: evm.Signature{Params: []*values.Type{values.StringType, values.StringType}, Results: []*values.Type{values.Int64}}, Direct: evm.DirectBinding{Op: evm.OpCallHostSSU, Call: func(c *evm.Call, x, y values.Value) (values.Value, error) {
+	pkg.Functions = []evm.ExternalFunction{{Name: "Compare", Signature: evm.Signature{Params: []*values.Type{values.StringType, values.StringType}, Results: []*values.Type{values.Int64}}, Direct: evm.DirectBinding{Op: evm.OpCallHostSSU, Call: func(c *evm.VM, x, y values.Value) (values.Value, error) {
 		if x.AsString() != "payload" || x != y {
 			return values.Value{}, fmt.Errorf("broken overlap")
 		}
@@ -284,7 +285,7 @@ end`)
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(p).Run(context.Background(), "Run", []values.Value{values.String("payload")}, out[:]); err != nil || out[0].R != 17 {
+	if err := evmtest.New(p).Run(context.Background(), "Run", []values.Value{values.String("payload")}, out[:]); err != nil || out[0].R != 17 {
 		t.Fatal(out, err)
 	}
 	for _, invalid := range []evm.Instruction{evm.ABC(evm.OpCallHostSSU, 0, 0, 1), evm.ABC(evm.OpCallHostSSU, 1, 0, 0), evm.ABC(evm.OpCallHostSSU, 0, 1, 0), evm.ABC(evm.OpCallHostSSP, 0, 0, 0), evm.ABC(evm.OpCallHostMethodSU, 0, 0, 0)} {
@@ -327,7 +328,7 @@ func TestDirectHostShapes(t *testing.T) {
 
 func TestTiedParameterLifetime(t *testing.T) {
 	sig := evm.Signature{Params: []*values.Type{values.StringType, values.IntType}, Results: []*values.Type{values.IntType}}
-	pkg := evm.Package{Path: "h", Functions: []evm.ExternalFunction{{Name: "Score", Signature: sig, Direct: evm.DirectBinding{Op: evm.OpCallHostSUU, Call: func(c *evm.Call, s, i values.Value) (values.Value, error) { return values.Uint(s.R + i.R), nil }}}}}
+	pkg := evm.Package{Path: "h", Functions: []evm.ExternalFunction{{Name: "Score", Signature: sig, Direct: evm.DirectBinding{Op: evm.OpCallHostSUU, Call: func(c *evm.VM, s, i values.Value) (values.Value, error) { return values.Uint(s.R + i.R), nil }}}}}
 	m, err := evmcompiler.Compile("live.go", `import "h"
 func Once(s string,i int)int{return h.Score(s,i)}
 func Repeat(s string) int {
@@ -348,7 +349,7 @@ func Repeat(s string) int {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(p).Run(context.Background(), "Repeat", []values.Value{values.String("abc")}, out[:]); err != nil || out[0].R != 18 {
+	if err := evmtest.New(p).Run(context.Background(), "Repeat", []values.Value{values.String("abc")}, out[:]); err != nil || out[0].R != 18 {
 		t.Fatal(out, err)
 	}
 }
@@ -359,7 +360,7 @@ func TestDirectMethodThroughOrdinaryABI(t *testing.T) {
 	var seen []uint64
 	pkg := evm.Package{Path: "h", Types: []evm.TypeDecl{{Name: "Counter", Shape: counter}, {Shape: counterPtr}}, Methods: []evm.ExternalMethod{{
 		Name: "Add", Receiver: counterPtr.Type, Signature: evm.Signature{Params: []*values.Type{values.Uint64}, Results: []*values.Type{values.Uint64}},
-		Direct: evm.DirectBinding{Op: evm.OpCallHostMethodUU, Call: func(c *evm.Call, recv, delta values.Value) (values.Value, error) {
+		Direct: evm.DirectBinding{Op: evm.OpCallHostMethodUU, Call: func(c *evm.VM, recv, delta values.Value) (values.Value, error) {
 			seen = append(seen, delta.R)
 			sum := values.Uint(counter.GetField(recv.P, 0).R + delta.R)
 			counter.SetField(recv.P, 0, sum)
@@ -387,7 +388,7 @@ func Run(c *h.Counter)uint64 {
 	}
 	arg := values.Value{P: counter.New()}
 	out := make([]values.Value, 1)
-	if err := evm.New(p).Run(context.Background(), "Run", []values.Value{arg}, out); err != nil || out[0].R != 16 || counter.GetField(arg.P, 0).R != 17 || !slices.Equal(seen, []uint64{2, 3, 4, 8}) {
+	if err := evmtest.New(p).Run(context.Background(), "Run", []values.Value{arg}, out); err != nil || out[0].R != 16 || counter.GetField(arg.P, 0).R != 17 || !slices.Equal(seen, []uint64{2, 3, 4, 8}) {
 		t.Fatal(out, seen, err)
 	}
 }

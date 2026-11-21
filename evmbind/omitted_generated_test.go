@@ -10,6 +10,7 @@ import (
 	"github.com/andreyvit/evm/evmbind/internal/omittedbindings"
 	"github.com/andreyvit/evm/evmbind/internal/omittedfixture"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 	"os"
 	"reflect"
@@ -21,9 +22,9 @@ type omittedHost struct {
 	marker any
 }
 
-func (h *omittedHost) Get(*evm.Call) omittedfixture.Page      { return h.page }
-func (h *omittedHost) Pointer(*evm.Call) *omittedfixture.Page { return &h.page }
-func (h *omittedHost) Check(_ *evm.Call, p *omittedfixture.Page) bool {
+func (h *omittedHost) Get(*evm.VM) omittedfixture.Page      { return h.page }
+func (h *omittedHost) Pointer(*evm.VM) *omittedfixture.Page { return &h.page }
+func (h *omittedHost) Check(_ *evm.VM, p *omittedfixture.Page) bool {
 	return p.Private == h.marker && p.Title == "copy"
 }
 
@@ -74,7 +75,7 @@ func Reset(){*page.Pointer()=page.Page{Title:"reset"}}
 		}
 		var result [1]values.Value
 		for _, name := range []string{"Compare", "Run", "Copy", "Store"} {
-			if err := evm.New(program).Run(context.Background(), name, nil, result[:]); err != nil {
+			if err := evmtest.New(program).Run(context.Background(), name, nil, result[:]); err != nil {
 				t.Fatal(err)
 			}
 			if result[0].R != 1 {
@@ -84,7 +85,7 @@ func Reset(){*page.Pointer()=page.Page{Title:"reset"}}
 				t.Fatal("copy modified original")
 			}
 		}
-		if err := evm.New(program).Run(context.Background(), "Reset", nil, nil); err != nil {
+		if err := evmtest.New(program).Run(context.Background(), "Reset", nil, nil); err != nil {
 			t.Fatal(err)
 		}
 		if host.page.Private != nil || host.page.Title != "reset" {

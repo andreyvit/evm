@@ -11,6 +11,7 @@ import (
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/bench/internal/mathwork"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -48,7 +49,7 @@ func closeFloat(a, b float64) bool {
 }
 
 type mathCase struct {
-	vm   *evm.VM
+	vm   *evmtest.Session
 	name string
 	n    int
 	args [4]values.Value
@@ -59,7 +60,7 @@ type mathCase struct {
 
 func newMathCase(p *evm.Program, index, n int) *mathCase {
 	k := mathKernels[index]
-	c := &mathCase{vm: evm.New(p), name: k.name, n: n, a: make([]values.Value, n), b: make([]values.Value, n)}
+	c := &mathCase{vm: evmtest.New(p), name: k.name, n: n, a: make([]values.Value, n), b: make([]values.Value, n)}
 	a, b := make([]float64, n), make([]float64, n)
 	for i := range a {
 		a[i] = math.Sin(float64(i)*0.137) + 0.4*math.Cos(float64(i)*0.019)

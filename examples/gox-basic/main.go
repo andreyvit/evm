@@ -16,7 +16,9 @@ import (
 	"os"
 	"time"
 
+	"github.com/andreyvit/evm/evmbind"
 	"github.com/andreyvit/evm/gox"
+	"github.com/andreyvit/evm/values"
 )
 
 func main() {
@@ -30,17 +32,19 @@ func run(out io.Writer) {
 	// program is immutable and renders concurrently.
 	tmpl := must(env.Options.CompileFiles("Page", Views, env.Packages...))
 	page := must(tmpl.Link(env.Packages...))
+	storeCodec := must(evmbind.Codec[*Store](env.Schema))
+	userCodec := must(evmbind.Codec[*User](env.Schema))
+	cartCodec := must(evmbind.Codec[*Cart](env.Schema))
 
 	user := &User{Name: "Ada Lovelace", Email: "ada@example.com", Admin: true, Joined: time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC)}
 	cart := &Cart{Coupon: "SPRING", Lines: []CartLine{
 		{Product: TheStore.Products[0], Qty: 2},
 		{Product: TheStore.Products[2], Qty: 1},
 	}}
+	args := [4]values.Value{storeCodec.Pack(TheStore), userCodec.Pack(user), cartCodec.Pack(cart)}
 	for _, query := range []string{"", "lamp"} {
-		// Arguments are ordinary Go values, in the order of Page's
-		// parameters after the builder. Templates work on the host's own
-		// structs, not on copies.
-		html := must(page.RenderNative(context.Background(), []any{TheStore, user, cart, query}, gox.RenderOptions{Strict: true}))
+		args[3] = values.String(query)
+		html := must(page.Render(context.Background(), args[:], gox.RenderOptions{Strict: true}))
 		fmt.Fprintln(out, html)
 	}
 }

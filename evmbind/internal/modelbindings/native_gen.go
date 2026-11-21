@@ -16,10 +16,10 @@ import (
 	"github.com/andreyvit/evm/values"
 )
 
-func readFunction0(f *evmbind.Frame, v values.Value) *evm.FunctionHandle {
+func readFunction0(f *evmbind.Frame, v values.Value) *evm.Callable {
 	return f.Function(v)
 }
-func writeFunction0(f *evmbind.Frame, x *evm.FunctionHandle) values.Value {
+func writeFunction0(f *evmbind.Frame, x *evm.Callable) values.Value {
 	return f.EncodeFunction("*FunctionOf[func()]", x)
 }
 func readImported1(f *evmbind.Frame, v values.Value) *dep0.Generic[dep0.BoundModel] {
@@ -233,216 +233,214 @@ var Bindings = evmbind.Static{Fingerprint: "fec5cd3e896c41d3cdd73b0fc5d0b04394dc
 	Calls: map[string]evmbind.Wrapper{
 		"AliasRows": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				AliasRows(*evm.Call, []*dep0.BoundModel, []*dep0.BoundModel) []*dep0.BoundModel
-			}).AliasRows(f.Call, readCollection8(f, f.Argument(0)), readCollection8(f, f.Argument(1)))
-			f.SetResult(0, writeCollection8(f, r0))
+				AliasRows(*evm.VM, []*dep0.BoundModel, []*dep0.BoundModel) []*dep0.BoundModel
+			}).AliasRows(f.VM, readCollection8(f, f.CallArgument(0)), readCollection8(f, f.CallArgument(1)))
+			f.SetCallResult(0, writeCollection8(f, r0))
 		},
 		"AnyRows": func(f *evmbind.Frame) {
-			r0 := f.Host.(interface{ AnyRows(*evm.Call) any }).AnyRows(f.Call)
-			f.SetResult(0, writeScalarAny(f, r0))
+			r0 := f.Host.(interface{ AnyRows(*evm.VM) any }).AnyRows(f.VM)
+			f.SetCallResult(0, writeScalarAny(f, r0))
 		},
 		"Copy": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				Copy(*evm.Call, dep0.BoundModel) dep0.BoundModel
-			}).Copy(f.Call, readImported26(f, f.Argument(0)))
-			f.SetResult(0, writeImported26(f, r0))
+				Copy(*evm.VM, dep0.BoundModel) dep0.BoundModel
+			}).Copy(f.VM, readImported26(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeImported26(f, r0))
 		},
 		"DirectVisit": func(f *evmbind.Frame) {
 			f.Host.(interface {
-				DirectVisit(*evm.Call, []*dep0.BoundModel, *evm.FunctionHandle)
-			}).DirectVisit(f.Call, readCollection8(f, f.Argument(0)), readFunction0(f, f.Argument(1)))
+				DirectVisit(*evm.VM, []*dep0.BoundModel, *evm.Callable)
+			}).DirectVisit(f.VM, readCollection8(f, f.CallArgument(0)), readFunction0(f, f.CallArgument(1)))
 		},
 		"Echo": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				Echo(*evm.Call, *dep0.BoundModel) *dep0.BoundModel
-			}).Echo(f.Call, readPtrImported5(f, f.Argument(0)))
-			f.SetResult(0, writePtrImported5(f, r0))
+				Echo(*evm.VM, *dep0.BoundModel) *dep0.BoundModel
+			}).Echo(f.VM, readPtrImported5(f, f.CallArgument(0)))
+			f.SetCallResult(0, writePtrImported5(f, r0))
 		},
 		"EchoAny": func(f *evmbind.Frame) {
-			r0 := f.Host.(interface{ EchoAny(*evm.Call, any) any }).EchoAny(f.Call, readScalarAny(f, f.Argument(0)))
-			f.SetResult(0, writeScalarAny(f, r0))
+			r0 := f.Host.(interface{ EchoAny(*evm.VM, any) any }).EchoAny(f.VM, readScalarAny(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeScalarAny(f, r0))
 		},
 		"EchoMatrix": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				EchoMatrix(*evm.Call, [][]*dep0.BoundModel) [][]*dep0.BoundModel
-			}).EchoMatrix(f.Call, readCollection9(f, f.Argument(0)))
-			f.SetResult(0, writeCollection9(f, r0))
+				EchoMatrix(*evm.VM, [][]*dep0.BoundModel) [][]*dep0.BoundModel
+			}).EchoMatrix(f.VM, readCollection9(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeCollection9(f, r0))
 		},
 		"EchoRows": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				EchoRows(*evm.Call, []*dep0.BoundModel) []*dep0.BoundModel
-			}).EchoRows(f.Call, readCollection8(f, f.Argument(0)))
-			f.SetResult(0, writeCollection8(f, r0))
+				EchoRows(*evm.VM, []*dep0.BoundModel) []*dep0.BoundModel
+			}).EchoRows(f.VM, readCollection8(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeCollection8(f, r0))
 		},
 		"EchoValues": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				EchoValues(*evm.Call, []dep0.BoundModel) []dep0.BoundModel
-			}).EchoValues(f.Call, readCollection11(f, f.Argument(0)))
-			f.SetResult(0, writeCollection11(f, r0))
+				EchoValues(*evm.VM, []dep0.BoundModel) []dep0.BoundModel
+			}).EchoValues(f.VM, readCollection11(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeCollection11(f, r0))
 		},
 		"GenericCopy": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				GenericCopy(*evm.Call, dep0.Generic[string]) dep0.Generic[string]
-			}).GenericCopy(f.Call, readImported20(f, f.Argument(0)))
-			f.SetResult(0, writeImported20(f, r0))
+				GenericCopy(*evm.VM, dep0.Generic[string]) dep0.Generic[string]
+			}).GenericCopy(f.VM, readImported20(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeImported20(f, r0))
 		},
 		"GenericDuration": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				GenericDuration(*evm.Call) *dep0.Generic[dep1.Duration]
-			}).GenericDuration(f.Call)
-			f.SetResult(0, writeImported3(f, r0))
+				GenericDuration(*evm.VM) *dep0.Generic[dep1.Duration]
+			}).GenericDuration(f.VM)
+			f.SetCallResult(0, writeImported3(f, r0))
 		},
 		"GenericEcho": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				GenericEcho(*evm.Call, *dep0.Generic[string]) *dep0.Generic[string]
-			}).GenericEcho(f.Call, readImported2(f, f.Argument(0)))
-			f.SetResult(0, writeImported2(f, r0))
+				GenericEcho(*evm.VM, *dep0.Generic[string]) *dep0.Generic[string]
+			}).GenericEcho(f.VM, readImported2(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeImported2(f, r0))
 		},
 		"GenericGet": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				GenericGet(*evm.Call) *dep0.Generic[string]
-			}).GenericGet(f.Call)
-			f.SetResult(0, writeImported2(f, r0))
+				GenericGet(*evm.VM) *dep0.Generic[string]
+			}).GenericGet(f.VM)
+			f.SetCallResult(0, writeImported2(f, r0))
 		},
 		"GenericNamed": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				GenericNamed(*evm.Call) *dep0.Generic[dep0.BoundModel]
-			}).GenericNamed(f.Call)
-			f.SetResult(0, writeImported1(f, r0))
+				GenericNamed(*evm.VM) *dep0.Generic[dep0.BoundModel]
+			}).GenericNamed(f.VM)
+			f.SetCallResult(0, writeImported1(f, r0))
 		},
 		"Get": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				Get(*evm.Call) *dep0.BoundModel
-			}).Get(f.Call)
-			f.SetResult(0, writePtrImported5(f, r0))
+				Get(*evm.VM) *dep0.BoundModel
+			}).Get(f.VM)
+			f.SetCallResult(0, writePtrImported5(f, r0))
 		},
 		"Groups": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				Groups(*evm.Call) map[string][]*dep0.BoundModel
-			}).Groups(f.Call)
-			f.SetResult(0, writeCollection23(f, r0))
+				Groups(*evm.VM) map[string][]*dep0.BoundModel
+			}).Groups(f.VM)
+			f.SetCallResult(0, writeCollection23(f, r0))
 		},
 		"Hidden": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				Hidden(*evm.Call, dep0.BoundModel) int
-			}).Hidden(f.Call, readImported26(f, f.Argument(0)))
-			f.SetResult(0, writeScalarInt(f, r0))
+				Hidden(*evm.VM, dep0.BoundModel) int
+			}).Hidden(f.VM, readImported26(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeScalarInt(f, r0))
 		},
 		"IsRows": func(f *evmbind.Frame) {
-			r0 := f.Host.(interface{ IsRows(*evm.Call, any) bool }).IsRows(f.Call, readScalarAny(f, f.Argument(0)))
-			f.SetResult(0, writeScalarBool(f, r0))
+			r0 := f.Host.(interface{ IsRows(*evm.VM, any) bool }).IsRows(f.VM, readScalarAny(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeScalarBool(f, r0))
 		},
 		"Matrix": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				Matrix(*evm.Call) [][]*dep0.BoundModel
-			}).Matrix(f.Call)
-			f.SetResult(0, writeCollection9(f, r0))
+				Matrix(*evm.VM) [][]*dep0.BoundModel
+			}).Matrix(f.VM)
+			f.SetCallResult(0, writeCollection9(f, r0))
 		},
 		"Mutate": func(f *evmbind.Frame) {
 			f.Host.(interface {
-				Mutate(*evm.Call, *dep0.BoundModel)
-			}).Mutate(f.Call, readPtrImported5(f, f.Argument(0)))
+				Mutate(*evm.VM, *dep0.BoundModel)
+			}).Mutate(f.VM, readPtrImported5(f, f.CallArgument(0)))
 		},
 		"NamedEcho": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				NamedEcho(*evm.Call, api.NamedRowsType) api.NamedRowsType
-			}).NamedEcho(f.Call, readTypeNamedRowsType(f, f.Argument(0)))
-			f.SetResult(0, writeTypeNamedRowsType(f, r0))
+				NamedEcho(*evm.VM, api.NamedRowsType) api.NamedRowsType
+			}).NamedEcho(f.VM, readTypeNamedRowsType(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeTypeNamedRowsType(f, r0))
 		},
 		"NamedIs": func(f *evmbind.Frame) {
-			r0 := f.Host.(interface{ NamedIs(*evm.Call, any) bool }).NamedIs(f.Call, readScalarAny(f, f.Argument(0)))
-			f.SetResult(0, writeScalarBool(f, r0))
+			r0 := f.Host.(interface{ NamedIs(*evm.VM, any) bool }).NamedIs(f.VM, readScalarAny(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeScalarBool(f, r0))
 		},
 		"NamedMatrix": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				NamedMatrix(*evm.Call) api.NamedMatrixType
-			}).NamedMatrix(f.Call)
-			f.SetResult(0, writeTypeNamedMatrixType(f, r0))
+				NamedMatrix(*evm.VM) api.NamedMatrixType
+			}).NamedMatrix(f.VM)
+			f.SetCallResult(0, writeTypeNamedMatrixType(f, r0))
 		},
 		"NamedMatrixEcho": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				NamedMatrixEcho(*evm.Call, api.NamedMatrixType) api.NamedMatrixType
-			}).NamedMatrixEcho(f.Call, readTypeNamedMatrixType(f, f.Argument(0)))
-			f.SetResult(0, writeTypeNamedMatrixType(f, r0))
+				NamedMatrixEcho(*evm.VM, api.NamedMatrixType) api.NamedMatrixType
+			}).NamedMatrixEcho(f.VM, readTypeNamedMatrixType(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeTypeNamedMatrixType(f, r0))
 		},
 		"NamedProduce": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				NamedProduce(*evm.Call, func() api.NamedRowsType) api.NamedRowsType
-			}).NamedProduce(f.Call, f.DecodeNativeCallback("func() NamedRowsType", f.Argument(0)).(func() api.NamedRowsType))
-			f.SetResult(0, writeTypeNamedRowsType(f, r0))
+				NamedProduce(*evm.VM, func() api.NamedRowsType) api.NamedRowsType
+			}).NamedProduce(f.VM, f.DecodeNativeCallback("func() NamedRowsType", f.CallArgument(0)).(func() api.NamedRowsType))
+			f.SetCallResult(0, writeTypeNamedRowsType(f, r0))
 		},
 		"NamedRows": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				NamedRows(*evm.Call) api.NamedRowsType
-			}).NamedRows(f.Call)
-			f.SetResult(0, writeTypeNamedRowsType(f, r0))
+				NamedRows(*evm.VM) api.NamedRowsType
+			}).NamedRows(f.VM)
+			f.SetCallResult(0, writeTypeNamedRowsType(f, r0))
 		},
 		"NilRows": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				NilRows(*evm.Call) []*dep0.BoundModel
-			}).NilRows(f.Call)
-			f.SetResult(0, writeCollection8(f, r0))
+				NilRows(*evm.VM) []*dep0.BoundModel
+			}).NilRows(f.VM)
+			f.SetCallResult(0, writeCollection8(f, r0))
 		},
 		"Other": func(f *evmbind.Frame) {
-			r0 := f.Host.(interface {
-				Other(*evm.Call) *dep0.Alternate
-			}).Other(f.Call)
-			f.SetResult(0, writePtrImported4(f, r0))
+			r0 := f.Host.(interface{ Other(*evm.VM) *dep0.Alternate }).Other(f.VM)
+			f.SetCallResult(0, writePtrImported4(f, r0))
 		},
 		"Pair": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				Pair(*evm.Call, *dep0.BoundModel, *dep0.BoundModel) bool
-			}).Pair(f.Call, readPtrImported5(f, f.Argument(0)), readPtrImported5(f, f.Argument(1)))
-			f.SetResult(0, writeScalarBool(f, r0))
+				Pair(*evm.VM, *dep0.BoundModel, *dep0.BoundModel) bool
+			}).Pair(f.VM, readPtrImported5(f, f.CallArgument(0)), readPtrImported5(f, f.CallArgument(1)))
+			f.SetCallResult(0, writeScalarBool(f, r0))
 		},
 		"PanicRows": func(f *evmbind.Frame) {
 			f.Host.(interface {
-				PanicRows(*evm.Call, []*dep0.BoundModel)
-			}).PanicRows(f.Call, readCollection8(f, f.Argument(0)))
+				PanicRows(*evm.VM, []*dep0.BoundModel)
+			}).PanicRows(f.VM, readCollection8(f, f.CallArgument(0)))
 		},
 		"ProduceRows": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				ProduceRows(*evm.Call, func() []*dep0.BoundModel) []*dep0.BoundModel
-			}).ProduceRows(f.Call, f.DecodeNativeCallback("func() []*modeldata.BoundModel", f.Argument(0)).(func() []*dep0.BoundModel))
-			f.SetResult(0, writeCollection8(f, r0))
+				ProduceRows(*evm.VM, func() []*dep0.BoundModel) []*dep0.BoundModel
+			}).ProduceRows(f.VM, f.DecodeNativeCallback("func() []*modeldata.BoundModel", f.CallArgument(0)).(func() []*dep0.BoundModel))
+			f.SetCallResult(0, writeCollection8(f, r0))
 		},
 		"Rows": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				Rows(*evm.Call) []*dep0.BoundModel
-			}).Rows(f.Call)
-			f.SetResult(0, writeCollection8(f, r0))
+				Rows(*evm.VM) []*dep0.BoundModel
+			}).Rows(f.VM)
+			f.SetCallResult(0, writeCollection8(f, r0))
 		},
 		"Same": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				Same(*evm.Call, *dep0.BoundModel) bool
-			}).Same(f.Call, readPtrImported5(f, f.Argument(0)))
-			f.SetResult(0, writeScalarBool(f, r0))
+				Same(*evm.VM, *dep0.BoundModel) bool
+			}).Same(f.VM, readPtrImported5(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeScalarBool(f, r0))
 		},
 		"SwapRows": func(f *evmbind.Frame) {
 			f.Host.(interface {
-				SwapRows(*evm.Call, []*dep0.BoundModel)
-			}).SwapRows(f.Call, readCollection8(f, f.Argument(0)))
+				SwapRows(*evm.VM, []*dep0.BoundModel)
+			}).SwapRows(f.VM, readCollection8(f, f.CallArgument(0)))
 		},
 		"TailRows": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				TailRows(*evm.Call, []*dep0.BoundModel) []*dep0.BoundModel
-			}).TailRows(f.Call, readCollection8(f, f.Argument(0)))
-			f.SetResult(0, writeCollection8(f, r0))
+				TailRows(*evm.VM, []*dep0.BoundModel) []*dep0.BoundModel
+			}).TailRows(f.VM, readCollection8(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeCollection8(f, r0))
 		},
 		"VisitRows": func(f *evmbind.Frame) {
 			f.Host.(interface {
-				VisitRows(*evm.Call, []*dep0.BoundModel, func())
-			}).VisitRows(f.Call, readCollection8(f, f.Argument(0)), readcallback(f, f.Argument(1)))
+				VisitRows(*evm.VM, []*dep0.BoundModel, func())
+			}).VisitRows(f.VM, readCollection8(f, f.CallArgument(0)), readcallback(f, f.CallArgument(1)))
 		},
 		"WithRows": func(f *evmbind.Frame) {
 			f.Host.(interface {
-				WithRows(*evm.Call, []*dep0.BoundModel, func([]*dep0.BoundModel) []*dep0.BoundModel)
-			}).WithRows(f.Call, readCollection8(f, f.Argument(0)), f.DecodeNativeCallback("func([]*modeldata.BoundModel) []*modeldata.BoundModel", f.Argument(1)).(func([]*dep0.BoundModel) []*dep0.BoundModel))
+				WithRows(*evm.VM, []*dep0.BoundModel, func([]*dep0.BoundModel) []*dep0.BoundModel)
+			}).WithRows(f.VM, readCollection8(f, f.CallArgument(0)), f.DecodeNativeCallback("func([]*modeldata.BoundModel) []*modeldata.BoundModel", f.CallArgument(1)).(func([]*dep0.BoundModel) []*dep0.BoundModel))
 		},
 		"WithValue": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				WithValue(*evm.Call, dep0.BoundModel, func(dep0.BoundModel) dep0.BoundModel) dep0.BoundModel
-			}).WithValue(f.Call, readImported26(f, f.Argument(0)), f.DecodeNativeCallback("func(modeldata.BoundModel) modeldata.BoundModel", f.Argument(1)).(func(dep0.BoundModel) dep0.BoundModel))
-			f.SetResult(0, writeImported26(f, r0))
+				WithValue(*evm.VM, dep0.BoundModel, func(dep0.BoundModel) dep0.BoundModel) dep0.BoundModel
+			}).WithValue(f.VM, readImported26(f, f.CallArgument(0)), f.DecodeNativeCallback("func(modeldata.BoundModel) modeldata.BoundModel", f.CallArgument(1)).(func(dep0.BoundModel) dep0.BoundModel))
+			f.SetCallResult(0, writeImported26(f, r0))
 		},
 	}}

@@ -90,7 +90,7 @@ func nativeType(n *node, reg map[string]reflect.Type, cache map[*node]reflect.Ty
 				fail("native function result mismatch: %s", n.name)
 			}
 		}
-	case nodePointer, nodeCallback, nodeFunctionHandle, nodeRetainedFunction:
+	case nodePointer, nodeCallback, nodeRetainedFunction:
 	default:
 		if t.Kind() != reflectBasics[n.kind].Kind() {
 			fail("native scalar mismatch: %s", n.name)
@@ -103,8 +103,7 @@ var reflectBasics = map[nodeKind]reflect.Type{
 	nodeAny:              reflect.TypeFor[any](),
 	nodeError:            reflect.TypeFor[error](),
 	nodeCallback:         reflect.TypeFor[func()](),
-	nodeFunctionHandle:   reflect.TypeFor[*evm.NamedFunction](),
-	nodeRetainedFunction: reflect.TypeFor[*evm.FunctionHandle](),
+	nodeRetainedFunction: reflect.TypeFor[*evm.Callable](),
 	nodeFloat32:          reflect.TypeFor[float32](),
 	nodeFloat64:          reflect.TypeFor[float64](),
 	nodeString:           reflect.TypeFor[string](),
@@ -159,8 +158,8 @@ func reflectWrapper(op *operation, host reflect.Type, ts map[*node]reflect.Type,
 	if signature.IsVariadic() != op.variadic || signature.NumIn() != skip+len(op.args) || signature.NumOut() != len(op.outs) {
 		fail("native signature mismatch: %s", op.key)
 	}
-	if op.recv == nil && !direct && signature.In(skip-1) != reflect.TypeFor[*evm.Call]() {
-		fail("%s must accept *evm.Call", op.key)
+	if op.recv == nil && !direct && signature.In(skip-1) != reflect.TypeFor[*evm.VM]() {
+		fail("%s must accept *evm.VM", op.key)
 	}
 	for i, n := range op.args {
 		if signature.In(skip+i) != ts[n] {
@@ -178,18 +177,18 @@ func reflectWrapper(op *operation, host reflect.Type, ts map[*node]reflect.Type,
 		start := 0
 		if op.recv == nil {
 			if !direct {
-				args = append(args, reflect.ValueOf(f.Host), reflect.ValueOf(f.Call))
+				args = append(args, reflect.ValueOf(f.Host), reflect.ValueOf(f.VM))
 			}
 		} else {
 			start = 1
 			if ts[op.recv].Kind() == reflect.Interface {
 				call = reflect.ValueOf(f.Receiver).MethodByName(op.nativeMethod())
 			} else {
-				args = append(args, decode(f, op.recv, f.Argument(0), ts))
+				args = append(args, decode(f, op.recv, f.CallArgument(0), ts))
 			}
 		}
 		for i, n := range op.args {
-			args = append(args, decodeArgument(f, n, f.Argument(start+i), ts))
+			args = append(args, decodeArgument(f, n, f.CallArgument(start+i), ts))
 		}
 		var results []reflect.Value
 		if op.variadic {
@@ -202,7 +201,7 @@ func reflectWrapper(op *operation, host reflect.Type, ts map[*node]reflect.Type,
 			return
 		}
 		for i, v := range results {
-			f.SetResult(i, encode(f, op.outs[i], v))
+			f.SetCallResult(i, encode(f, op.outs[i], v))
 		}
 	}
 }
@@ -241,11 +240,6 @@ func decode(f *Frame, n *node, v values.Value, ts map[*node]reflect.Type) reflec
 		x.Set(reflect.SliceAt(t.Elem(), NativeSliceData(v, t.Elem()), int(v.SliceCap())).Slice(0, int(v.SliceLen())))
 	case nodeMap:
 		x.Set(reflect.NewAt(t, unsafe.Pointer(&v.P)).Elem())
-	case nodeFunctionHandle:
-		if n.boxedFunction {
-			return reflect.ValueOf(f.BoxedNamedFunction(v))
-		}
-		return reflect.ValueOf(f.NamedFunction(v))
 	case nodeRetainedFunction:
 		if n.boxedFunction {
 			return reflect.ValueOf(f.BoxedFunction(v))
@@ -337,7 +331,7 @@ func encode(f *Frame, n *node, x reflect.Value) values.Value {
 	case nodeNativeFunction:
 		return f.encodeNativeFunction(n, x)
 	case nodeRetainedFunction:
-		return f.EncodeFunction(n.name, x.Interface().(*evm.FunctionHandle))
+		return f.EncodeFunction(n.name, x.Interface().(*evm.Callable))
 	case nodeInterface:
 		return f.EncodeTypedInterface(n.name, x.Interface())
 	case nodePointer:

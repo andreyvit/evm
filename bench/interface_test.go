@@ -6,6 +6,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -19,7 +20,7 @@ func BenchmarkInterfaceHostMethod(b *testing.B) {
 	sized := &values.Shape{Type: values.NewType("h size", values.Pair), Kind: values.FunctionKind, Cells: 1, Results: []*values.Shape{{Type: values.IntType, Kind: values.IntKind, Bits: 64, Cells: 1}}}
 	sizer := &values.Shape{Type: values.NewType("h.Sizer", values.Pair), Kind: values.InterfaceKind, Cells: 1, Methods: []values.Method{{ID: "Size", Signature: sized}}}
 	pkg := evm.Package{Path: "h", Types: []evm.TypeDecl{{Name: "Number", Shape: number}, {Name: "Sizer", Shape: sizer}}, Methods: []evm.ExternalMethod{
-		{Name: "Size", Receiver: number.Type, Signature: evm.Signature{Results: []*values.Type{values.IntType}}, Call: func(c *evm.Call) error { return nil }},
+		{Name: "Size", Receiver: number.Type, Signature: evm.Signature{Results: []*values.Type{values.IntType}}, Call: func(c *evm.VM) error { return nil }},
 	}}
 	const source = `import "h"
 func Run() int {
@@ -56,7 +57,7 @@ func Run() int {
 					b.Fatal(err)
 				}
 			}
-			vm, ctx := evm.New(p), context.Background()
+			vm, ctx := evmtest.New(p), context.Background()
 			var out [1]values.Value
 			for i := 0; i < 2; i++ {
 				if err := vm.Run(ctx, "Run", nil, out[:]); err != nil || out[0].R != 3000 {

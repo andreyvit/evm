@@ -1,10 +1,7 @@
 package evm
 
 import (
-	"context"
 	"testing"
-
-	"github.com/andreyvit/evm/values"
 )
 
 // Keep the guest body empty to expose native-to-guest invocation overhead.
@@ -16,14 +13,24 @@ func BenchmarkNativeGuestCallback(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	vm := New(p)
-	vm.Limits.AllocationBytes, vm.Limits.Allocations = ^uint64(0), ^uint64(0)
-	callback := func(call *Call) error { return call.RunCallback(values.Value{R: 1}) }
-	ctx := context.Background()
+	guest, err := p.LookupFunction("callback", nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	v, err := p.NativeFunction(nativeEntryType, func(vm *VM) error { return vm.Run(guest, nil) })
+	if err != nil {
+		b.Fatal(err)
+	}
+	host, err := p.Callable(v)
+	if err != nil {
+		b.Fatal(err)
+	}
+	vm := p.AcquireVM(b.Context())
+	defer vm.Release()
+	vm.SetBudget(Limits{})
 	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
-		if err := vm.RunNative(ctx, callback, Budget{}); err != nil {
+	for b.Loop() {
+		if err := vm.Run(host, nil); err != nil {
 			b.Fatal(err)
 		}
 	}

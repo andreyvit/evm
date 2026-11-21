@@ -13,6 +13,7 @@ import (
 	"github.com/andreyvit/evm/evmbind/internal/packagefunctionbindings"
 	"github.com/andreyvit/evm/evmbind/internal/packagefunctionfixture"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -79,7 +80,7 @@ func TestGeneratedNativePackageFunctions(t *testing.T) {
 				t.Fatal(err)
 			}
 			var out [1]values.Value
-			if err := evm.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil || out[0].R != 1 {
+			if err := evmtest.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil || out[0].R != 1 {
 				t.Fatal(out, err)
 			}
 		})

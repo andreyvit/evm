@@ -21,8 +21,8 @@ func TestEnvironmentShapesNativeSourceSignatures(t *testing.T) {
 	model := kvo.NewModel(s, order, func(b *kvo.ModelBuilder) { b.Prop(s.MustPropByCode(total)) })
 	record := evm.NewRecordType("Order", model, false)
 	db := evm.Package{Path: "db", Records: []*evm.RecordType{record}}
-	tools := evm.Package{Path: "tools", Source: "package tools\n", Functions: []evm.ExternalFunction{{Name: "Total", Signature: evm.Signature{Params: []*values.Type{record.Pointer}, Results: []*values.Type{values.Int64}}, Call: func(c *evm.Call) error {
-		c.SetResult(0, values.Int(7))
+	tools := evm.Package{Path: "tools", Source: "package tools\n", Functions: []evm.ExternalFunction{{Name: "Total", Signature: evm.Signature{Params: []*values.Type{record.Pointer}, Results: []*values.Type{values.Int64}}, Call: func(c *evm.VM) error {
+		c.SetCallResult(0, values.Int(7))
 		return nil
 	}}}}
 	packages := []evm.Package{db, tools}

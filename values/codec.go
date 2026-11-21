@@ -2,13 +2,13 @@ package values
 
 import "reflect"
 
-// Codec converts between a cell and a Go value. Its functions do not inspect
+// Codec packs Go values into EVM values and unpacks them back to Go. Its functions do not inspect
 // runtime types. Type is declaration metadata, used only when binding a codec.
 // Strings and bytes borrow their input storage in both directions.
 type Codec[T any] struct {
 	Type   reflect.Type
-	Decode func(Value) T
-	Encode func(T) Value
+	Unpack func(Value) T
+	Pack   func(T) Value
 }
 
 type Signed interface {

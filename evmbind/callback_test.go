@@ -15,6 +15,7 @@ import (
 	"github.com/andreyvit/evm/evmbind/internal/callbackbindings"
 	"github.com/andreyvit/evm/evmbind/internal/callbackfixture"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -72,7 +73,7 @@ func TestTypedSynchronousCallbacks(t *testing.T) {
 					t.Fatal(err)
 				}
 				args := []values.Value{arg}
-				vm := evm.New(program)
+				vm := evmtest.New(program)
 				if err := vm.Run(context.Background(), "Run", args, nil); err != nil {
 					t.Fatal(err)
 				}
@@ -80,7 +81,7 @@ func TestTypedSynchronousCallbacks(t *testing.T) {
 					t.Fatalf("native call cleanup: %d", runner.Closed)
 				}
 				if retained {
-					if err := vm.RunNative(context.Background(), func(*evm.Call) error {
+					if err := vm.RunNative(context.Background(), func(*evm.VM) error {
 						if err := runner.Saved(2); err == nil || err.Error() != "failure" {
 							t.Fatalf("retained invocation: %v", err)
 						}
@@ -99,14 +100,14 @@ func TestTypedSynchronousCallbacks(t *testing.T) {
 					}()
 				}
 				var out [1]values.Value
-				if err := evm.New(program).Run(context.Background(), "Panic", args, out[:]); err != nil {
+				if err := evmtest.New(program).Run(context.Background(), "Panic", args, out[:]); err != nil {
 					t.Fatal(err)
 				}
 				_, value, err := program.UnpackInterface(out[0])
 				if err != nil || value.AsInt() != 7 || runner.Closed != 2 {
 					t.Fatalf("panic: %v/%v/%d", value, err, runner.Closed)
 				}
-				if err := evm.New(program).RunWithBudget(context.Background(), "Budget", args, nil, evm.Budget{Steps: 1000}); !errors.Is(err, evm.ErrSteps) {
+				if err := evmtest.New(program).RunWithBudget(context.Background(), "Budget", args, nil, evm.Budget{Steps: 1000}); !errors.Is(err, evm.ErrSteps) {
 					t.Fatalf("budget: %v", err)
 				}
 				if runner.Closed != 3 {

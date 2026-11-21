@@ -8,21 +8,22 @@ import (
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmbind"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 )
 
-func TestSignaturePolymorphicNamedFunction(t *testing.T) {
-	var fn *evm.NamedFunction
+func TestRetainedFunctionArguments(t *testing.T) {
+	var fn *evm.Callable
 	var ordinary any
 	schema, err := evmbind.New("host", fstest.MapFS{"api.go": {Data: []byte(`package host
  import "github.com/andreyvit/evm"
- func Register(fn *evm.NamedFunctionOf[any])
- func Typed(fn *evm.NamedFunctionOf[func()])
+ func Register(fn *evm.FunctionOf[any])
+ func Typed(fn *evm.FunctionOf[func()])
  func Void(fn func())
  func Ordinary(value any)
  func Native(n int)int
  `)}}, evmbind.Options{Selective: true, Functions: map[string]any{
-		"Register": func(v *evm.NamedFunction) { fn = v },
-		"Typed":    func(v *evm.NamedFunction) { fn = v },
+		"Register": func(v *evm.Callable) { fn = v },
+		"Typed":    func(v *evm.Callable) { fn = v },
 		"Void":     func(v func()) { v() },
 		"Ordinary": func(v any) { ordinary = v },
 		"Native":   func(n int) int { return n },
@@ -38,12 +39,12 @@ func TestSignaturePolymorphicNamedFunction(t *testing.T) {
 		{"int", "host.Register(Number)", "Number", false},
 		{"string", "host.Register(Text)", "Text", false},
 		{"typed", "host.Typed(Empty);host.Void(Empty)", "Empty", false},
-		{"method", "host.Register(T{}.Method)", "", true},
-		{"typed nil", "var f func(int)int;host.Register(f)", "", true},
+		{"method", "host.Register(T{}.Method)", "", false},
+		{"typed nil", "var f func(int)int;host.Register(f)", "", false},
 		{"nil", "host.Register(nil)", "", false},
 		{"nonfunction", "host.Register(42)", "", true},
-		{"native", "host.Register(host.Native)", "", true},
-		{"closure", "x:=1;host.Register(func()int{return x})", "", true},
+		{"native", "host.Register(host.Native)", "", false},
+		{"closure", "x:=1;host.Register(func()int{return x})", "", false},
 		{"ordinary", "host.Ordinary(Number)", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -57,15 +58,18 @@ func TestSignaturePolymorphicNamedFunction(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			err = evm.New(program).Run(context.Background(), "Run", nil, nil)
+			err = evmtest.New(program).Run(context.Background(), "Run", nil, nil)
 			if (err != nil) != tc.bad {
 				t.Fatalf("error %v, want failure %v", err, tc.bad)
 			}
-			if tc.want != "" && (fn == nil || fn.Name != tc.want) {
+			if tc.want != "" && (fn == nil || fn.Name() != tc.want) {
 				t.Fatalf("handle %#v", fn)
 			}
-			if tc.name == "nil" && fn != nil {
+			if (tc.name == "nil" || tc.name == "typed nil") && fn != nil {
 				t.Fatal("nil became nonnil")
+			}
+			if (tc.name == "closure" || tc.name == "method" || tc.name == "native") && fn == nil {
+				t.Fatal("missing registered callable")
 			}
 			if tc.name == "ordinary" {
 				if _, ok := ordinary.(*evm.GuestValue); !ok {

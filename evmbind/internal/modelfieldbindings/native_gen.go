@@ -85,7 +85,7 @@ var Bindings = evmbind.Static{Fingerprint: "b7f7600433b1cebab52d452d5ff1c82bfad3
 	},
 	Calls: map[string]evmbind.Wrapper{
 		"*Context.Clone": func(f *evmbind.Frame) {
-			r0 := readPtrContext(f, f.Argument(0)).Clone()
-			f.SetResult(0, writeTypeContext(f, r0))
+			r0 := readPtrContext(f, f.CallArgument(0)).Clone()
+			f.SetCallResult(0, writeTypeContext(f, r0))
 		},
 	}}

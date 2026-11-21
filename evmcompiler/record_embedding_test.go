@@ -6,6 +6,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/values"
 )
@@ -38,7 +39,7 @@ func TestEmbeddedModelPointerThroughAny(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := make([]values.Value, 1)
-	if err := evm.New(program).Run(context.Background(), "Run", nil, out); err != nil || !out[0].AsBool() {
+	if err := evmtest.New(program).Run(context.Background(), "Run", nil, out); err != nil || !out[0].AsBool() {
 		t.Fatal(out, err)
 	}
 }

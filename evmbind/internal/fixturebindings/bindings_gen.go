@@ -255,94 +255,92 @@ var Bindings = evmbind.Static{Fingerprint: "3b2fe1871cdc37e1f05bd60826438f714194
 	},
 	Calls: map[string]evmbind.Wrapper{
 		"Enabled": func(f *evmbind.Frame) {
-			r0 := f.Host.(interface {
-				Enabled(*evm.Call, api.Count) bool
-			}).Enabled(f.Call, readTypeCount(f, f.Argument(0)))
-			f.SetResult(0, writeScalarBool(f, r0))
+			r0 := f.Host.(interface{ Enabled(*evm.VM, api.Count) bool }).Enabled(f.VM, readTypeCount(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeScalarBool(f, r0))
 		},
 		"Lookup": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				Lookup(*evm.Call, api.Count) *api.Row
-			}).Lookup(f.Call, readTypeCount(f, f.Argument(0)))
-			f.SetResult(0, writePtrRow(f, r0))
+				Lookup(*evm.VM, api.Count) *api.Row
+			}).Lookup(f.VM, readTypeCount(f, f.CallArgument(0)))
+			f.SetCallResult(0, writePtrRow(f, r0))
 		},
 		"Mark": func(f *evmbind.Frame) {
-			f.Host.(interface{ Mark(*evm.Call, api.Count) }).Mark(f.Call, readTypeCount(f, f.Argument(0)))
+			f.Host.(interface{ Mark(*evm.VM, api.Count) }).Mark(f.VM, readTypeCount(f, f.CallArgument(0)))
 		},
 		"Marked": func(f *evmbind.Frame) {
-			r0 := f.Host.(interface{ Marked(*evm.Call) api.Count }).Marked(f.Call)
-			f.SetResult(0, writeTypeCount(f, r0))
+			r0 := f.Host.(interface{ Marked(*evm.VM) api.Count }).Marked(f.VM)
+			f.SetCallResult(0, writeTypeCount(f, r0))
 		},
 		"Name": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				Name(*evm.Call, api.Label, api.Count) api.Label
-			}).Name(f.Call, readTypeLabel(f, f.Argument(0)), readTypeCount(f, f.Argument(1)))
-			f.SetResult(0, writeTypeLabel(f, r0))
+				Name(*evm.VM, api.Label, api.Count) api.Label
+			}).Name(f.VM, readTypeLabel(f, f.CallArgument(0)), readTypeCount(f, f.CallArgument(1)))
+			f.SetCallResult(0, writeTypeLabel(f, r0))
 		},
 		"Pair": func(f *evmbind.Frame) {
 			r0, r1 := f.Host.(interface {
-				Pair(*evm.Call) (*api.Row, *api.Row)
-			}).Pair(f.Call)
-			f.SetResult(0, writePtrRow(f, r0))
-			f.SetResult(1, writePtrRow(f, r1))
+				Pair(*evm.VM) (*api.Row, *api.Row)
+			}).Pair(f.VM)
+			f.SetCallResult(0, writePtrRow(f, r0))
+			f.SetCallResult(1, writePtrRow(f, r1))
 		},
 		"Ratio": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				Ratio(*evm.Call, float32) float64
-			}).Ratio(f.Call, readScalarFloat32(f, f.Argument(0)))
-			f.SetResult(0, writeScalarFloat64(f, r0))
+				Ratio(*evm.VM, float32) float64
+			}).Ratio(f.VM, readScalarFloat32(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeScalarFloat64(f, r0))
 		},
 		"Roundtrip": func(f *evmbind.Frame) {
 			r0, r1, r2 := f.Host.(interface {
-				Roundtrip(*evm.Call, api.Context, *api.Row, *api.Row) (api.Context, *api.Row, api.Row)
-			}).Roundtrip(f.Call, readTypeContext(f, f.Argument(0)), readPtrRow(f, f.Argument(1)), readPtrRow(f, f.Argument(2)))
-			f.SetResult(0, writeTypeContext(f, r0))
-			f.SetResult(1, writePtrRow(f, r1))
-			f.SetResult(2, writeTypeRow(f, r2))
+				Roundtrip(*evm.VM, api.Context, *api.Row, *api.Row) (api.Context, *api.Row, api.Row)
+			}).Roundtrip(f.VM, readTypeContext(f, f.CallArgument(0)), readPtrRow(f, f.CallArgument(1)), readPtrRow(f, f.CallArgument(2)))
+			f.SetCallResult(0, writeTypeContext(f, r0))
+			f.SetCallResult(1, writePtrRow(f, r1))
+			f.SetCallResult(2, writeTypeRow(f, r2))
 		},
 		"*Row.Bump": func(f *evmbind.Frame) {
-			r0 := readPtrRow(f, f.Argument(0)).Bump(readTypeCount(f, f.Argument(1)))
-			f.SetResult(0, writeTypeCount(f, r0))
+			r0 := readPtrRow(f, f.CallArgument(0)).Bump(readTypeCount(f, f.CallArgument(1)))
+			f.SetCallResult(0, writeTypeCount(f, r0))
 		},
 		"*Row.Mark": func(f *evmbind.Frame) {
-			readPtrRow(f, f.Argument(0)).Mark(readTypeCount(f, f.Argument(1)))
+			readPtrRow(f, f.CallArgument(0)).Mark(readTypeCount(f, f.CallArgument(1)))
 		},
 		"*Row.Tagged": func(f *evmbind.Frame) {
-			r0 := readPtrRow(f, f.Argument(0)).Tagged(readTypeLabel(f, f.Argument(1)))
-			f.SetResult(0, writeScalarBool(f, r0))
+			r0 := readPtrRow(f, f.CallArgument(0)).Tagged(readTypeLabel(f, f.CallArgument(1)))
+			f.SetCallResult(0, writeScalarBool(f, r0))
 		},
 		"*Row.Choose": func(f *evmbind.Frame) {
-			r0 := readPtrRow(f, f.Argument(0)).Choose(readPtrRow(f, f.Argument(1)))
-			f.SetResult(0, writePtrRow(f, r0))
+			r0 := readPtrRow(f, f.CallArgument(0)).Choose(readPtrRow(f, f.CallArgument(1)))
+			f.SetCallResult(0, writePtrRow(f, r0))
 		},
 		"Context.Credit": func(f *evmbind.Frame) {
-			r0 := f.Receiver.(api.Context).Credit(readScalarInt(f, f.Argument(1)))
-			f.SetResult(0, writeScalarInt(f, r0))
+			r0 := f.Receiver.(api.Context).Credit(readScalarInt(f, f.CallArgument(1)))
+			f.SetCallResult(0, writeScalarInt(f, r0))
 		},
 		"Context.During": func(f *evmbind.Frame) {
-			f.Receiver.(api.Context).During(readcallback(f, f.Argument(1)))
+			f.Receiver.(api.Context).During(readcallback(f, f.CallArgument(1)))
 		},
 		"Context.Mark": func(f *evmbind.Frame) {
 			f.Receiver.(api.Context).Mark()
 		},
 		"Context.Observe": func(f *evmbind.Frame) {
-			f.Receiver.(api.Context).Observe(readCollection11(f, f.Argument(1)), readCollection18(f, f.Argument(2)))
+			f.Receiver.(api.Context).Observe(readCollection11(f, f.CallArgument(1)), readCollection18(f, f.CallArgument(2)))
 		},
 		"Context.ResetMark": func(f *evmbind.Frame) {
 			f.Receiver.(api.Context).ResetMark()
 		},
 		"Context.Tenant": func(f *evmbind.Frame) {
 			r0 := f.Receiver.(api.Context).Tenant()
-			f.SetResult(0, writeScalarString(f, r0))
+			f.SetCallResult(0, writeScalarString(f, r0))
 		},
 		"Observer.During": func(f *evmbind.Frame) {
-			f.Receiver.(api.Observer).During(readcallback(f, f.Argument(1)))
+			f.Receiver.(api.Observer).During(readcallback(f, f.CallArgument(1)))
 		},
 		"Observer.Mark": func(f *evmbind.Frame) {
 			f.Receiver.(api.Observer).Mark()
 		},
 		"Observer.Observe": func(f *evmbind.Frame) {
-			f.Receiver.(api.Observer).Observe(readCollection11(f, f.Argument(1)), readCollection18(f, f.Argument(2)))
+			f.Receiver.(api.Observer).Observe(readCollection11(f, f.CallArgument(1)), readCollection18(f, f.CallArgument(2)))
 		},
 		"Observer.ResetMark": func(f *evmbind.Frame) {
 			f.Receiver.(api.Observer).ResetMark()
@@ -350,10 +348,8 @@ var Bindings = evmbind.Static{Fingerprint: "3b2fe1871cdc37e1f05bd60826438f714194
 	},
 	Direct: map[string]evmbind.DirectFactory{
 		"Enabled": func(host any) evm.DirectFunc {
-			h := host.(interface {
-				Enabled(*evm.Call, api.Count) bool
-			})
-			return func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+			h := host.(interface{ Enabled(*evm.VM, api.Count) bool })
+			return func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 				defer evmbind.Catch("Enabled", &err)
 				argx := readTypeCount(nil, x)
 				out := h.Enabled(c, argx)
@@ -363,9 +359,9 @@ var Bindings = evmbind.Static{Fingerprint: "3b2fe1871cdc37e1f05bd60826438f714194
 		},
 		"Lookup": func(host any) evm.DirectFunc {
 			h := host.(interface {
-				Lookup(*evm.Call, api.Count) *api.Row
+				Lookup(*evm.VM, api.Count) *api.Row
 			})
-			return func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+			return func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 				defer evmbind.Catch("Lookup", &err)
 				argx := readTypeCount(nil, x)
 				out := h.Lookup(c, argx)
@@ -374,8 +370,8 @@ var Bindings = evmbind.Static{Fingerprint: "3b2fe1871cdc37e1f05bd60826438f714194
 			}
 		},
 		"Mark": func(host any) evm.DirectFunc {
-			h := host.(interface{ Mark(*evm.Call, api.Count) })
-			return func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+			h := host.(interface{ Mark(*evm.VM, api.Count) })
+			return func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 				defer evmbind.Catch("Mark", &err)
 				argx := readTypeCount(nil, x)
 				h.Mark(c, argx)
@@ -383,8 +379,8 @@ var Bindings = evmbind.Static{Fingerprint: "3b2fe1871cdc37e1f05bd60826438f714194
 			}
 		},
 		"Marked": func(host any) evm.DirectFunc {
-			h := host.(interface{ Marked(*evm.Call) api.Count })
-			return func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+			h := host.(interface{ Marked(*evm.VM) api.Count })
+			return func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 				defer evmbind.Catch("Marked", &err)
 				out := h.Marked(c)
 				v = writeTypeCount(nil, out)
@@ -393,9 +389,9 @@ var Bindings = evmbind.Static{Fingerprint: "3b2fe1871cdc37e1f05bd60826438f714194
 		},
 		"Name": func(host any) evm.DirectFunc {
 			h := host.(interface {
-				Name(*evm.Call, api.Label, api.Count) api.Label
+				Name(*evm.VM, api.Label, api.Count) api.Label
 			})
-			return func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+			return func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 				defer evmbind.Catch("Name", &err)
 				argx := readTypeLabel(nil, x)
 				argy := readTypeCount(nil, y)
@@ -406,9 +402,9 @@ var Bindings = evmbind.Static{Fingerprint: "3b2fe1871cdc37e1f05bd60826438f714194
 		},
 		"Ratio": func(host any) evm.DirectFunc {
 			h := host.(interface {
-				Ratio(*evm.Call, float32) float64
+				Ratio(*evm.VM, float32) float64
 			})
-			return func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+			return func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 				defer evmbind.Catch("Ratio", &err)
 				argx := readScalarFloat32(nil, x)
 				out := h.Ratio(c, argx)
@@ -417,10 +413,10 @@ var Bindings = evmbind.Static{Fingerprint: "3b2fe1871cdc37e1f05bd60826438f714194
 			}
 		},
 		"*Row.Bump": func(host any) evm.DirectFunc {
-			return func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+			return func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 				defer evmbind.Catch("*Row.Bump", &err)
 				if x.P != nil && x.R != values.NativeAddress {
-					f := evmbind.Frame{Call: c}
+					f := evmbind.Frame{VM: c}
 					argx := readPtrRow(&f, x)
 					argy := readTypeCount(&f, y)
 					out := argx.Bump(argy)
@@ -435,10 +431,10 @@ var Bindings = evmbind.Static{Fingerprint: "3b2fe1871cdc37e1f05bd60826438f714194
 			}
 		},
 		"*Row.Mark": func(host any) evm.DirectFunc {
-			return func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+			return func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 				defer evmbind.Catch("*Row.Mark", &err)
 				if x.P != nil && x.R != values.NativeAddress {
-					f := evmbind.Frame{Call: c}
+					f := evmbind.Frame{VM: c}
 					argx := readPtrRow(&f, x)
 					argy := readTypeCount(&f, y)
 					argx.Mark(argy)
@@ -451,10 +447,10 @@ var Bindings = evmbind.Static{Fingerprint: "3b2fe1871cdc37e1f05bd60826438f714194
 			}
 		},
 		"*Row.Tagged": func(host any) evm.DirectFunc {
-			return func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+			return func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 				defer evmbind.Catch("*Row.Tagged", &err)
 				if x.P != nil && x.R != values.NativeAddress {
-					f := evmbind.Frame{Call: c}
+					f := evmbind.Frame{VM: c}
 					argx := readPtrRow(&f, x)
 					argy := readTypeLabel(&f, y)
 					out := argx.Tagged(argy)
@@ -469,10 +465,10 @@ var Bindings = evmbind.Static{Fingerprint: "3b2fe1871cdc37e1f05bd60826438f714194
 			}
 		},
 		"*Row.Choose": func(host any) evm.DirectFunc {
-			return func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+			return func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 				defer evmbind.Catch("*Row.Choose", &err)
 				if (x.P != nil && x.R != values.NativeAddress) || (y.P != nil && y.R != values.NativeAddress) {
-					f := evmbind.Frame{Call: c}
+					f := evmbind.Frame{VM: c}
 					argx := readPtrRow(&f, x)
 					argy := readPtrRow(&f, y)
 					out := argx.Choose(argy)

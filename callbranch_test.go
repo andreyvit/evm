@@ -14,7 +14,7 @@ func TestDirectBranchCancellation(t *testing.T) {
 		ABC(OpCallHostUU, 0, 0, 0), WithBC(OpJz, 0, 1), ABC(OpReturn, 0, 0, 0), ABC(OpReturn, 0, 0, 0),
 	}}}}
 	var cancel context.CancelFunc
-	pkg := Package{Path: "sensor", Functions: []ExternalFunction{{Name: "Ready", Signature: sig, Direct: DirectBinding{Op: OpCallHostUU, Call: func(_ *Call, x, _ values.Value) (values.Value, error) {
+	pkg := Package{Path: "sensor", Functions: []ExternalFunction{{Name: "Ready", Signature: sig, Direct: DirectBinding{Op: OpCallHostUU, Call: func(_ *VM, x, _ values.Value) (values.Value, error) {
 		if cancel != nil {
 			cancel()
 		}

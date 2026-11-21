@@ -8,6 +8,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -37,7 +38,7 @@ func broken() {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	out := make([]values.Value, 1)
 	if err := vm.Run(context.Background(), "Run", nil, out); err != nil || out[0].AsString() != "41/42" {
 		t.Fatalf("%q: %v", out[0].AsString(), err)

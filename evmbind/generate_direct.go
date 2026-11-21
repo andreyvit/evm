@@ -19,7 +19,7 @@ func writeDirect(line func(string, ...any), op *operation, ids map[*node]string,
 	if op.recv == nil {
 		var params []string
 		if !op.packageFunction {
-			params = append(params, "*evm.Call")
+			params = append(params, "*evm.VM")
 		}
 		for _, n := range inputs {
 			params = append(params, typ(n))
@@ -32,7 +32,7 @@ func writeDirect(line func(string, ...any), op *operation, ids map[*node]string,
 	} else {
 		inputs = append([]*node{op.recv}, inputs...)
 	}
-	line("return func(c *evm.Call,x,y values.Value)(v values.Value,err error){")
+	line("return func(c *evm.VM,x,y values.Value)(v values.Value,err error){")
 	line("defer evmbind.Catch(%q,&err)", op.key)
 	regs := [2]string{"x", "y"}
 	var guards []string
@@ -45,7 +45,7 @@ func writeDirect(line func(string, ...any), op *operation, ids map[*node]string,
 		var args []string
 		frame := "nil"
 		if slow {
-			line("f:=evmbind.Frame{Call:c}")
+			line("f:=evmbind.Frame{VM:c}")
 			frame = "&f"
 		}
 		for i, n := range inputs {

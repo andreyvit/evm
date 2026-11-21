@@ -12,7 +12,7 @@ func mapLength(s *values.Shape, v values.Value) int {
 	}
 	return (*values.Map)(v.P).Len()
 }
-func (c *Call) mapEntries(s *values.Shape, v values.Value) ([]*values.MapEntry, error) {
+func (c *VM) mapEntries(s *values.Shape, v values.Value) ([]*values.MapEntry, error) {
 	n := mapLength(s, v)
 	entrySize := uint64(unsafe.Sizeof(uintptr(0)))
 	if s.Native != nil && s.Native.Map != nil {
@@ -53,7 +53,7 @@ func (c *Call) mapEntries(s *values.Shape, v values.Value) ([]*values.MapEntry, 
 	}
 	return out, nil
 }
-func (c *Call) collectionElement(s *values.Shape, v values.Value, i uint64) (values.Value, error) {
+func (c *VM) collectionElement(s *values.Shape, v values.Value, i uint64) (values.Value, error) {
 	if s.Kind == values.SliceKind {
 		if v.IsBorrowedByteView() {
 			return values.Uint(uint64(*(*byte)(unsafe.Add(v.SliceReadData(), i)))), nil
@@ -70,7 +70,7 @@ func (c *Call) collectionElement(s *values.Shape, v values.Value, i uint64) (val
 
 // SliceElement reads an element using the linked native or VM storage layout.
 // Host callbacks must use their parameter shape rather than assume VM cells.
-func (c *Call) SliceElement(s *values.Shape, v values.Value, index uint64) (values.Value, error) {
+func (c *VM) SliceElement(s *values.Shape, v values.Value, index uint64) (values.Value, error) {
 	if s == nil || s.Kind != values.SliceKind {
 		return values.Value{}, ErrInvalidState
 	}

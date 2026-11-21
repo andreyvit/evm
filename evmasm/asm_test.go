@@ -10,6 +10,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmasm"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -44,7 +45,7 @@ end
 	if err != nil {
 		t.Fatal(err)
 	}
-	v := evm.New(p)
+	v := evmtest.New(p)
 	out := make([]values.Value, 1)
 	if err := v.Run(context.Background(), "main", []values.Value{values.Int(10)}, out); err != nil {
 		t.Fatal(err)
@@ -105,7 +106,7 @@ func awardProgram(t testing.TB, invoke evm.Native) *evm.Program {
 	return p
 }
 
-func award(c *evm.Call) error {
+func award(c *evm.VM) error {
 	obj := (*customer)(c.P[1])
 	c.R[1] = uint64(obj.add(int64(c.R[1])))
 	return nil
@@ -114,8 +115,8 @@ func award(c *evm.Call) error {
 func TestHostMethodAndMixedWindows(t *testing.T) {
 	failure := errors.New("award unavailable")
 	var fail bool
-	var vm *evm.VM
-	p := awardProgram(t, func(c *evm.Call) error {
+	var vm *evmtest.Session
+	p := awardProgram(t, func(c *evm.VM) error {
 		if c.Value(0).AsString() != "demo #1" {
 			t.Fatal("lost string while shifting windows")
 		}
@@ -127,7 +128,7 @@ func TestHostMethodAndMixedWindows(t *testing.T) {
 		}
 		return award(c)
 	})
-	vm = evm.New(p)
+	vm = evmtest.New(p)
 	alice := &customer{}
 	args := []values.Value{{P: unsafe.Pointer(alice)}, values.Int(7)}
 	out := make([]values.Value, 2)
@@ -158,7 +159,7 @@ func TestHostMethodAndMixedWindows(t *testing.T) {
 }
 
 func BenchmarkHostCall(b *testing.B) {
-	vm := evm.New(awardProgram(b, award))
+	vm := evmtest.New(awardProgram(b, award))
 	alice := &customer{}
 	args := []values.Value{{P: unsafe.Pointer(alice)}, values.Int(1)}
 	out := make([]values.Value, 2)
@@ -210,7 +211,7 @@ end
 		t.Fatal(err)
 	}
 	out := make([]values.Value, 2)
-	if err := evm.New(p).Run(context.Background(), "main", nil, out); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "main", nil, out); err != nil {
 		t.Fatal(err)
 	}
 	if out[0].AsFloat() != 1.5 || out[1].R != ^uint64(0) {
@@ -255,13 +256,13 @@ end
 		t.Fatal(err)
 	}
 	p, err := evm.Link(m, evm.Package{Path: "bh", Functions: []evm.ExternalFunction{
-		{Name: "Scale", Signature: evm.Signature{Params: []*values.Type{values.Int64, values.Int64}, Results: []*values.Type{values.Int64}}, Call: func(c *evm.Call) error { c.R[0] *= c.R[1]; return nil }},
-		{Name: "Increment", Signature: evm.Signature{Params: []*values.Type{values.Int64}, Results: []*values.Type{values.Int64}}, Call: func(c *evm.Call) error { c.R[0]++; return nil }},
+		{Name: "Scale", Signature: evm.Signature{Params: []*values.Type{values.Int64, values.Int64}, Results: []*values.Type{values.Int64}}, Call: func(c *evm.VM) error { c.R[0] *= c.R[1]; return nil }},
+		{Name: "Increment", Signature: evm.Signature{Params: []*values.Type{values.Int64}, Results: []*values.Type{values.Int64}}, Call: func(c *evm.VM) error { c.R[0]++; return nil }},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	out := make([]values.Value, 1)
 	if err := vm.Run(context.Background(), "main", []values.Value{values.Int(30)}, out); err != nil {
 		t.Fatal(err)
@@ -294,11 +295,11 @@ end`
 	}
 	var input int64
 	host := evm.Package{Path: "h", Functions: []evm.ExternalFunction{
-		{Name: "Double", Signature: m.Imports[0].Signature, Call: func(c *evm.Call) error {
+		{Name: "Double", Signature: m.Imports[0].Signature, Call: func(c *evm.VM) error {
 			c.R[0] *= 2
 			return nil
 		}},
-		{Name: "Get", Signature: m.Imports[1].Signature, Call: func(c *evm.Call) error {
+		{Name: "Get", Signature: m.Imports[1].Signature, Call: func(c *evm.VM) error {
 			input = int64(c.R[0])
 			if input > 0 {
 				c.P[0] = unsafe.Pointer(&input)
@@ -310,7 +311,7 @@ end`
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	out := []values.Value{values.Int(99)}
 	for _, tc := range []struct {
 		x, want int64
@@ -353,7 +354,7 @@ end`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	out := make([]values.Value, 1)
 	for _, tc := range []struct {
 		x, limit, want int64
@@ -385,7 +386,7 @@ end`
 		t.Fatal(err)
 	}
 	got := make([]values.Value, 1)
-	if err := evm.New(p).Run(context.Background(), "f", []values.Value{values.Float(2), values.Float(3), values.Float(4)}, got); err != nil || got[0].AsFloat() != 10 {
+	if err := evmtest.New(p).Run(context.Background(), "f", []values.Value{values.Float(2), values.Float(3), values.Float(4)}, got); err != nil || got[0].AsFloat() != 10 {
 		t.Fatal(got, err)
 	}
 	if _, err := evmasm.Assemble(strings.ReplaceAll(src, "r4095", "r4096")); err == nil {
@@ -416,7 +417,7 @@ end`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	out := make([]values.Value, 1)
 	for _, tc := range []struct{ x, y, w int64 }{{-1, 0, 11}, {2, 0, 0}, {7, 1, 17}, {0, 1, 0}} {
 		if err := vm.Run(context.Background(), "f", []values.Value{values.Int(tc.x), values.Int(tc.y)}, out); err != nil || out[0].AsInt() != tc.w {
@@ -459,7 +460,7 @@ end`)
 		limits evm.Limits
 		want   error
 	}{{evm.Limits{RSlots: 3}, evm.ErrRegisters}, {evm.Limits{Depth: 1}, evm.ErrDepth}} {
-		vm := evm.New(p)
+		vm := evmtest.New(p)
 		args, out := []values.Value{values.Int(42)}, make([]values.Value, 1)
 		for range 3 {
 			if err := vm.Run(context.Background(), "main", args, out); err != nil || out[0].R != 0 {

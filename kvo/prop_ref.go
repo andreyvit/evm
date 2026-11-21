@@ -25,7 +25,7 @@ func (p *PropRef[T]) Code() uint64 { return p.code }
 func BindProp[T any](schema *Schema, code uint64, codec values.Codec[T]) *PropRef[T] {
 	prop := schema.MustPropByCode(code)
 	checkCodec(prop.AnyType(), codec)
-	return &PropRef[T]{code: code, decode: codec.Decode, encode: codec.Encode}
+	return &PropRef[T]{code: code, decode: codec.Unpack, encode: codec.Pack}
 }
 
 // NewScalarProp declares a property and returns its typed access descriptor.
@@ -37,7 +37,7 @@ func NewScalarProp[T any](schema *Schema, code uint64, name string, typ AnyType,
 
 func checkCodec[T any](typ AnyType, codec values.Codec[T]) {
 	native, ok := typ.(interface{ NativeType() reflect.Type })
-	if !ok || codec.Type != reflect.TypeFor[T]() || codec.Decode == nil || codec.Encode == nil || native.NativeType().Kind() != codec.Type.Kind() {
+	if !ok || codec.Type != reflect.TypeFor[T]() || codec.Unpack == nil || codec.Pack == nil || native.NativeType().Kind() != codec.Type.Kind() {
 		panic(fmt.Sprintf("record: codec for %v does not match property type %s", reflect.TypeFor[T](), typ.Name()))
 	}
 	// A []byte carrier is not a general Go slice representation.

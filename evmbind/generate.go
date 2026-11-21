@@ -70,7 +70,7 @@ func generateSource(s *source, nativeImport, outputPackage string) ([]byte, erro
 		switch {
 		case n.kind == nodeRecord && n.model.row.Mutable:
 			ids[n] = fmt.Sprintf("MutableModel%d", index)
-		case n.kind == nodeFunctionHandle || n.kind == nodeRetainedFunction:
+		case n.kind == nodeRetainedFunction:
 			ids[n] = fmt.Sprintf("Function%d", index)
 			hasHost = true
 		case n.kind == nodeNativeFunction && !n.named:
@@ -149,10 +149,7 @@ func generateSource(s *source, nativeImport, outputPackage string) ([]byte, erro
 			return external[n.nativeImport] + "." + n.nativeName
 		}
 		if n.kind == nodeRetainedFunction {
-			return "*evm.FunctionHandle"
-		}
-		if n.kind == nodeFunctionHandle {
-			return "*evm.NamedFunction"
+			return "*evm.Callable"
 		}
 		if n.named {
 			return "api." + n.name
@@ -209,12 +206,6 @@ func generateSource(s *source, nativeImport, outputPackage string) ([]byte, erro
 			line("return (%s)(unsafe.Slice((*%s)(evmbind.NativeSliceData(v,reflect.TypeFor[%s]())),int(v.SliceCap()))[:int(v.SliceLen())])", typ(n), typ(n.elem), typ(n.elem))
 		case nodeMap:
 			line("return *(*%s)(unsafe.Pointer(&v.P))", typ(n))
-		case nodeFunctionHandle:
-			if n.boxedFunction {
-				line("return f.BoxedNamedFunction(v)")
-			} else {
-				line("return f.NamedFunction(v)")
-			}
 		case nodeRetainedFunction:
 			if n.boxedFunction {
 				line("return f.BoxedFunction(v)")
@@ -371,9 +362,9 @@ func generateSource(s *source, nativeImport, outputPackage string) ([]byte, erro
 				idx++
 			}
 			if n.kind == nodeNativeFunction {
-				args = append(args, fmt.Sprintf("f.DecodeNativeCallback(%q,f.Argument(%d)).(%s)", n.name, idx, typ(n)))
+				args = append(args, fmt.Sprintf("f.DecodeNativeCallback(%q,f.CallArgument(%d)).(%s)", n.name, idx, typ(n)))
 			} else {
-				args = append(args, fmt.Sprintf("read%s(f,f.Argument(%d))", ids[n], idx))
+				args = append(args, fmt.Sprintf("read%s(f,f.CallArgument(%d))", ids[n], idx))
 			}
 		}
 		for i, n := range op.outs {
@@ -388,13 +379,13 @@ func generateSource(s *source, nativeImport, outputPackage string) ([]byte, erro
 		if op.packageFunction {
 			recv = fmt.Sprintf("f.Host.(func(%s)(%s))", strings.Join(params, ","), strings.Join(results, ","))
 		} else if op.recv == nil {
-			params = append([]string{"*evm.Call"}, params...)
-			args = append([]string{"f.Call"}, args...)
+			params = append([]string{"*evm.VM"}, params...)
+			args = append([]string{"f.VM"}, args...)
 			recv = fmt.Sprintf("f.Host.(interface{%s(%s)(%s)})", op.name, strings.Join(params, ","), strings.Join(results, ","))
 		} else if op.recv.kind == nodeInterface {
 			recv = "f.Receiver.(" + typ(op.recv) + ")"
 		} else {
-			recv = fmt.Sprintf("read%s(f,f.Argument(0))", ids[op.recv])
+			recv = fmt.Sprintf("read%s(f,f.CallArgument(0))", ids[op.recv])
 		}
 		target := recv
 		if !op.packageFunction {
@@ -405,7 +396,7 @@ func generateSource(s *source, nativeImport, outputPackage string) ([]byte, erro
 			line("f.SetBorrowedBytesResult(0,r0)")
 		} else {
 			for i, n := range op.outs {
-				line("f.SetResult(%d,write%s(f,r%d))", i, ids[n], i)
+				line("f.SetCallResult(%d,write%s(f,r%d))", i, ids[n], i)
 			}
 		}
 		line("},")

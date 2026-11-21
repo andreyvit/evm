@@ -7,6 +7,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -53,7 +54,7 @@ func Run() int {
 				t.Fatal(err)
 			}
 			output := make([]values.Value, 1)
-			if err := evm.New(program).Run(context.Background(), "Run", nil, output); err != nil {
+			if err := evmtest.New(program).Run(context.Background(), "Run", nil, output); err != nil {
 				t.Fatal(err)
 			}
 			if output[0].AsInt() != 126 {

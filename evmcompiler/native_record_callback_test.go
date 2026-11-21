@@ -7,6 +7,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/kvo/codec/msgpack"
 	"github.com/andreyvit/evm/values"
@@ -28,13 +29,13 @@ func TestNativeCallbackRecordIdentity(t *testing.T) {
 	}
 	projection := kvo.Project(reflect.TypeFor[customer](), model, kvo.FieldMap{reflect.TypeFor[customer](): {total: "Total", tags: "Tags"}})
 	value := projection.MessagePack(msgpack.Encode(nil, reflect.ValueOf(&customer{42, []string{"one", "two"}})))
-	pkg := evm.Package{Path: "db", Records: []*evm.RecordType{record}, Types: []evm.TypeDecl{{Shape: callback}}, Functions: []evm.ExternalFunction{{Name: "Visit", Signature: evm.Signature{Params: []*values.Type{callback.Type}}, Call: func(c *evm.Call) error {
+	pkg := evm.Package{Path: "db", Records: []*evm.RecordType{record}, Types: []evm.TypeDecl{{Shape: callback}}, Functions: []evm.ExternalFunction{{Name: "Visit", Signature: evm.Signature{Params: []*values.Type{callback.Type}}, Call: func(c *evm.VM) error {
 		v, err := c.RecordValue(model, value)
 		if err != nil {
 			return err
 		}
 		var result [1]values.Value
-		return c.RunCallbackArgs(c.Argument(0), []values.Value{v}, result[:])
+		return evmtest.Callback(c, c.CallArgument(0), []values.Value{v}, result[:])
 	}}}}
 	source := `import "db"
  func CountRow(row *db.Customer) bool {
@@ -71,7 +72,7 @@ func Run() int64 {
 		}
 		for name, want := range map[string]int64{"Run": 42, "Count": 1} {
 			var out [1]values.Value
-			if err := evm.New(p).Run(context.Background(), name, nil, out[:]); err != nil {
+			if err := evmtest.New(p).Run(context.Background(), name, nil, out[:]); err != nil {
 				t.Fatal(err)
 			}
 			if out[0].AsInt() != want {
@@ -92,10 +93,10 @@ func TestNativeCallbackAfterInterfaceSignature(t *testing.T) {
 	iface := &values.Shape{Type: values.NewType("iface.Checker", values.Pair), Kind: values.InterfaceKind, Cells: 1, Methods: []values.Method{{ID: "Check", Signature: method}}}
 	first := evm.Package{Path: "iface", Types: []evm.TypeDecl{{Name: "Checker", Shape: iface}}}
 	callback := &values.Shape{Type: values.NewType("func(string)bool", values.Pair), Kind: values.FunctionKind, Cells: 1, Params: []*values.Shape{str}, Results: []*values.Shape{boolean}}
-	second := evm.Package{Path: "host", Types: []evm.TypeDecl{{Shape: callback}}, Functions: []evm.ExternalFunction{{Name: "Accept", Signature: evm.Signature{Params: []*values.Type{callback.Type}, Results: []*values.Type{values.Boolean}}, Call: func(c *evm.Call) error {
+	second := evm.Package{Path: "host", Types: []evm.TypeDecl{{Shape: callback}}, Functions: []evm.ExternalFunction{{Name: "Accept", Signature: evm.Signature{Params: []*values.Type{callback.Type}, Results: []*values.Type{values.Boolean}}, Call: func(c *evm.VM) error {
 		var result [1]values.Value
-		err := c.RunCallbackArgs(c.Argument(0), []values.Value{values.String("ok")}, result[:])
-		c.SetResult(0, result[0])
+		err := evmtest.Callback(c, c.CallArgument(0), []values.Value{values.String("ok")}, result[:])
+		c.SetCallResult(0, result[0])
 		return err
 	}}}}
 	for _, imports := range []string{`import("iface";"host")`, `import("host";"iface")`} {
@@ -108,7 +109,7 @@ func TestNativeCallbackAfterInterfaceSignature(t *testing.T) {
 			t.Fatal(err)
 		}
 		var out [1]values.Value
-		if err := evm.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
+		if err := evmtest.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
 			t.Fatal(err)
 		}
 		if !out[0].AsBool() {

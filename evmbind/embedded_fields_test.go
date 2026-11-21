@@ -14,6 +14,7 @@ import (
 	"github.com/andreyvit/evm/evmbind/internal/embeddedbindings"
 	"github.com/andreyvit/evm/evmbind/internal/embeddedfixture"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -67,7 +68,7 @@ func TestNativeEmbeddedFields(t *testing.T) {
 			t.Fatal(err)
 		}
 		var result [1]values.Value
-		if err := evm.New(program).Run(context.Background(), "Run", []values.Value{p, v}, result[:]); err != nil {
+		if err := evmtest.New(program).Run(context.Background(), "Run", []values.Value{p, v}, result[:]); err != nil {
 			t.Fatal(err)
 		}
 		if result[0].R != 1 || pointer.Title != "alias" || value.Title != "value" {

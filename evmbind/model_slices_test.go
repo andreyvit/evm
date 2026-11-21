@@ -12,6 +12,7 @@ import (
 	"github.com/andreyvit/evm/evmbind"
 	"github.com/andreyvit/evm/evmbind/internal/modeldata"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/values"
 )
@@ -22,9 +23,9 @@ type modelSliceHost struct {
 	others []*modeldata.Alternate
 }
 
-func (h *modelSliceHost) Rows(*evm.Call) []*BoundModel                       { return h.rows }
-func (h *modelSliceHost) Same(_ *evm.Call, row *BoundModel) bool             { return row == h.rows[0] }
-func (h *modelSliceHost) Echo(_ *evm.Call, rows []*BoundModel) []*BoundModel { return rows }
+func (h *modelSliceHost) Rows(*evm.VM) []*BoundModel                       { return h.rows }
+func (h *modelSliceHost) Same(_ *evm.VM, row *BoundModel) bool             { return row == h.rows[0] }
+func (h *modelSliceHost) Echo(_ *evm.VM, rows []*BoundModel) []*BoundModel { return rows }
 
 func TestNativeModelSliceSignatures(t *testing.T) {
 	models, dep, err := modeldata.Declarations()
@@ -82,7 +83,7 @@ func TestNativeModelSliceSignatures(t *testing.T) {
 		}
 	}
 	var out [1]values.Value
-	if err = evm.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil || !out[0].AsBool() {
+	if err = evmtest.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil || !out[0].AsBool() {
 		t.Fatalf("%v %v\n%s", out, err, module.Disassemble())
 	}
 	if host.rows[1] != first || host.rows[:3][2] != first || first.Hidden != 42 {
@@ -93,8 +94,8 @@ func TestNativeModelSliceSignatures(t *testing.T) {
 	}
 }
 
-func (h *modelSliceHost) First(*evm.Call) []*BoundModel           { return h.rows }
-func (h *modelSliceHost) Second(*evm.Call) []*modeldata.Alternate { return h.others }
+func (h *modelSliceHost) First(*evm.VM) []*BoundModel           { return h.rows }
+func (h *modelSliceHost) Second(*evm.VM) []*modeldata.Alternate { return h.others }
 
 func TestNativeModelSliceMultipleLayouts(t *testing.T) {
 	models, dep, err := modeldata.Declarations()
@@ -133,10 +134,10 @@ func Reject(){
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil || !out[0].AsBool() {
+	if err := evmtest.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil || !out[0].AsBool() {
 		t.Fatal(out, err)
 	}
-	if err := evm.New(program).Run(context.Background(), "Reject", nil, nil); err == nil || !strings.Contains(err.Error(), "explicit conversion") {
+	if err := evmtest.New(program).Run(context.Background(), "Reject", nil, nil); err == nil || !strings.Contains(err.Error(), "explicit conversion") {
 		t.Fatalf("expected explicit conversion error, got %v", err)
 	}
 	if host.others[0].Label != "second" || host.rows[0].Name != "first" {
@@ -171,7 +172,7 @@ func TestSharedNativeModelSliceSchemas(t *testing.T) {
 				t.Fatal(err)
 			}
 			var out [1]values.Value
-			if err := evm.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil || out[0].AsString() != "shared" {
+			if err := evmtest.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil || out[0].AsString() != "shared" {
 				t.Fatal(out, err)
 			}
 		})
@@ -212,12 +213,12 @@ func TestNativeModelSliceDoesNotChangeRecordLists(t *testing.T) {
 	}
 	original := &modelSliceRoot{Children: []*modelSliceExtra{{Name: "first", Extra: "must survive"}}}
 	binding := kvo.Bind(reflect.TypeFor[modelSliceRoot](), root)
-	probe := evm.Package{Path: "probe", Functions: []evm.ExternalFunction{{Name: "Same", Signature: evm.Signature{Params: []*values.Type{models.Record(child, false).Pointer}, Results: []*values.Type{values.Boolean}}, Call: func(c *evm.Call) error {
-		row, err := c.Record(c.Argument(0), child)
+	probe := evm.Package{Path: "probe", Functions: []evm.ExternalFunction{{Name: "Same", Signature: evm.Signature{Params: []*values.Type{models.Record(child, false).Pointer}, Results: []*values.Type{values.Boolean}}, Call: func(c *evm.VM) error {
+		row, err := c.Record(c.CallArgument(0), child)
 		if err != nil {
 			return err
 		}
-		c.SetResult(0, values.Bool(row.NativePointer() == original.Children[0]))
+		c.SetCallResult(0, values.Bool(row.NativePointer() == original.Children[0]))
 		return nil
 	}}}}
 	for _, linked := range []bool{false, true} {
@@ -235,7 +236,7 @@ func TestNativeModelSliceDoesNotChangeRecordLists(t *testing.T) {
 				t.Fatal(err)
 			}
 			var out [1]values.Value
-			if err := evm.New(program).Run(context.Background(), "Run", []values.Value{binding.Record(reflect.ValueOf(original)).Value()}, out[:]); err != nil {
+			if err := evmtest.New(program).Run(context.Background(), "Run", []values.Value{binding.Record(reflect.ValueOf(original)).Value()}, out[:]); err != nil {
 				t.Fatal(err)
 			}
 			if !out[0].AsBool() {
@@ -247,8 +248,8 @@ func TestNativeModelSliceDoesNotChangeRecordLists(t *testing.T) {
 
 // A host can retain an ordinary slice argument and mutate it in a later call.
 // The guest's original slice must keep sharing those slots.
-func (h *modelSliceHost) Retain(_ *evm.Call, rows []*BoundModel) { h.rows = rows }
-func (h *modelSliceHost) Replace(_ *evm.Call)                    { h.rows[0] = nil }
+func (h *modelSliceHost) Retain(_ *evm.VM, rows []*BoundModel) { h.rows = rows }
+func (h *modelSliceHost) Replace(_ *evm.VM)                    { h.rows[0] = nil }
 
 func TestNativeModelSliceRetainedBacking(t *testing.T) {
 	models, dep, err := modeldata.Declarations()
@@ -296,7 +297,7 @@ func TestNativeModelSliceRetainedBacking(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
 		t.Fatalf("%v\n%s", err, module.Disassemble())
 	}
 	if !out[0].AsBool() {
@@ -307,11 +308,11 @@ func TestNativeModelSliceRetainedBacking(t *testing.T) {
 type ModelSliceBox struct{ Rows []*BoundModel }
 type AlternateModelSliceBox struct{ Rows []*modeldata.Alternate }
 
-func (h *modelSliceHost) OtherBox(*evm.Call) *AlternateModelSliceBox {
+func (h *modelSliceHost) OtherBox(*evm.VM) *AlternateModelSliceBox {
 	return &AlternateModelSliceBox{Rows: h.others}
 }
 
-func (h *modelSliceHost) Box(*evm.Call) *ModelSliceBox { return &ModelSliceBox{Rows: h.rows} }
+func (h *modelSliceHost) Box(*evm.VM) *ModelSliceBox { return &ModelSliceBox{Rows: h.rows} }
 
 func TestNativeModelSliceField(t *testing.T) {
 	models, dep, err := modeldata.Declarations()
@@ -357,7 +358,7 @@ func TestNativeModelSliceField(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if host.others[0] != nil {
@@ -368,8 +369,8 @@ func TestNativeModelSliceField(t *testing.T) {
 	}
 }
 
-func (h *modelSliceHost) Matrix(*evm.Call) [][]*BoundModel                             { return h.matrix }
-func (h *modelSliceHost) EchoMatrix(_ *evm.Call, rows [][]*BoundModel) [][]*BoundModel { return rows }
+func (h *modelSliceHost) Matrix(*evm.VM) [][]*BoundModel                             { return h.matrix }
+func (h *modelSliceHost) EchoMatrix(_ *evm.VM, rows [][]*BoundModel) [][]*BoundModel { return rows }
 
 func TestNativeNestedModelSlices(t *testing.T) {
 	models, dep, err := modeldata.Declarations()
@@ -411,7 +412,7 @@ func TestNativeNestedModelSlices(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if !out[0].AsBool() || host.matrix[0][0] != nil || host.matrix[1][0] != nil {
@@ -419,7 +420,7 @@ func TestNativeNestedModelSlices(t *testing.T) {
 	}
 }
 
-func (h *modelSliceHost) Groups(*evm.Call) map[string][]*BoundModel {
+func (h *modelSliceHost) Groups(*evm.VM) map[string][]*BoundModel {
 	return map[string][]*BoundModel{"first": h.rows}
 }
 
@@ -458,14 +459,14 @@ func TestNativeModelSliceMap(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if !out[0].AsBool() || host.rows[0] != nil {
 		t.Fatal("native map lost model slice backing")
 	}
 	host.rows = host.rows[:0]
-	if err := evm.New(p).Run(context.Background(), "JSON", nil, out[:]); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "JSON", nil, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	encoded, err := p.EncodeJSON(context.Background(), out[0], 1024)
@@ -480,14 +481,14 @@ func TestNativeModelSliceMap(t *testing.T) {
 
 type NamedModelRows []*BoundModel
 
-func (h *modelSliceHost) NamedRows(*evm.Call) NamedModelRows { return NamedModelRows(h.rows) }
-func (h *modelSliceHost) NamedEcho(_ *evm.Call, rows NamedModelRows) NamedModelRows {
+func (h *modelSliceHost) NamedRows(*evm.VM) NamedModelRows { return NamedModelRows(h.rows) }
+func (h *modelSliceHost) NamedEcho(_ *evm.VM, rows NamedModelRows) NamedModelRows {
 	if &rows[0] != &h.rows[0] {
 		panic("named argument copied backing")
 	}
 	return rows
 }
-func (h *modelSliceHost) NamedIs(_ *evm.Call, x any) bool { _, ok := x.(NamedModelRows); return ok }
+func (h *modelSliceHost) NamedIs(_ *evm.VM, x any) bool { _, ok := x.(NamedModelRows); return ok }
 
 func TestNativeNamedModelSlice(t *testing.T) {
 	models, dep, err := modeldata.Declarations()
@@ -527,7 +528,7 @@ func TestNativeNamedModelSlice(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if !out[0].AsBool() || host.rows[0] != nil {
@@ -535,8 +536,8 @@ func TestNativeNamedModelSlice(t *testing.T) {
 	}
 }
 
-func (h *modelSliceHost) NilAlternateRows(*evm.Call) []*modeldata.Alternate { return nil }
-func (h *modelSliceHost) OtherMatrix(*evm.Call) [][]*modeldata.Alternate {
+func (h *modelSliceHost) NilAlternateRows(*evm.VM) []*modeldata.Alternate { return nil }
+func (h *modelSliceHost) OtherMatrix(*evm.VM) [][]*modeldata.Alternate {
 	return [][]*modeldata.Alternate{nil}
 }
 
@@ -578,7 +579,7 @@ func TestNativeModelSliceCrossLayoutNil(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if !out[0].AsBool() || host.matrix[0] != nil || host.matrix[1] != nil {
@@ -594,8 +595,8 @@ func TestModelAllocationWithoutSliceBindings(t *testing.T) {
 	models.Records[0].NativeAllocation = reflect.TypeFor[BoundModel]()
 	var retained []*BoundModel
 	host := evm.Package{Path: "host", Functions: []evm.ExternalFunction{
-		{Name: "Retain", Signature: evm.Signature{Params: []*values.Type{values.AnyType}}, Call: func(c *evm.Call) error {
-			value, err := c.NativeAny(c.Argument(0))
+		{Name: "Retain", Signature: evm.Signature{Params: []*values.Type{values.AnyType}}, Call: func(c *evm.VM) error {
+			value, err := c.NativeAny(c.CallArgument(0))
 			if err != nil {
 				return err
 			}
@@ -606,7 +607,7 @@ func TestModelAllocationWithoutSliceBindings(t *testing.T) {
 			}
 			return nil
 		}},
-		{Name: "Replace", Signature: evm.Signature{}, Call: func(c *evm.Call) error { retained[0] = &BoundModel{Name: "changed"}; return nil }},
+		{Name: "Replace", Signature: evm.Signature{}, Call: func(c *evm.VM) error { retained[0] = &BoundModel{Name: "changed"}; return nil }},
 	}}
 	module, err := evmcompiler.Compile("allocation.go", `import("db";"host")
  func Run()bool {
@@ -633,7 +634,7 @@ func TestModelAllocationWithoutSliceBindings(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if !out[0].AsBool() {
@@ -643,9 +644,9 @@ func TestModelAllocationWithoutSliceBindings(t *testing.T) {
 
 type modelValueSliceHost struct{ rows []BoundModel }
 
-func (h *modelValueSliceHost) Values(*evm.Call) []BoundModel                          { return h.rows }
-func (h *modelValueSliceHost) EchoValues(_ *evm.Call, rows []BoundModel) []BoundModel { return rows }
-func (h *modelValueSliceHost) ChangeValue(*evm.Call)                                  { h.rows[0].Name = "changed" }
+func (h *modelValueSliceHost) Values(*evm.VM) []BoundModel                          { return h.rows }
+func (h *modelValueSliceHost) EchoValues(_ *evm.VM, rows []BoundModel) []BoundModel { return rows }
+func (h *modelValueSliceHost) ChangeValue(*evm.VM)                                  { h.rows[0].Name = "changed" }
 
 func TestNativeModelValueSlices(t *testing.T) {
 	models, dep, err := modeldata.Declarations()
@@ -691,7 +692,7 @@ func TestNativeModelValueSlices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(program).Run(context.Background(), "Run", nil, nil); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, row := range host.rows[:3] {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -39,7 +40,7 @@ func TestScriptJSON(t *testing.T) {
 		{"Cycle", 8192, "cyclic"}, {"Bad", 64, "keys must be strings"}, {"Large", 4, "byte limit"},
 	} {
 		var res [1]values.Value
-		if err := evm.New(p).Run(context.Background(), tc.name, nil, res[:]); err != nil {
+		if err := evmtest.New(p).Run(context.Background(), tc.name, nil, res[:]); err != nil {
 			t.Fatal(err)
 		}
 		raw, err := p.EncodeJSON(context.Background(), res[0], tc.limit)
@@ -121,9 +122,9 @@ func TestJSONValueStringsAndLimits(t *testing.T) {
 
 func TestJSONValueAllocationBudget(t *testing.T) {
 	called := false
-	pkg := evm.Package{Path: "host", Functions: []evm.ExternalFunction{{Name: "Copy", Signature: evm.Signature{Params: []*values.Type{values.AnyType}}, Call: func(c *evm.Call) error {
+	pkg := evm.Package{Path: "host", Functions: []evm.ExternalFunction{{Name: "Copy", Signature: evm.Signature{Params: []*values.Type{values.AnyType}}, Call: func(c *evm.VM) error {
 		called = true
-		_, err := c.JSONValue(c.Argument(0), 1<<20)
+		_, err := c.JSONValue(c.CallArgument(0), 1<<20)
 		return err
 	}}}}
 	m, err := evmcompiler.Compile("json.go", `import "host"; func Copy(v any) { host.Copy(v) }; func Keep(s string) any { return s }`, pkg)
@@ -134,7 +135,7 @@ func TestJSONValueAllocationBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	v, _ := p.PackInterface(values.StringType, values.String("warm"))
 	if err := vm.Run(context.Background(), "Copy", []values.Value{v}, nil); err != nil {
 		t.Fatal(err)
@@ -167,7 +168,7 @@ func Check(v any) bool {
 	}
 	args := []values.Value{values.Bool(false), values.Int(math.MinInt64), values.Uint(math.MaxUint64), values.Uint(0x7ff8000000000042), values.String(strings.Clone("retained")), {}, {}}
 	var out [1]values.Value
-	vm := evm.New(p)
+	vm := evmtest.New(p)
 	if err := vm.Run(context.Background(), "Keep", args, out[:]); err != nil {
 		t.Fatal(err)
 	}
@@ -219,8 +220,8 @@ func Check(v any) bool {
 
 func TestJSONValueWithSize(t *testing.T) {
 	seen := 0
-	bridge := evm.Package{Path: "bridge", Functions: []evm.ExternalFunction{{Name: "Check", Signature: evm.Signature{Params: []*values.Type{values.AnyType}}, Call: func(c *evm.Call) error {
-		v := c.Argument(0)
+	bridge := evm.Package{Path: "bridge", Functions: []evm.ExternalFunction{{Name: "Check", Signature: evm.Signature{Params: []*values.Type{values.AnyType}}, Call: func(c *evm.VM) error {
+		v := c.CallArgument(0)
 		raw, err := c.EncodeJSON(v, 1<<20)
 		if err != nil {
 			return err
@@ -258,7 +259,7 @@ func TestJSONValueWithSize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(program).Run(context.Background(), "Run", nil, nil); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if seen != 3 {
@@ -282,7 +283,7 @@ func TestGuestValueNativeJSONBoundary(t *testing.T) {
 	}
 	for _, name := range []string{"Good", "Bad", "Cycle", "LabelOnly"} {
 		var results [1]values.Value
-		if err := evm.New(p).Run(context.Background(), name, nil, results[:]); err != nil {
+		if err := evmtest.New(p).Run(context.Background(), name, nil, results[:]); err != nil {
 			t.Fatal(err)
 		}
 		guest := &evm.GuestValue{Program: p, Value: results[0]}

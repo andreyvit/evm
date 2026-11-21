@@ -8,6 +8,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/nativebind"
 	"github.com/andreyvit/evm/values"
 )
@@ -31,8 +32,8 @@ func TestNativeFieldPointerUsesGoStorage(t *testing.T) {
 	ptr := values.NewPointerShape(s)
 	ptr.Type = values.NewType("*host.Row", values.Pair)
 	ptr.Native = nativebind.Layout(reflect.PointerTo(typ), nil, false)
-	host := evm.Package{Path: "host", Types: []evm.TypeDecl{{Name: "Row", Shape: s}, {Shape: ptr}}, Functions: []evm.ExternalFunction{{Name: "Get", Signature: evm.Signature{Results: []*values.Type{ptr.Type}}, Call: func(c *evm.Call) error {
-		c.SetResult(0, values.Value{R: values.NativeAddress, P: unsafe.Pointer(&row)})
+	host := evm.Package{Path: "host", Types: []evm.TypeDecl{{Name: "Row", Shape: s}, {Shape: ptr}}, Functions: []evm.ExternalFunction{{Name: "Get", Signature: evm.Signature{Results: []*values.Type{ptr.Type}}, Call: func(c *evm.VM) error {
+		c.SetCallResult(0, values.Value{R: values.NativeAddress, P: unsafe.Pointer(&row)})
 		return nil
 	}}}}
 	module, err := evmcompiler.Compile("row.go", `import "host"
@@ -47,7 +48,7 @@ func Run() int32 { r := host.Get(); set(&r.N); setZ(&r.Z); r.A[:][1] = 9; return
 		t.Fatal(err)
 	}
 	var result [1]values.Value
-	if err := evm.New(program).Run(context.Background(), "Run", nil, result[:]); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", nil, result[:]); err != nil {
 		t.Fatal(err)
 	}
 	if result[0].R != 9 || row != (Row{N: 7, Next: 19, A: [4]byte{0, 9}, Z: complex(1, 2)}) {
@@ -82,7 +83,7 @@ func Run(ids host.IDs, counts host.Counts) int32 {
 	}
 	args := []values.Value{nativebind.Load(reflect.TypeOf(ids), unsafe.Pointer(&ids)), nativebind.Load(reflect.TypeOf(counts), unsafe.Pointer(&counts))}
 	var results [1]values.Value
-	if err := evm.New(program).Run(context.Background(), "Run", args, results[:]); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", args, results[:]); err != nil {
 		t.Fatal(err)
 	}
 	if results[0].R != 8 || ids[0] != 4 || counts["b"] != 4 {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -17,13 +18,13 @@ func TestHostPackageValues(t *testing.T) {
 	shape := &values.Shape{Type: table, Kind: values.UintKind, Bits: 64, Cells: 1}
 	calls := 0
 	pkg := evm.Package{Path: "db", Types: []evm.TypeDecl{{Name: "Table", Shape: shape}},
-		Values: []evm.ExternalValue{{Name: "Customers", Type: table, Read: func(c *evm.Call) error {
+		Values: []evm.ExternalValue{{Name: "Customers", Type: table, Read: func(c *evm.VM) error {
 			calls++
-			c.SetResult(0, values.Uint(uint64(calls)))
+			c.SetCallResult(0, values.Uint(uint64(calls)))
 			return nil
 		}}},
-		Methods: []evm.ExternalMethod{{Name: "ID", Receiver: table, Signature: evm.Signature{Results: []*values.Type{values.Uint64}}, Call: func(c *evm.Call) error {
-			c.SetResult(0, c.Argument(0))
+		Methods: []evm.ExternalMethod{{Name: "ID", Receiver: table, Signature: evm.Signature{Results: []*values.Type{values.Uint64}}, Call: func(c *evm.VM) error {
+			c.SetCallResult(0, c.CallArgument(0))
 			return nil
 		}}},
 	}
@@ -36,7 +37,7 @@ func TestHostPackageValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := make([]values.Value, 1)
-	if err := evm.New(p).Run(context.Background(), "Run", nil, out); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, out); err != nil {
 		t.Fatal(err)
 	}
 	if out[0].R != 12 || calls != 2 {
@@ -58,8 +59,8 @@ func TestHostPackagePointerValue(t *testing.T) {
 	row := values.NewStructShape("host.Row", values.Field{Name: "Count", Shape: &values.Shape{Type: values.Int64, Kind: values.IntKind, Bits: 64, Cells: 1}})
 	ptr := values.NewPointerShape(row)
 	cells := []values.Value{values.Int(7)}
-	pkg := evm.Package{Path: "host", Types: []evm.TypeDecl{{Name: "Row", Shape: row}, {Shape: ptr}}, Values: []evm.ExternalValue{{Name: "Current", Type: ptr.Type, Read: func(c *evm.Call) error {
-		c.SetResult(0, values.Value{P: unsafe.Pointer(&cells[0])})
+	pkg := evm.Package{Path: "host", Types: []evm.TypeDecl{{Name: "Row", Shape: row}, {Shape: ptr}}, Values: []evm.ExternalValue{{Name: "Current", Type: ptr.Type, Read: func(c *evm.VM) error {
+		c.SetCallResult(0, values.Value{P: unsafe.Pointer(&cells[0])})
 		return nil
 	}}}}
 	for _, noOptimization := range []bool{false, true} {
@@ -73,7 +74,7 @@ func TestHostPackagePointerValue(t *testing.T) {
 			t.Fatal(err)
 		}
 		out := make([]values.Value, 1)
-		if err := evm.New(p).Run(context.Background(), "Run", nil, out); err != nil {
+		if err := evmtest.New(p).Run(context.Background(), "Run", nil, out); err != nil {
 			t.Fatal(err)
 		}
 		if out[0].AsInt() != 9 || cells[0].AsInt() != 9 {

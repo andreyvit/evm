@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/nativebind"
 	"reflect"
 	"strings"
@@ -46,17 +47,17 @@ func TestNativeModelAny(t *testing.T) {
 	input := []any{row, alt, (*AnyModelRow)(nil), (*anyModelAlternate)(nil), encoded, binding.Record(reflect.ValueOf(row)), kvo.Project(reflect.TypeFor[AnyModelRow](), model, nil).Record(reflect.ValueOf(row)), *row}
 	checks := 0
 	host := evm.Package{Path: "host", Functions: []evm.ExternalFunction{
-		{Name: "Get", Signature: evm.Signature{Params: []*values.Type{values.IntType}, Results: []*values.Type{values.AnyType}}, Call: func(c *evm.Call) error {
-			v, err := c.AnyValue(input[c.Argument(0).AsInt()])
+		{Name: "Get", Signature: evm.Signature{Params: []*values.Type{values.IntType}, Results: []*values.Type{values.AnyType}}, Call: func(c *evm.VM) error {
+			v, err := c.AnyValue(input[c.CallArgument(0).AsInt()])
 			if err != nil {
 				return err
 			}
-			c.SetResult(0, v)
+			c.SetCallResult(0, v)
 			return nil
 		}},
-		{Name: "Check", Signature: evm.Signature{Params: []*values.Type{values.IntType, values.AnyType}}, Call: func(c *evm.Call) error {
-			index := int(c.Argument(0).AsInt())
-			v, err := c.NativeAny(c.Argument(1))
+		{Name: "Check", Signature: evm.Signature{Params: []*values.Type{values.IntType, values.AnyType}}, Call: func(c *evm.VM) error {
+			index := int(c.CallArgument(0).AsInt())
+			v, err := c.NativeAny(c.CallArgument(1))
 			if err != nil {
 				return err
 			}
@@ -78,8 +79,8 @@ func TestNativeModelAny(t *testing.T) {
 			checks++
 			return nil
 		}},
-		{Name: "Echo", Signature: evm.Signature{Params: []*values.Type{values.AnyType}, Results: []*values.Type{values.AnyType}}, Call: func(c *evm.Call) error {
-			x, err := c.NativeAny(c.Argument(0))
+		{Name: "Echo", Signature: evm.Signature{Params: []*values.Type{values.AnyType}, Results: []*values.Type{values.AnyType}}, Call: func(c *evm.VM) error {
+			x, err := c.NativeAny(c.CallArgument(0))
 			if err != nil {
 				return err
 			}
@@ -90,11 +91,11 @@ func TestNativeModelAny(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			c.SetResult(0, v)
+			c.SetCallResult(0, v)
 			return nil
 		}},
-		{Name: "CheckCopy", Signature: evm.Signature{Params: []*values.Type{models.Record(model, false).Pointer}}, Call: func(c *evm.Call) error {
-			record, err := c.Record(c.Argument(0), model)
+		{Name: "CheckCopy", Signature: evm.Signature{Params: []*values.Type{models.Record(model, false).Pointer}}, Call: func(c *evm.VM) error {
+			record, err := c.Record(c.CallArgument(0), model)
 			if err != nil {
 				return err
 			}
@@ -104,7 +105,7 @@ func TestNativeModelAny(t *testing.T) {
 			}
 			return nil
 		}},
-		{Name: "Change", Call: func(c *evm.Call) error { row.Name = "changed"; return nil }},
+		{Name: "Change", Call: func(c *evm.VM) error { row.Name = "changed"; return nil }},
 	}}
 	native, err := evmbind.New("A", fstest.MapFS{"types.go": &fstest.MapFile{Data: []byte("package native; type AnyModelRow struct { Name string `kvo:\"name\"`; Hidden int `kvo:\"-\"`; Shared *int `kvo:\"-\"` }")}}, evmbind.Options{Only: []string{"AnyModelRow"}, Types: []reflect.Type{reflect.TypeFor[AnyModelRow]()}})
 	if err != nil {
@@ -159,10 +160,10 @@ func TestNativeModelAny(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(program).Run(context.Background(), "Run", nil, nil); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(program).RunWithBudget(context.Background(), "Copy", []values.Value{binding.Record(reflect.ValueOf(row)).Value()}, make([]values.Value, 1), evm.Budget{AllocationBytes: 1}); !errors.Is(err, evm.ErrAllocation) {
+	if err := evmtest.New(program).RunWithBudget(context.Background(), "Copy", []values.Value{binding.Record(reflect.ValueOf(row)).Value()}, make([]values.Value, 1), evm.Budget{AllocationBytes: 1}); !errors.Is(err, evm.ErrAllocation) {
 		t.Fatalf("native copy allocation budget: %v", err)
 	}
 	if checks != 8 {
@@ -179,7 +180,7 @@ func TestNativeModelAny(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(onlyProgram).Run(context.Background(), "Run", nil, out[:]); err != nil || out[0].AsString() != "changed" {
+	if err := evmtest.New(onlyProgram).Run(context.Background(), "Run", nil, out[:]); err != nil || out[0].AsString() != "changed" {
 		t.Fatal(out, err)
 	}
 }
@@ -195,8 +196,8 @@ func TestBorrowNativeModelResults(t *testing.T) {
 	read := models.Record(model, false)
 	read.NativeAllocation = reflect.TypeFor[AnyModelRow]()
 	row := AnyModelRow{Name: "Ada"}
-	borrow := func(c *evm.Call) error {
-		c.SetResult(0, nativebind.Load(reflect.TypeOf(row), unsafe.Pointer(&row)))
+	borrow := func(c *evm.VM) error {
+		c.SetCallResult(0, nativebind.Load(reflect.TypeOf(row), unsafe.Pointer(&row)))
 		return nil
 	}
 	host := evm.Package{Path: "host", Functions: []evm.ExternalFunction{
@@ -212,7 +213,7 @@ func TestBorrowNativeModelResults(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if out[0].AsString() != "AdaAda" {

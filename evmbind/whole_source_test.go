@@ -10,6 +10,7 @@ import (
 	"github.com/andreyvit/evm/evmbind"
 	app "github.com/andreyvit/evm/evmbind/internal/appfixture"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -55,7 +56,7 @@ func Run() string {
 	app.Default.Products = []*app.Product{{Name: "Enamel Mug", Price: 1800, Shelf: app.Kitchen}}
 	t.Cleanup(func() { app.Default.Products = nil })
 	var out [1]values.Value
-	if err := evm.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := out[0].AsString(), "Default enamel-mug $18.00 $16.20 kitchen garden hello ok"; got != want {

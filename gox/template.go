@@ -96,9 +96,10 @@ type Template struct {
 
 // Program binds a template to host implementations and supports concurrent renders.
 type Program struct {
-	pool     sync.Pool
-	template *Template
-	program  *evm.Program
+	renderers map[string]evm.Callable
+	pool      sync.Pool
+	template  *Template
+	program   *evm.Program
 }
 type RenderOptions struct {
 	// Coverage collects execution for this linked program; nil disables it.
@@ -135,7 +136,7 @@ func (t *Template) Link(packages ...evm.Package) (*Program, error) {
 	if err != nil {
 		return nil, err
 	}
-	linked.program = p
+	linked.setProgram(p)
 	return linked, nil
 }
 
@@ -181,7 +182,7 @@ func (p *Program) RenderFuncNative(ctx context.Context, name string, args []any,
 // RenderFunction executes a retained renderer, including a closure or bound
 // method. Captures remain shared; the render VM and builder reset between calls.
 // args excludes the renderer's explicit builder parameter.
-func (p *Program) RenderFunction(ctx context.Context, fn *evm.FunctionHandle, args []values.Value, options RenderOptions) (string, error) {
+func (p *Program) RenderFunction(ctx context.Context, fn *evm.Callable, args []values.Value, options RenderOptions) (string, error) {
 	if fn == nil {
 		return "", evm.ErrNilFunction
 	}
@@ -195,7 +196,7 @@ func (p *Program) RenderFunction(ctx context.Context, fn *evm.FunctionHandle, ar
 // RenderFunctionInCall renders within an active native call, sharing its VM
 // globals, captures, context and budget. It supports nested renders with separate
 // builders. options.Budget must be zero; the enclosing invocation owns limits.
-func (p *Program) RenderFunctionInCall(c *evm.Call, fn *evm.FunctionHandle, args []values.Value, options RenderOptions) (string, error) {
+func (p *Program) RenderFunctionInCall(c *evm.VM, fn *evm.Callable, args []values.Value, options RenderOptions) (string, error) {
 	if fn == nil {
 		return "", evm.ErrNilFunction
 	}
@@ -217,13 +218,18 @@ func (p *Program) RenderFunctionInCall(c *evm.Call, fn *evm.FunctionHandle, args
 
 // render runs one renderer. With native set, nativeArgs are converted inside
 // the invocation, where the VM can account for what conversion allocates.
-func (p *Program) render(ctx context.Context, call *evm.Call, name string, fn *evm.FunctionHandle, args []values.Value, nativeArgs []any, native bool, options RenderOptions) (string, error) {
+func (p *Program) render(ctx context.Context, call *evm.VM, name string, fn *evm.Callable, args []values.Value, nativeArgs []any, native bool, options RenderOptions) (string, error) {
 	session, _ := p.pool.Get().(*renderSession)
 	if session == nil {
 		session = &renderSession{}
 	}
-	if call == nil && session.vm == nil {
-		session.vm = evm.New(p.program)
+	vm := call
+	if vm == nil {
+		vm = p.program.AcquireVM(ctx)
+		defer vm.Release()
+		if options.Budget != (evm.Limits{}) {
+			vm.SetBudget(options.Budget)
+		}
 	}
 	b := &session.builder
 	b.program = p.program
@@ -238,10 +244,6 @@ func (p *Program) render(ctx context.Context, call *evm.Call, name string, fn *e
 		_, _ = b.content.Text("<style>")
 	}
 	defer func() {
-		if call == nil {
-			_ = session.vm.Reset()
-			_ = session.vm.SetCoverage(nil)
-		}
 		clear(session.args)
 		session.args = session.args[:0]
 		clear(b.tags[:cap(b.tags)])
@@ -276,7 +278,7 @@ func (p *Program) render(ctx context.Context, call *evm.Call, name string, fn *e
 		return "", fmt.Errorf("negative output limit")
 	}
 	if call == nil {
-		if err := session.vm.SetCoverage(options.Coverage); err != nil {
+		if err := vm.SetCoverage(options.Coverage); err != nil {
 			return "", err
 		}
 	}
@@ -286,31 +288,27 @@ func (p *Program) render(ctx context.Context, call *evm.Call, name string, fn *e
 	in = append(in, args...)
 	session.args = in
 	var err error
-	if call != nil {
-		var value values.Value
-		value, err = fn.Value(call.Program(), fn.Signature())
-		if err == nil {
-			err = call.RunCallbackArgs(value, in, nil)
-		}
-	} else if native {
-		signature, ok := p.program.EntrySignature(name)
-		if !ok || len(signature.Params) == 0 || signature.Params[0] != BuilderType() || len(signature.Results) != 0 {
+	var target evm.Callable
+	if fn != nil {
+		target = *fn
+	} else {
+		var ok bool
+		target, ok = p.renderers[name]
+		if !ok {
 			return "", fmt.Errorf("renderer %q is missing", name)
 		}
-		err = session.vm.RunNative(ctx, func(c *evm.Call) error {
-			converted, err := c.NativeArguments(signature.Params[1:], nativeArgs)
-			if err != nil {
-				return err
-			}
-			in = append(in, converted...)
-			session.args = in
-			return c.RunEntry(name, in, nil)
-		}, options.Budget)
-	} else if fn == nil {
-		err = session.vm.RunWithBudget(ctx, name, in, nil, options.Budget)
-	} else {
-		err = session.vm.RunFunctionWithBudget(ctx, fn, in, nil, options.Budget)
 	}
+	if native {
+		sig := target.Signature()
+		converted, err := vm.NativeArguments(sig.Params[1:], nativeArgs)
+		if err != nil {
+			return "", err
+		}
+		in = append(in, converted...)
+		session.args = in
+	}
+	err = vm.Run(target, in)
+
 	if err != nil {
 		var execution *evm.ExecutionError
 		if errors.As(err, &execution) && execution.Position.File != "" {
@@ -329,7 +327,6 @@ func (p *Program) render(ctx context.Context, call *evm.Call, name string, fn *e
 }
 
 type renderSession struct {
-	vm      *evm.VM
 	builder Builder
 	args    []values.Value
 }
@@ -344,4 +341,17 @@ func HTMLType() *values.Type    { return trustedTypes["HTML"] }
 // ParametersFor returns declared inputs, excluding the builder, for a named renderer.
 func (p *Program) ParametersFor(name string) []Parameter {
 	return append([]Parameter(nil), p.template.FunctionParameters[name]...)
+}
+
+func (p *Program) setProgram(program *evm.Program) {
+	p.program = program
+	p.renderers = make(map[string]evm.Callable)
+	for _, f := range p.template.Module.Functions {
+		if len(f.Signature.Params) == 0 || f.Signature.Params[0] != BuilderType() || len(f.Signature.Results) != 0 {
+			continue
+		}
+		if fn, err := program.LookupFunction(f.Name, &f.Signature); err == nil {
+			p.renderers[f.Name] = fn
+		}
+	}
 }

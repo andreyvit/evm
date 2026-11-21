@@ -32,6 +32,7 @@ func loadViews() map[string]string {
 
 // Env is what templates compile and link against. Build it once per process.
 type Env struct {
+	Schema   *evmbind.Schema
 	Packages []evm.Package
 	Options  gox.Options
 }
@@ -57,6 +58,7 @@ func NewEnv() *Env {
 		},
 	}))
 	return &Env{
+		Schema:   app,
 		Packages: []evm.Package{app.Bind(nil)},
 		Options: gox.Options{
 			// A component that declares a *app.Store parameter receives

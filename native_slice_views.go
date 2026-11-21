@@ -17,11 +17,11 @@ var borrowedBytesLayout = func() *values.NativeLayout {
 
 // BorrowBytes returns a transaction-scoped []byte. Declare the result in
 // OwnershipEffects.Borrowed. Writes and escapes detach all its aliases.
-func (c *Call) BorrowBytes(data []byte) (values.Value, error) {
+func (c *VM) BorrowBytes(data []byte) (values.Value, error) {
 	return values.BorrowByteSlice(data, borrowedBytesLayout, c.budget)
 }
 
-func (c *Call) resliceView(v values.Value, lo, length, capacity uint32) (values.Value, error) {
+func (c *VM) resliceView(v values.Value, lo, length, capacity uint32) (values.Value, error) {
 	if lo == 0 && length == v.SliceLen() && capacity == v.SliceCap() {
 		return v, nil
 	}
@@ -34,7 +34,7 @@ type nativeViewKey struct {
 }
 
 // NativeSlice retains native backing without changing the logical slice shape.
-func (c *Call) NativeSlice(layout, element *values.NativeLayout, data unsafe.Pointer, length, capacity uint32) (values.Value, error) {
+func (c *VM) NativeSlice(layout, element *values.NativeLayout, data unsafe.Pointer, length, capacity uint32) (values.Value, error) {
 	if binding, ok := c.program.nativeSliceLayouts[layout]; ok {
 		layout, element = binding.Layout, binding.Element
 	}
@@ -113,12 +113,12 @@ func (p *Program) nativeViewAddressShape(tag uint64) *values.Shape {
 	return table.shapes[tag-2]
 }
 
-func (c *Call) nativeViewElement(s *values.Shape, view *values.NativeSliceView, index uint64) (values.Value, error) {
+func (c *VM) nativeViewElement(s *values.Shape, view *values.NativeSliceView, index uint64) (values.Value, error) {
 	_, shape := c.program.physicalShape(s.Elem, view.Element)
 	return loadNative(c, shape, unsafe.Add(view.Data, index*view.Layout.Slice.ElementSize), &c.budget.allocated, c.budget.limits)
 }
 
-func (c *Call) copySliceViews(s *values.Shape, dst, src values.Value, start, count uint64) error {
+func (c *VM) copySliceViews(s *values.Shape, dst, src values.Value, start, count uint64) error {
 	if count == 0 {
 		return nil
 	}
@@ -169,7 +169,7 @@ func (c *Call) copySliceViews(s *values.Shape, dst, src values.Value, start, cou
 	return nil
 }
 
-func (c *Call) appendSliceViews(s *values.Shape, dst, src values.Value) (values.Value, error) {
+func (c *VM) appendSliceViews(s *values.Shape, dst, src values.Value) (values.Value, error) {
 	length, capacity := uint64(dst.SliceLen()), uint64(dst.SliceCap())
 	total := length + uint64(src.SliceLen())
 	if total > 1<<32-1 {

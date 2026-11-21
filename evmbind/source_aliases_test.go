@@ -11,6 +11,7 @@ import (
 	"github.com/andreyvit/evm/evmbind"
 	"github.com/andreyvit/evm/evmbind/internal/importfixture"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -95,7 +96,7 @@ func TestNativeSourceAliases(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(p).Run(context.Background(), "Run", []values.Value{arg}, out[:]); err != nil || !out[0].AsBool() {
+	if err := evmtest.New(p).Run(context.Background(), "Run", []values.Value{arg}, out[:]); err != nil || !out[0].AsBool() {
 		t.Fatal(out, err)
 	}
 	printed, err := evmcompiler.PackageSource("aliases", pkgs...)
@@ -134,8 +135,8 @@ func TestSelectNativeAlias(t *testing.T) {
 func TestNativeAliasErrors(t *testing.T) {
 	for _, tc := range []struct{ src, want string }{
 		{`package aliases;type G[T any] = []T`, "generic native alias"},
-		{`package aliases;import "github.com/andreyvit/evm";type Callback = evm.FunctionOf[func()]`, "EVM function handle"},
-		{`package aliases;import "github.com/andreyvit/evm";type Callback = *evm.FunctionOf[func()]`, "EVM function handle"},
+		{`package aliases;import "github.com/andreyvit/evm";type Callback = evm.FunctionOf[func()]`, "EVM callable"},
+		{`package aliases;import "github.com/andreyvit/evm";type Callback = *evm.FunctionOf[func()]`, "EVM callable"},
 	} {
 		_, err := evmbind.New("aliases", fstest.MapFS{"api.go": {Data: []byte(tc.src)}}, evmbind.Options{Selective: true})
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
@@ -144,17 +145,17 @@ func TestNativeAliasErrors(t *testing.T) {
 	}
 }
 
-type aliasFunctionHost struct{ a, b *evm.NamedFunction }
+type aliasFunctionHost struct{ a, b *evm.Callable }
 
-func (h *aliasFunctionHost) A(_ *evm.Call, fn *evm.NamedFunctionOf[func([]int)]) { h.a = fn }
-func (h *aliasFunctionHost) B(_ *evm.Call, fn *evm.NamedFunctionOf[func([]int)]) { h.b = fn }
+func (h *aliasFunctionHost) A(_ *evm.VM, fn *evm.FunctionOf[func([]int)]) { h.a = fn }
+func (h *aliasFunctionHost) B(_ *evm.VM, fn *evm.FunctionOf[func([]int)]) { h.b = fn }
 
 func TestAliasInsideFunctionHandleSignature(t *testing.T) {
 	src := fstest.MapFS{"api.go": {Data: []byte(`package h
  import "github.com/andreyvit/evm"
  type L = []int
- func A(fn *evm.NamedFunctionOf[func([]int)])
- func B(fn *evm.NamedFunctionOf[func(L)])
+ func A(fn *evm.FunctionOf[func([]int)])
+ func B(fn *evm.FunctionOf[func(L)])
  `)}}
 	s, err := evmbind.New("h", src, evmbind.Options{Host: reflect.TypeFor[*aliasFunctionHost]()})
 	if err != nil {
@@ -169,10 +170,10 @@ func TestAliasInsideFunctionHandleSignature(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := evm.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if host.a == nil || host.b == nil || host.a.Signature.Params[0] != host.b.Signature.Params[0] {
+	if host.a == nil || host.b == nil || host.a.Signature().Params[0] != host.b.Signature().Params[0] {
 		t.Fatal("alias split function signatures")
 	}
 }

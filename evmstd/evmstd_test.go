@@ -22,6 +22,7 @@ import (
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
 	"github.com/andreyvit/evm/evmstd"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -37,7 +38,7 @@ func run(t *testing.T, script string) string {
 		t.Fatalf("link: %v", err)
 	}
 	var out [1]values.Value
-	if err := evm.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	return out[0].AsString()

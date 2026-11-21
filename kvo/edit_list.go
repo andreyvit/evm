@@ -81,7 +81,7 @@ func (l *ListEditor[T]) Get(index int) T {
 	if l.loaded {
 		return l.items[index]
 	}
-	return l.prop.codec.Decode(l.base.cell.At(index))
+	return l.prop.codec.Unpack(l.base.cell.At(index))
 }
 func (l *ListEditor[T]) Iter() iter.Seq[T] {
 	return func(yield func(T) bool) {
@@ -119,9 +119,9 @@ func equalCodecValue(a, b values.Value) bool {
 	return a.R == b.R && (a.P == b.P || a.P != nil && b.P != nil && bytes.Equal(a.AsBytes(), b.AsBytes()))
 }
 func (l *ListEditor[T]) Contains(v T) bool {
-	x := l.prop.codec.Encode(v)
+	x := l.prop.codec.Pack(v)
 	for item := range l.Iter() {
-		if equalCodecValue(x, l.prop.codec.Encode(item)) {
+		if equalCodecValue(x, l.prop.codec.Pack(item)) {
 			return true
 		}
 	}
@@ -136,7 +136,7 @@ func (l *ListEditor[T]) AddUnique(v T) bool {
 }
 func (l *ListEditor[T]) Set(index int, v T) {
 	l.load()
-	if equalCodecValue(l.prop.codec.Encode(l.items[index]), l.prop.codec.Encode(v)) {
+	if equalCodecValue(l.prop.codec.Pack(l.items[index]), l.prop.codec.Pack(v)) {
 		return
 	}
 	l.items[index] = ownCodecValue(l.prop.codec, v)
@@ -147,8 +147,8 @@ func (l *ListEditor[T]) Remove(v T) bool {
 		return false
 	}
 	l.load()
-	x := l.prop.codec.Encode(v)
-	l.items = slices.DeleteFunc(l.items, func(item T) bool { return equalCodecValue(x, l.prop.codec.Encode(item)) })
+	x := l.prop.codec.Pack(v)
+	l.items = slices.DeleteFunc(l.items, func(item T) bool { return equalCodecValue(x, l.prop.codec.Pack(item)) })
 	l.changed()
 	return true
 }
@@ -177,7 +177,7 @@ func (l *ListEditor[T]) messagePack() []byte {
 		} else {
 			l.cachedMessagePack = msgpack.BuildArray(l.Len()*8, func(yield func(msgpack.View) bool) {
 				for v := range l.Iter() {
-					raw := encodeMessagePackLeaf(l.plan.elem, row2.Step{Options: row2.Present}, l.prop.codec.Encode(v))
+					raw := encodeMessagePackLeaf(l.plan.elem, row2.Step{Options: row2.Present}, l.prop.codec.Pack(v))
 					if !yield(msgpack.Trusted(raw)) {
 						return
 					}

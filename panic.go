@@ -77,9 +77,9 @@ func (p *Program) linkPanicTypes() error {
 			var call Native
 			if name == "Error" {
 				sig.Results = []*values.Type{values.StringType}
-				call = func(c *Call) error { c.SetValue(0, *(*values.Value)(c.P[0])); return nil }
+				call = func(c *VM) error { c.SetValue(0, *(*values.Value)(c.P[0])); return nil }
 			} else {
-				call = func(*Call) error { return nil }
+				call = func(*VM) error { return nil }
 			}
 			args, err := ParameterLayout(sig.Params, true)
 			if err != nil {
@@ -161,7 +161,7 @@ func (vm *VM) beginPanic(cur *frame, origin frame, value values.Value, cause err
 		if p.guest != nil {
 			value, err = vm.program.packInterface(uint64(vm.program.typeIDs[p.guest.Type]), p.guest.Value, &budget.allocated, budget.limits)
 		} else {
-			value, err = vm.call.AnyValue(p.value)
+			value, err = vm.AnyValue(p.value)
 		}
 		if err != nil {
 			return vm.trap(origin, err)

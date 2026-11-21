@@ -9,10 +9,11 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
-func compileGoVM(t testing.TB, source string) *evm.VM {
+func compileGoVM(t testing.TB, source string) *evmtest.Session {
 	t.Helper()
 	m, err := evmcompiler.Compile("main.go", source)
 	if err != nil {
@@ -22,7 +23,7 @@ func compileGoVM(t testing.TB, source string) *evm.VM {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return evm.New(p)
+	return evmtest.New(p)
 }
 func TestGoAggregateCopiesAndPointers(t *testing.T) {
 	vm := compileGoVM(t, `type Inner struct{N int; Text string}
@@ -88,7 +89,7 @@ func Run()int {
 func TestGoGlobalsAndInitialization(t *testing.T) {
 	vm := compileGoVM(t, `var a=b+1;var b=4;var items=[]int{a};func init(){a+=2};func init(){a*=3};func Run()int{a++;items[0]++;return a*100+items[0]}`)
 	out := make([]values.Value, 1)
-	for _, want := range []int64{2206, 2307} {
+	for _, want := range []int64{2206, 2206} {
 		if err := vm.Run(context.Background(), "Run", nil, out); err != nil {
 			t.Fatal(err)
 		}
@@ -148,7 +149,7 @@ func TestGoCollectionBoundsAndBudgets(t *testing.T) {
 		if err := vm.Run(context.Background(), "Run", nil, nil); !errors.Is(err, tc.want) {
 			t.Fatalf("%s: %v want %v", tc.source, err, tc.want)
 		}
-		if err := vm.Run(context.Background(), "Run", nil, nil); !errors.Is(err, evm.ErrInvalidState) {
+		if err := vm.Run(context.Background(), "Run", nil, nil); !errors.Is(err, tc.want) {
 			t.Fatalf("failed session still usable: %v", err)
 		}
 	}
@@ -167,19 +168,19 @@ func TestGoSessionResetAndIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, b := evm.New(p), evm.New(p)
+	a, b := evmtest.New(p), evmtest.New(p)
 	for _, name := range []string{"init", "init#1"} {
 		if err := a.Run(context.Background(), name, nil, nil); err == nil {
 			t.Fatalf("public init %s", name)
 		}
 	}
 	out := make([]values.Value, 1)
-	for _, vm := range []*evm.VM{a, b} {
+	for _, vm := range []*evmtest.Session{a, b} {
 		if err := vm.Run(context.Background(), "Run", nil, out); err != nil || out[0].R != 4 {
 			t.Fatalf("session: %v %v", err, out)
 		}
 	}
-	if err := a.Run(context.Background(), "Run", nil, out); err != nil || out[0].R != 5 {
+	if err := a.Run(context.Background(), "Run", nil, out); err != nil || out[0].R != 4 {
 		t.Fatalf("second call: %v %v", err, out)
 	}
 	if err := a.Reset(); err != nil {
@@ -192,7 +193,7 @@ func TestGoSessionResetAndIsolation(t *testing.T) {
 	if err := bad.Run(context.Background(), "Run", nil, out); !errors.Is(err, evm.ErrDivideByZero) {
 		t.Fatalf("init failure: %v", err)
 	}
-	if err := bad.Run(context.Background(), "Run", nil, out); !errors.Is(err, evm.ErrInvalidState) {
+	if err := bad.Run(context.Background(), "Run", nil, out); !errors.Is(err, evm.ErrDivideByZero) {
 		t.Fatalf("init state: %v", err)
 	}
 }
@@ -244,13 +245,13 @@ func TestGoExtendedDescriptorsValidateAndSnapshot(t *testing.T) {
 	m.ExtendedOps[0].In[0].Slot = 65535
 	m.ExtendedOps[0].Shape.Cells = 0
 	out := make([]values.Value, 1)
-	if err := evm.New(p).Run(context.Background(), "Run", nil, out); err != nil || out[0].R != 3 {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, out); err != nil || out[0].R != 3 {
 		t.Fatalf("snapshot: %v %v", err, out)
 	}
 }
 
 func TestGoCollectionPointersSurviveGC(t *testing.T) {
-	pkg := evm.Package{Path: "h", Functions: []evm.ExternalFunction{{Name: "GC", Call: func(*evm.Call) error { runtime.GC(); return nil }}}}
+	pkg := evm.Package{Path: "h", Functions: []evm.ExternalFunction{{Name: "GC", Call: func(*evm.VM) error { runtime.GC(); return nil }}}}
 	m, err := evmcompiler.Compile("main.go", `import "h";type Node struct{N int;Next *Node};func Run()int{head:=&Node{N:9};for i:=0;i<20;i++{head=&Node{N:i,Next:head};h.GC()};sum:=0;for p:=head;p!=nil;p=p.Next{sum+=p.N};return sum}`, pkg)
 	if err != nil {
 		t.Fatal(err)
@@ -260,7 +261,7 @@ func TestGoCollectionPointersSurviveGC(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := make([]values.Value, 1)
-	if err := evm.New(p).Run(context.Background(), "Run", nil, out); err != nil || out[0].R != 199 {
+	if err := evmtest.New(p).Run(context.Background(), "Run", nil, out); err != nil || out[0].R != 199 {
 		t.Fatalf("GC: %v %v", err, out)
 	}
 }

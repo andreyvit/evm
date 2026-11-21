@@ -10,6 +10,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -48,20 +49,24 @@ func TestNativePointerInterfaces(t *testing.T) {
 		t.Fatal(err)
 	}
 	pkg := schema.Bind(nil)
-	pkg.Functions = append(pkg.Functions, evm.ExternalFunction{Name: "New", Signature: evm.Signature{Results: []*values.Type{schema.Type("*InterfaceNode")}}, Call: func(c *evm.Call) error {
+	pkg.Functions = append(pkg.Functions, evm.ExternalFunction{Name: "New", Signature: evm.Signature{Results: []*values.Type{schema.Type("*InterfaceNode")}}, Call: func(c *evm.VM) error {
 		v, err := schema.NativePointer(&InterfaceNode{Value: 42})
 		if err != nil {
 			return err
 		}
-		c.SetResult(0, v)
+		c.SetCallResult(0, v)
 		return nil
 	}})
-	pkg.Functions = append(pkg.Functions, evm.ExternalFunction{Name: "ReadInterface", Signature: evm.Signature{Params: []*values.Type{values.AnyType}, Results: []*values.Type{values.IntType}}, Call: func(c *evm.Call) error {
+	pkg.Functions = append(pkg.Functions, evm.ExternalFunction{Name: "ReadInterface", Signature: evm.Signature{Params: []*values.Type{values.AnyType}, Results: []*values.Type{values.IntType}}, Call: func(c *evm.VM) error {
 		var result [1]values.Value
-		if err := c.RunInterfaceMethod(c.Value(0), "Read", evm.Signature{Results: []*values.Type{values.IntType}}, nil, result[:]); err != nil {
+		fn, err := c.LookupMethod(c.Value(0), "Read", evm.Signature{Results: []*values.Type{values.IntType}})
+		if err != nil {
 			return err
 		}
-		c.SetResult(0, result[0])
+		if err := c.Run(fn, result[:]); err != nil {
+			return err
+		}
+		c.SetCallResult(0, result[0])
 		return nil
 	}})
 	module, err := evmcompiler.Compile("interface.go", `import("native";"fmt";"errors")
@@ -118,43 +123,44 @@ func TestNativePointerInterfaces(t *testing.T) {
 		node *InterfaceNode
 		want int64
 	}{{node, 7}, {nil, -1}} {
-		input, err := schema.Interface(program, entry.node)
+		input, err := schema.PackInterface(program, entry.node)
 		if err != nil {
 			t.Fatal(err)
 		}
 		var result [1]values.Value
-		if err := evm.New(program).Run(context.Background(), "Entry", []values.Value{input}, result[:]); err != nil {
+		if err := evmtest.New(program).Run(context.Background(), "Entry", []values.Value{input}, result[:]); err != nil {
 			t.Fatal(err)
 		}
 		if result[0].AsInt() != entry.want {
 			t.Fatal(result[0].AsInt(), entry.want)
 		}
 	}
-	if err := evm.New(program).Run(context.Background(), "Check", []values.Value{arg, nilArg}, nil); err != nil {
+	if err := evmtest.New(program).Run(context.Background(), "Check", []values.Value{arg, nilArg}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if node.Value != 8 {
 		t.Fatal("deferred native method did not run")
 	}
-	vm := evm.New(program)
-	args := []values.Value{arg, values.Int(1)}
-	var out [1]values.Value
+	fn, err := program.LookupFunction("Convert", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vm := program.AcquireVM(t.Context())
+	defer vm.Release()
+	slots := [3]values.Value{arg, values.Int(1)}
 	run := func() {
-		if err := vm.Reset(); err != nil {
-			t.Fatal(err)
-		}
-		// Allow fixed initialization costs, but not one allocation per conversion.
-		if err := vm.RunWithBudget(context.Background(), "Convert", args, out[:], evm.Budget{Allocations: 16, AllocationBytes: 4096}); err != nil {
+		vm.SetBudget(evm.Limits{Steps: 1_000_000, Allocations: 16, AllocationBytes: 4096})
+		if err := vm.Run(fn, slots[:]); err != nil {
 			t.Fatal(err)
 		}
 	}
 	one := testing.AllocsPerRun(20, run)
-	args[1] = values.Int(1000)
+	slots[1] = values.Int(1000)
 	many := testing.AllocsPerRun(20, run)
 	if many != one {
 		t.Fatalf("per-conversion allocations: one=%g many=%g", one, many)
 	}
-	_, value, err := program.UnpackInterface(out[0])
+	_, value, err := program.UnpackInterface(slots[2])
 	if err != nil || value != arg {
 		t.Fatal("conversion result", value, err)
 	}

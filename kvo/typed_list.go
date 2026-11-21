@@ -27,7 +27,7 @@ func (it *Cursor[T]) Next() (T, bool) {
 		return zero, false
 	}
 	it.remaining--
-	return it.codec.Decode(v), true
+	return it.codec.Unpack(v), true
 }
 func (it Cursor[T]) Slice() []T {
 	return it.slice(borrowElements)
@@ -50,7 +50,7 @@ func (it Cursor[T]) slice(mode collectionCopy) []T {
 		if mode == ownElements && v.P != nil {
 			v = values.Bytes(bytes.Clone(v.AsBytes()))
 		}
-		out = append(out, it.codec.Decode(v))
+		out = append(out, it.codec.Unpack(v))
 	}
 }
 
@@ -138,7 +138,7 @@ func BindListProp[T any](schema *Schema, code uint64, codec values.Codec[T]) *Li
 			if !ok {
 				break
 			}
-			w.Put(0, "", codec.Encode(v), p.encoding)
+			w.Put(0, "", codec.Pack(v), p.encoding)
 		}
 		w.Finish(true)
 		return values.Bytes(w.BytesWritten())
@@ -163,7 +163,7 @@ func (p *ListPropRef[T]) encodeSlice(items []T) values.Value {
 	defer w.Release()
 	w.Begin(0, "", row2.List, row2.Compact2)
 	for _, v := range items {
-		w.Put(0, "", p.codec.Encode(v), p.encoding)
+		w.Put(0, "", p.codec.Pack(v), p.encoding)
 	}
 	w.Finish(true)
 	return values.Bytes(w.BytesWritten())

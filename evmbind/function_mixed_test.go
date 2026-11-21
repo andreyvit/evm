@@ -10,28 +10,29 @@ import (
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmbind"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
 type mixedCallbackHost struct{ box SourceCallbackBox }
 
-func (*mixedCallbackHost) Native(_ *evm.Call, fn func()) { fn() }
-func (*mixedCallbackHost) Retained(c *evm.Call, fn *evm.FunctionOf[func()]) {
+func (*mixedCallbackHost) Native(_ *evm.VM, fn func()) { fn() }
+func (*mixedCallbackHost) Retained(c *evm.VM, fn *evm.FunctionOf[func()]) {
 	v, err := fn.Value(c.Program(), evm.Signature{})
 	if err != nil {
 		panic(err)
 	}
-	if err := c.RunCallbackArgs(v, nil, nil); err != nil {
+	if err := evmtest.Callback(c, v, nil, nil); err != nil {
 		panic(err)
 	}
 }
 
-func (h *mixedCallbackHost) ZBox(*evm.Call) *SourceCallbackBox { return &h.box }
-func (*mixedCallbackHost) ZEcho(_ *evm.Call, fn *evm.FunctionOf[func()]) *evm.FunctionOf[func()] {
+func (h *mixedCallbackHost) ZBox(*evm.VM) *SourceCallbackBox { return &h.box }
+func (*mixedCallbackHost) ZEcho(_ *evm.VM, fn *evm.FunctionOf[func()]) *evm.FunctionOf[func()] {
 	return fn
 }
 
-func (h *mixedCallbackHost) AHandle(c *evm.Call, fn *evm.FunctionOf[func()]) { h.Retained(c, fn) }
+func (h *mixedCallbackHost) AHandle(c *evm.VM, fn *evm.FunctionOf[func()]) { h.Retained(c, fn) }
 
 func TestNativeAndRetainedCallbackSameSignature(t *testing.T) {
 	for _, handle := range []string{"Retained", "AHandle"} {
@@ -63,7 +64,7 @@ func testMixedCallbacks(t *testing.T, handle string) {
 		t.Fatal(err)
 	}
 	var out [1]values.Value
-	if err := evm.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil || out[0].R != 4 {
+	if err := evmtest.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil || out[0].R != 4 {
 		t.Fatal(out, err)
 	}
 }

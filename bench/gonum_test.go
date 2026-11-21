@@ -15,6 +15,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -111,7 +112,7 @@ func BenchmarkGonum(b *testing.B) {
 	p := gonumProgram(b)
 	for _, name := range gonumReductions {
 		b.Run(name, func(b *testing.B) {
-			vm := evm.New(p)
+			vm := evmtest.New(p)
 			args, want := gonumInput(name, 512)
 			var out [1]values.Value
 			run := func() {
@@ -140,7 +141,7 @@ func TestGonumKernels(t *testing.T) {
 	}
 	for _, name := range gonumReductions {
 		t.Run(name, func(t *testing.T) {
-			vm := evm.New(p)
+			vm := evmtest.New(p)
 			for _, n := range []int{0, 1, 8, 17, 255, 256, 257, 512} {
 				args, want := gonumInput(name, n)
 				var out [1]values.Value
@@ -196,7 +197,7 @@ func BenchmarkGonumTransform(b *testing.B) {
 			if name == "DivTo" || name == "CumSum" || name == "CumProd" {
 				out = make([]values.Value, 1)
 			}
-			vm := evm.New(p)
+			vm := evmtest.New(p)
 			run := func(i int) {
 				if err := vm.Run(context.Background(), name, args, out); err != nil || !closeFloat(z[i].AsFloat(), want[i]) {
 					b.Fatalf("cell %d: got %v (%v), want %v", i, z[i].AsFloat(), err, want[i])

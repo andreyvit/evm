@@ -11,6 +11,7 @@ import (
 	"github.com/andreyvit/evm/evmbind"
 	"github.com/andreyvit/evm/evmbind/internal/timedata"
 	"github.com/andreyvit/evm/evmcompiler"
+	"github.com/andreyvit/evm/evmtest"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -63,7 +64,7 @@ func testNativeTimeSource(t *testing.T, static *evmbind.Static) {
 			t.Fatal(err)
 		}
 		out := make([]values.Value, 1)
-		if err := evm.New(p).Run(context.Background(), "Run", []values.Value{arg}, out); err != nil {
+		if err := evmtest.New(p).Run(context.Background(), "Run", []values.Value{arg}, out); err != nil {
 			t.Fatal(err)
 		}
 		if c.Locals[0].Label != "local type" || c.List[0] != stamp || c.Named[stamp] != "present" || c.At != stamp || out[0].AsString() != stamp.Format("15:04 -0700 MST") {

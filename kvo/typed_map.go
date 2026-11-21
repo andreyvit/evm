@@ -71,7 +71,7 @@ func (m Map[K, V]) Lookup(key K) (out V, found bool) {
 			if !ok {
 				break
 			}
-			if c.key.Decode(l.plan.mapKey.messagePackScalar(k)) == key {
+			if c.key.Unpack(l.plan.mapKey.messagePackScalar(k)) == key {
 				raw = v
 				found = true
 			}
@@ -82,7 +82,7 @@ func (m Map[K, V]) Lookup(key K) (out V, found bool) {
 		return
 	default:
 		v := row2.Trusted(l.data.AsBytes())
-		k := c.key.Encode(key)
+		k := c.key.Pack(key)
 		var f row2.Field
 		if c.text {
 			f = v.RawString(k.AsString())
@@ -92,7 +92,7 @@ func (m Map[K, V]) Lookup(key K) (out V, found bool) {
 			found = v.Has(k.R)
 		}
 		if found {
-			out = c.value.Decode(f.Decode(l.encoding))
+			out = c.value.Unpack(f.Decode(l.encoding))
 		}
 		return
 	}
@@ -148,7 +148,7 @@ func (m Map[K, V]) traverse(mode mapTraversal) iter.Seq2[K, V] {
 			}
 			it := l.native().MapRange()
 			for it.Next() {
-				k := c.key.Decode(nativeValue(l.plan.mapKey, it.Key(), row2.Fast2))
+				k := c.key.Unpack(nativeValue(l.plan.mapKey, it.Key(), row2.Fast2))
 				var v V
 				if mode == mapKeysAndValues {
 					v = c.fromNative(l.plan.elem, it.Value())
@@ -167,7 +167,7 @@ func (m Map[K, V]) traverse(mode mapTraversal) iter.Seq2[K, V] {
 				n := it.Len()
 				for i := range n {
 					k, v, _ := it.Next()
-					keys[i] = c.key.Decode(l.plan.mapKey.messagePackScalar(k))
+					keys[i] = c.key.Unpack(l.plan.mapKey.messagePackScalar(k))
 					entries[i] = v
 				}
 				for i, k := range keys[:n] {
@@ -196,7 +196,7 @@ func (m Map[K, V]) traverse(mode mapTraversal) iter.Seq2[K, V] {
 				if !ok {
 					return
 				}
-				k := c.key.Decode(l.plan.mapKey.messagePackScalar(raw))
+				k := c.key.Unpack(l.plan.mapKey.messagePackScalar(raw))
 				// Last normalized key wins, as in decoding into a Go map. Lookahead stays
 				// on the stack, including historical keys with a different wire encoding.
 				rest := it
@@ -206,7 +206,7 @@ func (m Map[K, V]) traverse(mode mapTraversal) iter.Seq2[K, V] {
 					if !ok {
 						break
 					}
-					if c.key.Decode(l.plan.mapKey.messagePackScalar(later)) == k {
+					if c.key.Unpack(l.plan.mapKey.messagePackScalar(later)) == k {
 						duplicate = true
 						break
 					}
@@ -234,9 +234,9 @@ func (m Map[K, V]) traverse(mode mapTraversal) iter.Seq2[K, V] {
 				}
 				var out V
 				if mode == mapKeysAndValues {
-					out = c.value.Decode(v.Decode(l.encoding))
+					out = c.value.Unpack(v.Decode(l.encoding))
 				}
-				if !yield(c.key.Decode(key), out) {
+				if !yield(c.key.Unpack(key), out) {
 					return
 				}
 			}

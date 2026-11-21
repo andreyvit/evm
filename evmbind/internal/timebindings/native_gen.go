@@ -186,20 +186,20 @@ var Bindings = evmbind.Static{Fingerprint: "33a67d9c3eec2b1322bb7609951fe3f633ec
 	},
 	Calls: map[string]evmbind.Wrapper{
 		"*Context.Echo": func(f *evmbind.Frame) {
-			r0 := readPtrContext(f, f.Argument(0)).Echo(readImported9(f, f.Argument(1)))
-			f.SetResult(0, writeImported9(f, r0))
+			r0 := readPtrContext(f, f.CallArgument(0)).Echo(readImported9(f, f.CallArgument(1)))
+			f.SetCallResult(0, writeImported9(f, r0))
 		},
 		"*Context.Pointer": func(f *evmbind.Frame) {
-			r0 := readPtrContext(f, f.Argument(0)).Pointer(readPtrImported2(f, f.Argument(1)))
-			f.SetResult(0, writePtrImported2(f, r0))
+			r0 := readPtrContext(f, f.CallArgument(0)).Pointer(readPtrImported2(f, f.CallArgument(1)))
+			f.SetCallResult(0, writePtrImported2(f, r0))
 		},
 	},
 	Direct: map[string]evmbind.DirectFactory{
 		"*Context.Pointer": func(host any) evm.DirectFunc {
-			return func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+			return func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 				defer evmbind.Catch("*Context.Pointer", &err)
 				if (x.P != nil && x.R != values.NativeAddress) || (y.P != nil && y.R != values.NativeAddress) {
-					f := evmbind.Frame{Call: c}
+					f := evmbind.Frame{VM: c}
 					argx := readPtrContext(&f, x)
 					argy := readPtrImported2(&f, y)
 					out := argx.Pointer(argy)

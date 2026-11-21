@@ -14,19 +14,31 @@ import (
 	"github.com/andreyvit/evm/values"
 )
 
-func readFunction0(f *evmbind.Frame, v values.Value) *evm.FunctionHandle {
+func readFunction0(f *evmbind.Frame, v values.Value) *evm.Callable {
 	return f.BoxedFunction(v)
 }
-func readFunction1(f *evmbind.Frame, v values.Value) *evm.FunctionHandle {
+func readFunction1(f *evmbind.Frame, v values.Value) *evm.Callable {
 	return f.Function(v)
 }
-func writeFunction1(f *evmbind.Frame, x *evm.FunctionHandle) values.Value {
+func writeFunction1(f *evmbind.Frame, x *evm.Callable) values.Value {
+	return f.EncodeFunction("*FunctionOf[func(func([]string), func([]any))]", x)
+}
+func readFunction2(f *evmbind.Frame, v values.Value) *evm.Callable {
+	return f.Function(v)
+}
+func writeFunction2(f *evmbind.Frame, x *evm.Callable) values.Value {
+	return f.EncodeFunction("*FunctionOf[func(int) any]", x)
+}
+func readFunction3(f *evmbind.Frame, v values.Value) *evm.Callable {
+	return f.Function(v)
+}
+func writeFunction3(f *evmbind.Frame, x *evm.Callable) values.Value {
 	return f.EncodeFunction("*FunctionOf[func(int) int]", x)
 }
-func readFunction2(f *evmbind.Frame, v values.Value) *evm.FunctionHandle {
+func readFunction4(f *evmbind.Frame, v values.Value) *evm.Callable {
 	return f.Function(v)
 }
-func writeFunction2(f *evmbind.Frame, x *evm.FunctionHandle) values.Value {
+func writeFunction4(f *evmbind.Frame, x *evm.Callable) values.Value {
 	return f.EncodeFunction("*FunctionOf[func(string) string]", x)
 }
 func readPtrFunctionSlot(f *evmbind.Frame, v values.Value) *api.FunctionSlot {
@@ -43,18 +55,6 @@ func writePtrFunctionSlot(f *evmbind.Frame, x *api.FunctionSlot) values.Value {
 		return values.Value{}
 	}
 	return values.Value{R: values.NativeAddress, P: unsafe.Pointer(x)}
-}
-func readFunction4(f *evmbind.Frame, v values.Value) *evm.NamedFunction {
-	return f.NamedFunction(v)
-}
-func readFunction5(f *evmbind.Frame, v values.Value) *evm.NamedFunction {
-	return f.NamedFunction(v)
-}
-func readFunction6(f *evmbind.Frame, v values.Value) *evm.NamedFunction {
-	return f.NamedFunction(v)
-}
-func readFunction7(f *evmbind.Frame, v values.Value) *evm.NamedFunction {
-	return f.NamedFunction(v)
 }
 func readPtrNativeBox(f *evmbind.Frame, v values.Value) *api.NativeBox {
 	if v.P == nil {
@@ -73,7 +73,7 @@ func writePtrNativeBox(f *evmbind.Frame, x *api.NativeBox) values.Value {
 }
 func readTypeFunctionSlot(f *evmbind.Frame, v values.Value) api.FunctionSlot {
 	return api.FunctionSlot{
-		Fn: readFunction1(f, evmbind.Field(v, 0, false)),
+		Fn: readFunction3(f, evmbind.Field(v, 0, false)),
 	}
 }
 func writeTypeFunctionSlot(f *evmbind.Frame, x api.FunctionSlot) values.Value {
@@ -82,7 +82,7 @@ func writeTypeFunctionSlot(f *evmbind.Frame, x api.FunctionSlot) values.Value {
 	return v
 }
 func storeTypeFunctionSlot(f *evmbind.Frame, v values.Value, x api.FunctionSlot) {
-	*(*values.Value)(values.CellAt(v.P, 0)) = writeFunction1(f, x.Fn)
+	*(*values.Value)(values.CellAt(v.P, 0)) = writeFunction3(f, x.Fn)
 }
 func readTypeNativeBox(f *evmbind.Frame, v values.Value) api.NativeBox {
 	return api.NativeBox{
@@ -103,19 +103,19 @@ func readTypeNativeUnary(f *evmbind.Frame, v values.Value) api.NativeUnary {
 func writeTypeNativeUnary(f *evmbind.Frame, x api.NativeUnary) values.Value {
 	return f.EncodeNativeFunction("NativeUnary", x)
 }
-func readCollection12(f *evmbind.Frame, v values.Value) []any {
+func readCollection10(f *evmbind.Frame, v values.Value) []any {
 	return ([]any)(unsafe.Slice((*any)(evmbind.NativeSliceData(v, reflect.TypeFor[any]())), int(v.SliceCap()))[:int(v.SliceLen())])
 }
-func writeCollection12(f *evmbind.Frame, x []any) values.Value {
+func writeCollection10(f *evmbind.Frame, x []any) values.Value {
 	if uint64(cap(x)) > 1<<32-1 {
 		panic("native slice exceeds VM capacity")
 	}
 	return values.SliceValue(unsafe.Pointer(unsafe.SliceData(x)), uint32(len(x)), uint32(cap(x)))
 }
-func readCollection13(f *evmbind.Frame, v values.Value) []string {
+func readCollection11(f *evmbind.Frame, v values.Value) []string {
 	return ([]string)(unsafe.Slice((*string)(evmbind.NativeSliceData(v, reflect.TypeFor[string]())), int(v.SliceCap()))[:int(v.SliceLen())])
 }
-func writeCollection13(f *evmbind.Frame, x []string) values.Value {
+func writeCollection11(f *evmbind.Frame, x []string) values.Value {
 	if uint64(cap(x)) > 1<<32-1 {
 		panic("native slice exceeds VM capacity")
 	}
@@ -133,10 +133,10 @@ func readScalarInt(f *evmbind.Frame, v values.Value) int {
 func writeScalarInt(f *evmbind.Frame, x int) values.Value {
 	return values.Int(int64(x))
 }
-func readCollection16(f *evmbind.Frame, v values.Value) map[string]any {
+func readCollection14(f *evmbind.Frame, v values.Value) map[string]any {
 	return *(*map[string]any)(unsafe.Pointer(&v.P))
 }
-func writeCollection16(f *evmbind.Frame, x map[string]any) values.Value {
+func writeCollection14(f *evmbind.Frame, x map[string]any) values.Value {
 	return values.Value{P: *(*unsafe.Pointer)(unsafe.Pointer(&x))}
 }
 func readScalarString(f *evmbind.Frame, v values.Value) string {
@@ -149,7 +149,7 @@ func writeScalarString(f *evmbind.Frame, x string) values.Value {
 var fieldsTypeFunctionSlot = nativebind.GeneratedFields{Type: reflect.TypeFor[api.FunctionSlot](), New: func() unsafe.Pointer { return unsafe.Pointer(new(api.FunctionSlot)) }, Fields: []nativebind.GeneratedField{
 	{Name: "Fn", Get: func(p unsafe.Pointer) values.Value {
 		return values.Value{P: unsafe.Pointer((*(api.FunctionSlot))(p).Fn)}
-	}, Set: func(p unsafe.Pointer, v values.Value) { (*(api.FunctionSlot))(p).Fn = (*evm.FunctionHandle)(v.P) }},
+	}, Set: func(p unsafe.Pointer, v values.Value) { (*(api.FunctionSlot))(p).Fn = (*evm.Callable)(v.P) }},
 }}
 var fieldsTypeNativeBox = nativebind.GeneratedFields{Type: reflect.TypeFor[api.NativeBox](), New: func() unsafe.Pointer { return unsafe.Pointer(new(api.NativeBox)) }, Fields: []nativebind.GeneratedField{
 	{Name: "Apply", Get: func(p unsafe.Pointer) values.Value {
@@ -163,7 +163,7 @@ var fieldsTypeNativeBox = nativebind.GeneratedFields{Type: reflect.TypeFor[api.N
 		}
 	}},
 }}
-var Bindings = evmbind.Static{Fingerprint: "84137b63db6c619796079ea15b1b3039f0cf37f62f42dd2d058a0c357db45e28",
+var Bindings = evmbind.Static{Fingerprint: "084ea2d7b3426fb1d2c8a17b04f356e3efb3534be7a388dec8c818986c36bb78",
 	Fields: map[string]*nativebind.GeneratedFields{
 		"FunctionSlot": &fieldsTypeFunctionSlot,
 		"NativeBox":    &fieldsTypeNativeBox,
@@ -176,80 +176,60 @@ var Bindings = evmbind.Static{Fingerprint: "84137b63db6c619796079ea15b1b3039f0cf
 	Calls: map[string]evmbind.Wrapper{
 		"EchoNative": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				EchoNative(*evm.Call, api.NativeUnary) api.NativeUnary
-			}).EchoNative(f.Call, f.DecodeNativeCallback("NativeUnary", f.Argument(0)).(api.NativeUnary))
-			f.SetResult(0, writeTypeNativeUnary(f, r0))
+				EchoNative(*evm.VM, api.NativeUnary) api.NativeUnary
+			}).EchoNative(f.VM, f.DecodeNativeCallback("NativeUnary", f.CallArgument(0)).(api.NativeUnary))
+			f.SetCallResult(0, writeTypeNativeUnary(f, r0))
 		},
 		"EchoSlot": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				EchoSlot(*evm.Call, api.FunctionSlot) api.FunctionSlot
-			}).EchoSlot(f.Call, readTypeFunctionSlot(f, f.Argument(0)))
-			f.SetResult(0, writeTypeFunctionSlot(f, r0))
+				EchoSlot(*evm.VM, api.FunctionSlot) api.FunctionSlot
+			}).EchoSlot(f.VM, readTypeFunctionSlot(f, f.CallArgument(0)))
+			f.SetCallResult(0, writeTypeFunctionSlot(f, r0))
 		},
 		"Get": func(f *evmbind.Frame) {
-			r0 := f.Host.(interface {
-				Get(*evm.Call) *evm.FunctionHandle
-			}).Get(f.Call)
-			f.SetResult(0, writeFunction1(f, r0))
+			r0 := f.Host.(interface{ Get(*evm.VM) *evm.Callable }).Get(f.VM)
+			f.SetCallResult(0, writeFunction3(f, r0))
 		},
 		"GetWrong": func(f *evmbind.Frame) {
-			r0 := f.Host.(interface {
-				GetWrong(*evm.Call) *evm.FunctionHandle
-			}).GetWrong(f.Call)
-			f.SetResult(0, writeFunction2(f, r0))
+			r0 := f.Host.(interface{ GetWrong(*evm.VM) *evm.Callable }).GetWrong(f.VM)
+			f.SetCallResult(0, writeFunction4(f, r0))
 		},
 		"Keep": func(f *evmbind.Frame) {
-			f.Host.(interface {
-				Keep(*evm.Call, *evm.FunctionHandle)
-			}).Keep(f.Call, readFunction1(f, f.Argument(0)))
+			f.Host.(interface{ Keep(*evm.VM, *evm.Callable) }).Keep(f.VM, readFunction3(f, f.CallArgument(0)))
 		},
 		"KeepAny": func(f *evmbind.Frame) {
-			f.Host.(interface {
-				KeepAny(*evm.Call, *evm.FunctionHandle)
-			}).KeepAny(f.Call, readFunction0(f, f.Argument(0)))
+			f.Host.(interface{ KeepAny(*evm.VM, *evm.Callable) }).KeepAny(f.VM, readFunction0(f, f.CallArgument(0)))
 		},
 		"NativeSlot": func(f *evmbind.Frame) {
-			r0 := f.Host.(interface {
-				NativeSlot(*evm.Call) *api.NativeBox
-			}).NativeSlot(f.Call)
-			f.SetResult(0, writePtrNativeBox(f, r0))
+			r0 := f.Host.(interface{ NativeSlot(*evm.VM) *api.NativeBox }).NativeSlot(f.VM)
+			f.SetCallResult(0, writePtrNativeBox(f, r0))
 		},
 		"Register": func(f *evmbind.Frame) {
-			f.Host.(interface {
-				Register(*evm.Call, *evm.NamedFunction)
-			}).Register(f.Call, readFunction6(f, f.Argument(0)))
+			f.Host.(interface{ Register(*evm.VM, *evm.Callable) }).Register(f.VM, readFunction3(f, f.CallArgument(0)))
 		},
 		"RegisterRows": func(f *evmbind.Frame) {
-			f.Host.(interface {
-				RegisterRows(*evm.Call, *evm.NamedFunction)
-			}).RegisterRows(f.Call, readFunction4(f, f.Argument(0)))
+			f.Host.(interface{ RegisterRows(*evm.VM, *evm.Callable) }).RegisterRows(f.VM, readFunction1(f, f.CallArgument(0)))
 		},
 		"RegisterText": func(f *evmbind.Frame) {
-			f.Host.(interface {
-				RegisterText(*evm.Call, *evm.NamedFunction)
-			}).RegisterText(f.Call, readFunction7(f, f.Argument(0)))
+			f.Host.(interface{ RegisterText(*evm.VM, *evm.Callable) }).RegisterText(f.VM, readFunction4(f, f.CallArgument(0)))
 		},
 		"RegisterValue": func(f *evmbind.Frame) {
-			f.Host.(interface {
-				RegisterValue(*evm.Call, *evm.NamedFunction)
-			}).RegisterValue(f.Call, readFunction5(f, f.Argument(0)))
+			f.Host.(interface{ RegisterValue(*evm.VM, *evm.Callable) }).RegisterValue(f.VM, readFunction2(f, f.CallArgument(0)))
 		},
 		"Slot": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface {
-				Slot(*evm.Call) *api.FunctionSlot
-			}).Slot(f.Call)
-			f.SetResult(0, writePtrFunctionSlot(f, r0))
+				Slot(*evm.VM) *api.FunctionSlot
+			}).Slot(f.VM)
+			f.SetCallResult(0, writePtrFunctionSlot(f, r0))
 		},
 		"Strings": func(f *evmbind.Frame) {
-			f.Host.(interface{ Strings(*evm.Call, []string) }).Strings(f.Call, readCollection13(f, f.Argument(0)))
+			f.Host.(interface{ Strings(*evm.VM, []string) }).Strings(f.VM, readCollection11(f, f.CallArgument(0)))
 		},
 	},
 	Direct: map[string]evmbind.DirectFactory{
 		"NativeSlot": func(host any) evm.DirectFunc {
-			h := host.(interface {
-				NativeSlot(*evm.Call) *api.NativeBox
-			})
-			return func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+			h := host.(interface{ NativeSlot(*evm.VM) *api.NativeBox })
+			return func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 				defer evmbind.Catch("NativeSlot", &err)
 				out := h.NativeSlot(c)
 				v = writePtrNativeBox(nil, out)
@@ -258,9 +238,9 @@ var Bindings = evmbind.Static{Fingerprint: "84137b63db6c619796079ea15b1b3039f0cf
 		},
 		"Slot": func(host any) evm.DirectFunc {
 			h := host.(interface {
-				Slot(*evm.Call) *api.FunctionSlot
+				Slot(*evm.VM) *api.FunctionSlot
 			})
-			return func(c *evm.Call, x, y values.Value) (v values.Value, err error) {
+			return func(c *evm.VM, x, y values.Value) (v values.Value, err error) {
 				defer evmbind.Catch("Slot", &err)
 				out := h.Slot(c)
 				v = writePtrFunctionSlot(nil, out)

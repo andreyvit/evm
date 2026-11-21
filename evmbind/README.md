@@ -118,6 +118,15 @@ passed to a native pointer parameter. The binding does not decode, cache, or
 copy changes back. Native-backed immutable rows remain live views: native code
 can change their source object.
 
+A native method returning a single `[]byte` can lend its result to the guest.
+Mark its Go declaration with `//evm:borrow-bytes domain [nativeMethod]`.
+The method must keep its arguments local and preserve outstanding borrows.
+The receiver supplies the scope. An optional native method with the same
+signature supplies the bytes when the public Go method returns an owned copy.
+Both generated and reflection bindings expose the original guest method name.
+A guest read uses the lent storage. A write, mutable address, or escape makes
+one writable copy shared by all slices of that result.
+
 Use `Options.Mutable` on the callable schema to expose selected native model
 pointer parameters/results as editable rows:
 

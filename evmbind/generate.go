@@ -398,11 +398,15 @@ func generateSource(s *source, nativeImport, outputPackage string) ([]byte, erro
 		}
 		target := recv
 		if !op.packageFunction {
-			target += "." + op.name
+			target += "." + op.nativeMethod()
 		}
 		writeInvocation(line, target, args, lhs)
-		for i, n := range op.outs {
-			line("f.SetResult(%d,write%s(f,r%d))", i, ids[n], i)
+		if op.byteBorrow != nil {
+			line("f.SetBorrowedBytesResult(0,r0)")
+		} else {
+			for i, n := range op.outs {
+				line("f.SetResult(%d,write%s(f,r%d))", i, ids[n], i)
+			}
 		}
 		line("},")
 	}

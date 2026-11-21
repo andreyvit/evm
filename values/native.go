@@ -1,6 +1,9 @@
 package values
 
 import (
+	"bytes"
+	"fmt"
+	"math"
 	"reflect"
 	"unsafe"
 )
@@ -140,6 +143,94 @@ type NativeSliceView struct {
 	Length, Capacity uint32
 }
 
+// A second impossible slice header (len 2, cap 0) carries only the byte
+// offset and bounds. Ordinary native views keep their original size.
+const borrowedByteSliceTag = 2
+
+type borrowedByteView struct {
+	backing                  *borrowedByteBacking
+	offset, length, capacity uint32
+}
+type borrowedByteBacking struct {
+	data   []byte
+	layout *NativeLayout
+	budget OwnershipBudget // cleared on detachment
+}
+
+// BorrowByteSlice exposes exactly len(data) bytes. Binding declarations must
+// describe the result's borrow domain so the compiler can own escaping values.
+func BorrowByteSlice(data []byte, layout *NativeLayout, budget OwnershipBudget) (Value, error) {
+	if data == nil {
+		return Value{}, nil
+	}
+	if uint64(len(data)) > math.MaxUint32 {
+		return Value{}, fmt.Errorf("borrowed byte slice exceeds VM capacity")
+	}
+	type header struct {
+		view    borrowedByteView
+		backing borrowedByteBacking
+	}
+	if err := budget.ChargeAllocation(uint64(unsafe.Sizeof(header{}))); err != nil {
+		return Value{}, err
+	}
+	h := &header{backing: borrowedByteBacking{data[:len(data):len(data)], layout, budget}}
+	n := uint32(len(data))
+	h.view = borrowedByteView{&h.backing, 0, n, n}
+	return Value{R: borrowedByteSliceTag, P: unsafe.Pointer(&h.view)}, nil
+}
+
+func (v Value) byteView() *borrowedByteView { return (*borrowedByteView)(v.P) }
+
+// HasNativeSlice reports whether the value carries per-slice physical metadata.
+func (v Value) HasNativeSlice() bool     { return (v.R == 1 || v.R == borrowedByteSliceTag) && v.P != nil }
+func (v Value) IsBorrowedByteView() bool { return v.R == borrowedByteSliceTag && v.P != nil }
+
+// OwnBytes switches all aliases to one writable array. A failed reservation
+// leaves every view attached to the original storage.
+func (v Value) OwnBytes() error {
+	if !v.IsBorrowedByteView() {
+		return nil
+	}
+	b := v.byteView().backing
+	if b.budget == nil {
+		return nil
+	}
+	if err := b.budget.ChargeAllocation(uint64(len(b.data))); err != nil {
+		return err
+	}
+	b.data = bytes.Clone(b.data)
+	b.budget = nil
+	return nil
+}
+
+// SliceView creates a subview with the original physical
+// layout. Borrowed offsets resolve against the shared backing on every access.
+func (v Value) SliceView(lo, length, capacity uint32, b OwnershipBudget) (Value, error) {
+	if !v.HasNativeSlice() || length > capacity || uint64(lo)+uint64(capacity) > uint64(v.SliceCap()) {
+		return Value{}, fmt.Errorf("invalid native slice bounds")
+	}
+	if v.IsBorrowedByteView() {
+		if err := b.ChargeAllocation(uint64(unsafe.Sizeof(borrowedByteView{}))); err != nil {
+			return Value{}, err
+		}
+		sub := *v.byteView()
+		sub.length, sub.capacity = length, capacity
+		if capacity != 0 {
+			sub.offset += lo
+		}
+		return Value{R: borrowedByteSliceTag, P: unsafe.Pointer(&sub)}, nil
+	}
+	if err := b.ChargeAllocation(uint64(unsafe.Sizeof(NativeSliceView{}))); err != nil {
+		return Value{}, err
+	}
+	sub := *v.NativeSlice()
+	sub.Length, sub.Capacity = length, capacity
+	if capacity != 0 {
+		sub.Data = unsafe.Add(sub.Data, uint64(lo)*sub.Layout.Slice.ElementSize)
+	}
+	return NativeSliceValue(&sub), nil
+}
+
 // NativeSliceValue retains a native view. Callers account for its allocation.
 func NativeSliceValue(view *NativeSliceView) Value {
 	if view == nil {
@@ -148,19 +239,54 @@ func NativeSliceValue(view *NativeSliceView) Value {
 	return Value{R: 1, P: unsafe.Pointer(view)}
 }
 
-// NativeSlice returns physical metadata only for the reserved impossible
-// header (length 1, capacity 0). Ordinary slice headers always have len <= cap.
+// NativeSlice returns a view suitable for exposing writable native memory.
 func (v Value) NativeSlice() *NativeSliceView {
+	if v.IsBorrowedByteView() {
+		if err := v.OwnBytes(); err != nil {
+			panic(err)
+		}
+		return v.byteView().nativeView()
+	}
 	if v.R == 1 && v.P != nil {
 		return (*NativeSliceView)(v.P)
 	}
 	return nil
 }
 
-// SliceData returns the element backing address for either physical layout.
+// ReadNativeSlice resolves physical metadata for an immediate read. Its Data
+// pointer is valid until an alias detaches.
+func (v Value) ReadNativeSlice() *NativeSliceView {
+	if v.R == 1 && v.P != nil {
+		return (*NativeSliceView)(v.P)
+	}
+	if v.IsBorrowedByteView() {
+		return v.byteView().nativeView()
+	}
+	return nil
+}
+func (b *borrowedByteView) nativeView() *NativeSliceView {
+	layout := b.backing.layout
+	return &NativeSliceView{Data: b.data(), Layout: layout, Element: layout.Slice.Element, Length: b.length, Capacity: b.capacity}
+}
+func (b *borrowedByteView) data() unsafe.Pointer {
+	return unsafe.Add(unsafe.Pointer(unsafe.SliceData(b.backing.data)), b.offset)
+}
+
+// SliceData returns the writable element backing address.
 func (v Value) SliceData() unsafe.Pointer {
-	if view := v.NativeSlice(); view != nil {
-		return view.Data
+	if err := v.OwnBytes(); err != nil {
+		panic(err)
+	}
+	return v.SliceReadData()
+}
+
+// SliceReadData returns a transient address for reads or nil tests.
+func (v Value) SliceReadData() unsafe.Pointer {
+	if v.R == 1 && v.P != nil {
+		return (*NativeSliceView)(v.P).Data
+	}
+	if v.IsBorrowedByteView() {
+		return v.byteView().data()
 	}
 	return v.P
 }

@@ -95,8 +95,8 @@ func nativeStoredValue(c *Call, s *values.Shape, v values.Value, used *allocatio
 		if err := charge(s.Native.Size, used, limits); err != nil {
 			return values.Value{}, err
 		}
-		if s.Native.Slice.Element != nil || v.NativeSlice() != nil {
-			view := v.NativeSlice()
+		if s.Native.Slice.Element != nil || v.HasNativeSlice() {
+			view := v.ReadNativeSlice()
 			if view == nil || view.Layout.GoType.Elem() != s.Native.GoType.Elem() {
 				// Native slots retain their declared physical element type.
 				if v.SliceData() != nil {
@@ -104,7 +104,10 @@ func nativeStoredValue(c *Call, s *values.Shape, v values.Value, used *allocatio
 				}
 				v = values.Value{}
 			} else {
-				v = values.SliceValue(view.Data, view.Length, view.Capacity)
+				if err := v.OwnBytes(); err != nil {
+					return values.Value{}, err
+				}
+				v = values.SliceValue(v.SliceReadData(), view.Length, view.Capacity)
 			}
 		}
 		p := s.Native.New()

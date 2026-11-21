@@ -137,3 +137,32 @@ func TestStringFromNativeRuneView(t *testing.T) {
 		t.Fatal(got, err)
 	}
 }
+
+func TestBorrowedByteViewAliases(t *testing.T) {
+	data := []byte("abcd")
+	b := &executionBudget{limits: Limits{AllocationBytes: 1024, Allocations: 3}}
+	c := Call{budget: b}
+	v, err := c.BorrowBytes(data[:3])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.SliceCap() != 3 || v.SliceReadData() != unsafe.Pointer(&data[0]) {
+		t.Fatal("read copied or exposed spare capacity")
+	}
+	sub, err := c.resliceView(v, 1, 1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Reject the first detachment and check that the borrow is still intact.
+	limit := b.limits.AllocationBytes
+	b.limits.AllocationBytes = b.allocated.bytes
+	if err := sub.OwnBytes(); err == nil || sub.SliceReadData() != unsafe.Pointer(&data[1]) {
+		t.Fatal("failed detachment changed view")
+	}
+	b.limits.AllocationBytes = limit
+	*(*byte)(sub.SliceData()) = 'x'
+	used := b.allocated
+	if got := string(unsafe.Slice((*byte)(v.SliceData()), 3)); got != "axc" || string(data) != "abcd" || b.allocated != used {
+		t.Fatal(got, string(data), b.allocated)
+	}
+}

@@ -196,7 +196,7 @@ func (c *typedCompiler) lowerFunction(fn *ssa.Function) {
 			if f.pos == token.NoPos {
 				f.pos = fn.Pos()
 			}
-			if f.optimizing() && j+1 < len(b.Instrs) && !f.invariant[b.Instrs[j+1]] && len(f.ownership.before[i]) == 0 && len(f.ownership.after[i]) == 0 && len(f.ownership.before[b.Instrs[j+1]]) == 0 && len(f.ownership.after[b.Instrs[j+1]]) == 0 && f.fuseAdjacent(i, b.Instrs[j+1]) {
+			if j+1 < len(b.Instrs) && !f.invariant[b.Instrs[j+1]] && len(f.ownership.before[i]) == 0 && len(f.ownership.after[i]) == 0 && len(f.ownership.before[b.Instrs[j+1]]) == 0 && len(f.ownership.after[b.Instrs[j+1]]) == 0 && (f.readByteIndex(i, b.Instrs[j+1]) || f.optimizing() && f.fuseAdjacent(i, b.Instrs[j+1])) {
 				j++
 				continue
 			}

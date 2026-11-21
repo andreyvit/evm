@@ -13,7 +13,9 @@ import (
 var AnySliceType = values.NewType("[]any", values.Pair)
 
 // ByteSliceType is the shared VM slice identity for native packages exchanging []byte.
-var ByteSliceType = values.NewType("[]uint8", values.Pair)
+var ByteSliceType = values.NewOwnedType("[]uint8", values.Pair, func(v values.Value, _ values.OwnershipBudget) (values.Value, error) {
+	return v, v.OwnBytes()
+})
 
 // PointerInterface packs a trusted native pointer for an interface argument to Run.
 // The type must be registered by the host and linked into this particular program.

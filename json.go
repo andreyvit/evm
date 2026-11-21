@@ -335,7 +335,7 @@ func (w *jsonValueWriter) value(s *values.Shape, v values.Value, depth int) (any
 	case values.ArrayKind, values.SliceKind:
 		n := s.Len
 		if s.Kind == values.SliceKind {
-			if v.SliceData() == nil {
+			if v.SliceReadData() == nil {
 				return nil, w.append([]byte("null"))
 			}
 			n = uint64(v.SliceLen())

@@ -675,7 +675,11 @@ func (s *Schema) addImplementation(impl Implementation, interfaces []*node, nati
 
 }
 func (s *Schema) method(op *operation, recv *values.Type, e entry, direct evm.DirectBinding) {
-	s.pkg.Methods = append(s.pkg.Methods, evm.ExternalMethod{Direct: direct, Name: op.name, Receiver: recv, Signature: op.sig(), Variadic: op.variadic})
+	var effects *evm.OwnershipEffects
+	if b := op.byteBorrow; b != nil {
+		effects = &evm.OwnershipEffects{NoRetain: true, NoInvalidate: true, Borrowed: []evm.BorrowSource{{Domain: b.domain, ScopeParameter: 1}}}
+	}
+	s.pkg.Methods = append(s.pkg.Methods, evm.ExternalMethod{Ownership: effects, Direct: direct, Name: op.name, Receiver: recv, Signature: op.sig(), Variadic: op.variadic})
 	s.methods = append(s.methods, e)
 }
 func (s *Schema) Bind(host any) evm.Package {

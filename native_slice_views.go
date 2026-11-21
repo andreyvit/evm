@@ -9,6 +9,25 @@ import (
 	"unsafe"
 )
 
+var borrowedBytesLayout = func() *values.NativeLayout {
+	layout := nativebind.Layout(reflect.TypeFor[[]byte](), nil, false)
+	layout.Slice.Element = nativebind.Layout(reflect.TypeFor[byte](), nil, false)
+	return layout
+}()
+
+// BorrowBytes returns a transaction-scoped []byte. Declare the result in
+// OwnershipEffects.Borrowed. Writes and escapes detach all its aliases.
+func (c *Call) BorrowBytes(data []byte) (values.Value, error) {
+	return values.BorrowByteSlice(data, borrowedBytesLayout, c.budget)
+}
+
+func (c *Call) resliceView(v values.Value, lo, length, capacity uint32) (values.Value, error) {
+	if lo == 0 && length == v.SliceLen() && capacity == v.SliceCap() {
+		return v, nil
+	}
+	return v.SliceView(lo, length, capacity, c.budget)
+}
+
 type nativeViewKey struct {
 	typ    *values.Type
 	layout reflect.Type
@@ -103,7 +122,10 @@ func (c *Call) copySliceViews(s *values.Shape, dst, src values.Value, start, cou
 	if count == 0 {
 		return nil
 	}
-	dv, sv := dst.NativeSlice(), src.NativeSlice()
+	if err := dst.OwnBytes(); err != nil {
+		return err
+	}
+	dv, sv := dst.ReadNativeSlice(), src.ReadNativeSlice()
 	if dv != nil && sv != nil && dv.Layout.GoType.Elem() == sv.Layout.GoType.Elem() {
 		dv.Layout.Slice.Copy(unsafe.Add(dv.Data, start*dv.Layout.Slice.ElementSize), sv.Data, uint32(count))
 		return nil
@@ -153,7 +175,7 @@ func (c *Call) appendSliceViews(s *values.Shape, dst, src values.Value) (values.
 	if total > 1<<32-1 {
 		return values.Value{}, ErrBounds
 	}
-	view := dst.NativeSlice()
+	view := dst.ReadNativeSlice()
 	if total > capacity {
 		capacity = min(uint64(1<<32-1), max(total, capacity*2))
 		if view != nil {
@@ -181,8 +203,8 @@ func (c *Call) appendSliceViews(s *values.Shape, dst, src values.Value) (values.
 	if err := c.copySliceViews(s, dst, src, length, uint64(src.SliceLen())); err != nil {
 		return values.Value{}, err
 	}
-	if v := dst.NativeSlice(); v != nil {
-		return c.NativeSlice(v.Layout, v.Element, v.Data, uint32(total), uint32(capacity))
+	if dst.HasNativeSlice() {
+		return c.resliceView(dst, 0, uint32(total), uint32(capacity))
 	}
 	return values.SliceValue(dst.P, uint32(total), uint32(capacity)), nil
 }

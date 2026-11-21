@@ -147,6 +147,21 @@ func nilTestOperand(i *ssa.If) ssa.Value {
 	return nil
 }
 
+// A value read from a borrowed slice must not expose a writable address,
+// including when instruction optimizations are disabled.
+func (f *lowerer) readByteIndex(first, next ssa.Instruction) bool {
+	addr, ok := first.(*ssa.IndexAddr)
+	if !ok || !f.c.env.nativeViewLeaves[values.Uint8] || f.packed[addr] || !isByteSlice(addr.X.Type()) || len(*addr.Referrers()) != 1 {
+		return false
+	}
+	load, ok := next.(*ssa.UnOp)
+	if !ok || load.Op != token.MUL || load.X != addr {
+		return false
+	}
+	f.extended(evm.ExtendedIndex, f.shape(addr.X.Type()), []vreg{f.regs[addr.X][0], f.regs[addr.Index][0]}, f.regs[load], 0, 0, nil)
+	return true
+}
+
 // Keep the bounds check at the address expression. If another instruction
 // intervenes or the pointer escapes, emit the general address and access.
 func (f *lowerer) fuseSliceAccess(addr *ssa.IndexAddr, next ssa.Instruction) bool {

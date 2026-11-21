@@ -55,7 +55,10 @@ func (c *Call) mapEntries(s *values.Shape, v values.Value) ([]*values.MapEntry, 
 }
 func (c *Call) collectionElement(s *values.Shape, v values.Value, i uint64) (values.Value, error) {
 	if s.Kind == values.SliceKind {
-		if view := v.NativeSlice(); view != nil {
+		if v.IsBorrowedByteView() {
+			return values.Uint(uint64(*(*byte)(unsafe.Add(v.SliceReadData(), i)))), nil
+		}
+		if view := v.ReadNativeSlice(); view != nil {
 			return c.nativeViewElement(s, view, i)
 		}
 	}

@@ -140,7 +140,7 @@ func reflectWrapper(op *operation, host reflect.Type, ts map[*node]reflect.Type,
 		if t == nil {
 			fail("missing host for %s", op.key)
 		}
-		m, ok := t.MethodByName(op.name)
+		m, ok := t.MethodByName(op.nativeMethod())
 		if !ok && op.recv == nil {
 			fail("function %s has no native implementation: bind it in Options.Functions or as a method of %s, or leave it out with Options.Omit", op.name, t)
 		}
@@ -183,7 +183,7 @@ func reflectWrapper(op *operation, host reflect.Type, ts map[*node]reflect.Type,
 		} else {
 			start = 1
 			if ts[op.recv].Kind() == reflect.Interface {
-				call = reflect.ValueOf(f.Receiver).MethodByName(op.name)
+				call = reflect.ValueOf(f.Receiver).MethodByName(op.nativeMethod())
 			} else {
 				args = append(args, decode(f, op.recv, f.Argument(0), ts))
 			}
@@ -196,6 +196,10 @@ func reflectWrapper(op *operation, host reflect.Type, ts map[*node]reflect.Type,
 			results = call.CallSlice(args)
 		} else {
 			results = call.Call(args)
+		}
+		if op.byteBorrow != nil {
+			f.SetBorrowedBytesResult(0, results[0].Bytes())
+			return
 		}
 		for i, v := range results {
 			f.SetResult(i, encode(f, op.outs[i], v))

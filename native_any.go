@@ -99,7 +99,7 @@ func (c *Call) NativeAny(v values.Value) (any, error) {
 		}
 	}
 	if s.Kind == values.SliceKind {
-		if view := x.NativeSlice(); view != nil {
+		if view := x.ReadNativeSlice(); view != nil {
 			if err := c.ChargeAllocation(view.Layout.Size); err != nil {
 				return nil, err
 			}
@@ -107,7 +107,10 @@ func (c *Call) NativeAny(v values.Value) (any, error) {
 			if declared := c.program.nativeSliceLogicalTypes[nativeSliceLogicalKey{s.Type, typ.Elem()}]; declared != nil {
 				typ = declared
 			}
-			return reflect.SliceAt(typ.Elem(), view.Data, int(view.Capacity)).Slice(0, int(view.Length)).Convert(typ).Interface(), nil
+			if err := x.OwnBytes(); err != nil {
+				return nil, err
+			}
+			return reflect.SliceAt(typ.Elem(), x.SliceReadData(), int(view.Capacity)).Slice(0, int(view.Length)).Convert(typ).Interface(), nil
 		}
 	}
 	if s.Kind == values.NativeValueKind {

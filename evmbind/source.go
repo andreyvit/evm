@@ -188,7 +188,13 @@ type field struct {
 	t      *node
 	offset uint64
 }
+type byteBorrow struct {
+	domain string
+	method string
+}
+
 type operation struct {
+	byteBorrow      *byteBorrow
 	paramNames      []string
 	doc             string
 	packageFunction bool
@@ -272,6 +278,7 @@ func parseOptions(path string, files fs.FS, selected []string, typesOnly bool, o
 	}
 	var syntax []*ast.File
 	docs := map[string]string{}
+	byteBorrows := map[token.Pos]*byteBorrow{}
 	fset := token.NewFileSet()
 	for _, name := range names {
 		if strings.HasSuffix(name, "_test.go") {
@@ -287,9 +294,26 @@ func parseOptions(path string, files fs.FS, selected []string, typesOnly bool, o
 		}
 		syntax = append(syntax, f)
 		for _, decl := range f.Decls {
-			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Doc != nil {
+			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Doc != nil {
 				for _, comment := range fn.Doc.List {
-					docs[fn.Name.Name] += comment.Text + "\n"
+					if fn.Recv == nil {
+						docs[fn.Name.Name] += comment.Text + "\n"
+					}
+					parts := strings.Fields(comment.Text)
+					if len(parts) == 0 || parts[0] != "//evm:borrow-bytes" {
+						continue
+					}
+					if fn.Recv == nil || len(parts) < 2 || len(parts) > 3 || byteBorrows[fn.Name.Pos()] != nil {
+						fail("%s: expected //evm:borrow-bytes domain [nativeMethod] on a method", fn.Name.Name)
+					}
+					method := fn.Name.Name
+					if len(parts) == 3 {
+						method = parts[2]
+						if !token.IsIdentifier(method) || !ast.IsExported(method) {
+							fail("invalid borrowed byte method %q", method)
+						}
+					}
+					byteBorrows[fn.Name.Pos()] = &byteBorrow{parts[1], method}
 				}
 			}
 		}
@@ -538,6 +562,12 @@ func parseOptions(path string, files fs.FS, selected []string, typesOnly bool, o
 					if m.Exported() {
 						sig := m.Type().(*types.Signature)
 						op := s.op(m, s.node(sig.Recv().Type()))
+						if borrow := byteBorrows[m.Pos()]; borrow != nil {
+							if len(op.outs) != 1 || op.outs[0].shape.Type != evm.ByteSliceType {
+								fail("%s: borrowed byte method must return []byte", op.key)
+							}
+							op.byteBorrow = borrow
+						}
 						s.ops = append(s.ops, op)
 						abi = append(abi, op.abi())
 					}
@@ -667,6 +697,9 @@ func (op *operation) abi() string {
 	if op.value {
 		prefix = "package value "
 	}
+	if b := op.byteBorrow; b != nil {
+		prefix += "borrow-bytes " + b.domain + " " + b.method + " "
+	}
 	return prefix + op.key + "(" + strings.Join(p, ",") + ")(" + strings.Join(r, ",") + ")"
 }
 func (s *source) op(f *types.Func, recv *node) *operation {
@@ -699,8 +732,15 @@ func nodesTypes(ns []*node) []*values.Type {
 	}
 	return out
 }
+func (op *operation) nativeMethod() string {
+	if op.byteBorrow != nil {
+		return op.byteBorrow.method
+	}
+	return op.name
+}
+
 func (op *operation) directOpcode() evm.Opcode {
-	if op.variadic {
+	if op.variadic || op.byteBorrow != nil {
 		return 0
 	}
 	for _, n := range append(slices.Clone(op.args), op.outs...) {

@@ -90,6 +90,10 @@ type OwnershipSite struct {
 func (b *executionBudget) ChargeAllocation(n uint64) error { return charge(n, &b.allocated, b.limits) }
 func (b *executionBudget) ContextErr() error               { return b.contextErr() }
 
+func byteSliceShape(s *values.Shape) bool {
+	return s.Kind == values.SliceKind && s.Elem != nil && s.Elem.Type == values.Uint8
+}
+
 func (p *Program) ownValue(s *values.Shape, v values.Value, b *executionBudget) (values.Value, error) {
 	if s.Kind == values.InterfaceKind {
 		shape, value, err := p.typeShapes.Unpack(v)
@@ -98,7 +102,7 @@ func (p *Program) ownValue(s *values.Shape, v values.Value, b *executionBudget) 
 		}
 		// A join can carry borrowed data on one branch and an ordinary scalar
 		// on another. Non-borrowable concrete types already own their storage.
-		if !shape.Type.CanOwn() && shape.Kind != values.StringKind {
+		if !shape.Type.CanOwn() && shape.Kind != values.StringKind && !byteSliceShape(shape) {
 			return v, nil
 		}
 		owned, err := p.ownValue(shape, value, b)
@@ -123,6 +127,9 @@ func (p *Program) ownValue(s *values.Shape, v values.Value, b *executionBudget) 
 		return v, nil
 	}
 	if !s.Type.CanOwn() {
+		if byteSliceShape(s) {
+			return ByteSliceType.Own(v, b)
+		}
 		if s.Kind == values.StringKind {
 			return values.StringType.Own(v, b)
 		}

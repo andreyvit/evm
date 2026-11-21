@@ -128,7 +128,7 @@ func (ts *TypeTable) Inline(id uint64, v Value) (Value, bool) {
 			return Value{R: interfaceTypedString | id<<44 | v.R, P: v.P}, true
 		}
 	}
-	if s.Kind == SliceKind && v.NativeSlice() == nil {
+	if s.Kind == SliceKind && !v.HasNativeSlice() {
 		n, capacity := uint64(v.SliceLen()), uint64(v.SliceCap())
 		spare := capacity - n
 		if spare < 1<<30 {

@@ -398,13 +398,21 @@ func SliceValue(p unsafe.Pointer, length, capacity uint32) Value {
 	return Value{R: uint64(length) | uint64(capacity)<<32, P: p}
 }
 func (v Value) SliceLen() uint32 {
-	if view := v.NativeSlice(); view != nil {
+	if v.IsBorrowedByteView() {
+		return v.byteView().length
+	}
+	if v.R == 1 && v.P != nil {
+		view := (*NativeSliceView)(v.P)
 		return view.Length
 	}
 	return uint32(v.R)
 }
 func (v Value) SliceCap() uint32 {
-	if view := v.NativeSlice(); view != nil {
+	if v.IsBorrowedByteView() {
+		return v.byteView().capacity
+	}
+	if v.R == 1 && v.P != nil {
+		view := (*NativeSliceView)(v.P)
 		return view.Capacity
 	}
 	return uint32(v.R >> 32)

@@ -56,6 +56,41 @@ func (f *lowerer) ownershipType(v ssa.Value) *values.Type {
 	t, _ := f.c.env.valueType(v.Type())
 	return t
 }
+func isByteSlice(t types.Type) bool {
+	s, ok := t.Underlying().(*types.Slice)
+	return ok && types.Identical(s.Elem(), types.Typ[types.Uint8])
+}
+
+func byteSliceBuiltin(call *ssa.CallCommon, name string) bool {
+	b, ok := call.Value.(*ssa.Builtin)
+	return ok && b.Name() == name && len(call.Args) > 0 && isByteSlice(call.Args[0].Type())
+}
+
+// An indirect call can dispatch straight to a host method. Its signature
+// supplies no borrow domain. Own any byte result before the next instruction.
+func (f *lowerer) ownIndirectByteResults(call *ssa.Call, clone func(ssa.Instruction, ssa.Value, bool, string)) {
+	if !f.c.env.nativeViewLeaves[values.Uint8] || call.Call.StaticCallee() != nil {
+		return
+	}
+	if _, builtin := call.Call.Value.(*ssa.Builtin); builtin {
+		return
+	}
+	own := func(v ssa.Value) {
+		if isByteSlice(v.Type()) {
+			clone(v.(ssa.Instruction), v, true, "acquisition fallback: indirect byte result")
+		}
+	}
+	if _, tuple := call.Type().(*types.Tuple); !tuple {
+		own(call)
+		return
+	}
+	for _, u := range *call.Referrers() {
+		if x, ok := u.(*ssa.Extract); ok {
+			own(x)
+		}
+	}
+}
+
 func (f *lowerer) ownershipIntrinsic(call *ssa.CallCommon) bool {
 	fn := call.StaticCallee()
 	if fn == nil {
@@ -88,7 +123,7 @@ func (f *lowerer) ownershipSafeCallIn(call *ssa.CallCommon, retaining bool, walk
 		case "len", "cap", "real", "imag", "complex", "min", "max", "delete", "clear", "ssa:wrapnilchk":
 			return true
 		}
-		return !retaining && (builtin.Name() == "append" || builtin.Name() == "copy")
+		return byteSliceBuiltin(call, "copy") || byteSliceBuiltin(call, "append") || !retaining && (builtin.Name() == "append" || builtin.Name() == "copy")
 	}
 	if b := f.ownershipBinding(call); b != nil {
 		if b.Ownership == nil {
@@ -220,6 +255,7 @@ func (f *lowerer) planOwnership() *ownershipPlan {
 			if !ok || f.ownershipIntrinsic(&call.Call) {
 				continue
 			}
+			f.ownIndirectByteResults(call, addClone)
 			binding := f.ownershipBinding(&call.Call)
 			var sources []evm.BorrowSource
 			if binding != nil && binding.Ownership != nil {
@@ -271,7 +307,7 @@ func (f *lowerer) planOwnership() *ownershipPlan {
 						f.c.fail(ins.Pos(), "borrowed result has no ownership operation")
 						continue
 					}
-					if t == values.StringType || f.isReadRecord(t) {
+					if t == values.StringType || isByteSlice(v.Type()) || f.isReadRecord(t) {
 						add(v, source.Domain)
 					} else {
 						addClone(v.(ssa.Instruction), v, true, "acquisition fallback: opaque borrowed value")
@@ -527,6 +563,10 @@ func (f *lowerer) spreadBorrows(facts map[ssa.Value]borrowFacts, localContainers
 				if assertion, ok := i.Tuple.(*ssa.TypeAssert); ok && i.Index == 0 {
 					flow(i, assertion.X)
 				}
+			case *ssa.Call:
+				if byteSliceBuiltin(&i.Call, "append") {
+					flow(i, i.Call.Args[0])
+				}
 			case *ssa.Slice:
 				flow(i, i.X)
 			case *ssa.Convert:
@@ -558,7 +598,7 @@ func (f *lowerer) spreadBorrows(facts map[ssa.Value]borrowFacts, localContainers
 		}
 		if !t.CanOwn() && localContainers[n.value] == nil {
 			s, err := f.c.env.shape(n.value.Type())
-			if err != nil || s.Kind != values.InterfaceKind && s.Kind != values.StringKind {
+			if err != nil || s.Kind != values.InterfaceKind && s.Kind != values.StringKind && !isByteSlice(n.value.Type()) {
 				return false
 			}
 		}

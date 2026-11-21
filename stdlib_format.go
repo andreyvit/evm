@@ -133,7 +133,7 @@ func nilValue(s *values.Shape, v values.Value) bool {
 		}
 		return false
 	case values.SliceKind:
-		return v.SliceData() == nil
+		return v.SliceReadData() == nil
 	case values.PointerKind, values.TypedPairKind, values.MapKind:
 		return v.P == nil
 	case values.FunctionKind:
@@ -627,7 +627,7 @@ func standardPrint(c *Call) error {
 				part = strconv.FormatFloat(x, 'g', -1, int(s.Bits))
 			default:
 				if s.Kind == values.SliceKind {
-					part = fmt.Sprintf("%p", v.SliceData())
+					part = fmt.Sprintf("%p", v.SliceReadData())
 				} else {
 					part = fmt.Sprintf("%p", v.P)
 				}

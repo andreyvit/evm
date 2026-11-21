@@ -189,7 +189,7 @@ type scalarSliceReader struct {
 }
 
 func readScalarSlice(s *values.Shape, v values.Value) scalarSliceReader {
-	if view := v.NativeSlice(); view != nil {
+	if view := v.ReadNativeSlice(); view != nil {
 		return scalarSliceReader{view.Data, view.Layout.Slice.ElementSize, view.Element.Load}
 	}
 	if s.Native != nil && s.Native.Slice != nil {

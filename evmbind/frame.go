@@ -218,3 +218,12 @@ func (f *Frame) CellField(name string, v values.Value, index int) values.Value {
 func (f *Frame) PackCell(name string, fields [2]values.Value) values.Value {
 	return f.s.src.nodes[name].shape.CellStruct.Pack(fields)
 }
+
+// SetBorrowedBytesResult returns a slice backed by a declared borrow source.
+func (f *Frame) SetBorrowedBytesResult(index int, data []byte) {
+	v, err := f.Call.BorrowBytes(data)
+	if err != nil {
+		panic(err)
+	}
+	f.SetResult(index, v)
+}

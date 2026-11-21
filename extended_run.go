@@ -348,12 +348,16 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 		if n >= length {
 			return ErrBounds
 		}
+		if op.Kind == ExtendedIndex && s.Kind == values.SliceKind && x.IsBorrowedByteView() {
+			put(0, values.Uint(uint64(*(*byte)(unsafe.Add(x.SliceReadData(), n)))))
+			break
+		}
 		if op.Kind == ExtendedIndexAddr && x.P == nil {
 			return ErrNil
 		}
 		// Native addresses need both register banks. Reject incompatible host
 		// declarations before a later cell instruction can see the address.
-		native := s.Kind == values.ArrayKind && x.R != 0 || s.Kind == values.SliceKind && (x.NativeSlice() != nil || s.Native != nil && s.Native.Slice != nil)
+		native := s.Kind == values.ArrayKind && x.R != 0 || s.Kind == values.SliceKind && (x.HasNativeSlice() || s.Native != nil && s.Native.Slice != nil)
 		if native && op.Kind == ExtendedIndexAddr && op.Out[0].Repr != values.Pair {
 			return ErrInvalidState
 		}
@@ -361,9 +365,12 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 			return ErrInvalidState
 		}
 		if s.Kind == values.SliceKind {
-			if view := x.NativeSlice(); view != nil {
-				p := unsafe.Add(view.Data, n*view.Layout.Slice.ElementSize)
+			if view := x.ReadNativeSlice(); view != nil {
 				if op.Kind == ExtendedIndexAddr {
+					if err := x.OwnBytes(); err != nil {
+						return err
+					}
+					p := unsafe.Add(x.SliceReadData(), n*view.Layout.Slice.ElementSize)
 					put(0, vm.program.nativeViewAddress(elem, view.Element, p))
 				} else {
 					v, err := vm.call.nativeViewElement(s, view, n)
@@ -480,12 +487,8 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 			return ErrBounds
 		}
 		if s.Kind == values.SliceKind {
-			if view := x.NativeSlice(); view != nil {
-				base = view.Data
-				if capBound > lo {
-					base = unsafe.Add(base, lo*view.Layout.Slice.ElementSize)
-				}
-				v, err := vm.call.NativeSlice(view.Layout, view.Element, base, uint32(hi-lo), uint32(capBound-lo))
+			if x.HasNativeSlice() {
+				v, err := vm.call.resliceView(x, uint32(lo), uint32(hi-lo), uint32(capBound-lo))
 				if err != nil {
 					return err
 				}
@@ -518,8 +521,11 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 		if s.Elem.Len > uint64(x.SliceLen()) {
 			return ErrBounds
 		}
-		if view := x.NativeSlice(); view != nil {
-			put(0, vm.program.nativeViewAddress(s.Elem, vm.program.nativeArrayView(view, s.Elem.Len).array, view.Data))
+		if view := x.ReadNativeSlice(); view != nil {
+			if err := x.OwnBytes(); err != nil {
+				return err
+			}
+			put(0, vm.program.nativeViewAddress(s.Elem, vm.program.nativeArrayView(view, s.Elem.Len).array, x.SliceReadData()))
 			break
 		}
 		v := values.Value{P: x.P}
@@ -571,8 +577,13 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 		if s.Kind == values.MapKind {
 			(*values.Map)(x.P).Clear()
 		} else {
-			if view := x.NativeSlice(); view != nil {
-				view.Layout.Slice.Clear(view.Data, view.Length)
+			if view := x.ReadNativeSlice(); view != nil {
+				if view.Length != 0 {
+					if err := x.OwnBytes(); err != nil {
+						return err
+					}
+					view.Layout.Slice.Clear(x.SliceReadData(), view.Length)
+				}
 			} else {
 				collectionStorageFor(s, op.Packed).clear(x.P, uint64(x.SliceLen()), s.Elem.Cells)
 			}
@@ -597,14 +608,14 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 	case ExtendedAppend, ExtendedCopy:
 		st := collectionStorageFor(s, op.Packed)
 		dst, src := get(0), get(1)
-		if op.Kind == ExtendedAppend && op.Flags == 0 && dst.SliceData() == nil && src.SliceLen() != 0 && s.NativeAllocation != nil {
+		if op.Kind == ExtendedAppend && op.Flags == 0 && dst.SliceReadData() == nil && src.SliceLen() != 0 && s.NativeAllocation != nil {
 			value, err := vm.call.NativeSlice(s.NativeAllocation, s.NativeAllocation.Slice.Element, nil, 0, 0)
 			if err != nil {
 				return err
 			}
 			dst = value
 		}
-		if op.Flags == 0 && (dst.NativeSlice() != nil || src.NativeSlice() != nil) {
+		if op.Flags == 0 && (dst.HasNativeSlice() || src.HasNativeSlice()) {
 			if op.Kind == ExtendedAppend {
 				v, err := vm.call.appendSliceViews(s, dst, src)
 				if err != nil {
@@ -620,10 +631,11 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 			}
 			break
 		}
-		view := dst.NativeSlice()
+		original := dst
+		view := dst.ReadNativeSlice()
 		if view != nil {
 			st.native = view.Layout.Slice
-			dst = values.SliceValue(view.Data, view.Length, view.Capacity)
+			dst = values.SliceValue(original.SliceReadData(), view.Length, view.Capacity)
 		}
 		srcLen := src.R
 		if op.Flags&1 == 0 {
@@ -649,6 +661,12 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 				dst.P = p
 			}
 		}
+		if view != nil && n > 0 && (op.Kind == ExtendedCopy || length <= uint64(view.Capacity)) {
+			if err := original.OwnBytes(); err != nil {
+				return err
+			}
+			dst.P = original.SliceReadData()
+		}
 		var target unsafe.Pointer
 		if n > 0 {
 			target = st.at(dst.P, start, s.Elem.Cells)
@@ -672,7 +690,11 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 			result := values.SliceValue(dst.P, uint32(length), uint32(capacity))
 			if view != nil {
 				var err error
-				result, err = vm.call.NativeSlice(view.Layout, view.Element, dst.P, uint32(length), uint32(capacity))
+				if length <= uint64(view.Capacity) {
+					result, err = vm.call.resliceView(original, 0, uint32(length), uint32(capacity))
+				} else {
+					result, err = vm.call.NativeSlice(view.Layout, view.Element, dst.P, uint32(length), uint32(capacity))
+				}
 				if err != nil {
 					return err
 				}
@@ -722,7 +744,7 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 		}
 	case ExtendedEqual:
 		if s.Kind == values.SliceKind {
-			a, b := get(0).SliceData(), get(1).SliceData()
+			a, b := get(0).SliceReadData(), get(1).SliceReadData()
 			if a != nil && b != nil {
 				return &values.ComparisonError{Type: s.Type.Name()}
 			}

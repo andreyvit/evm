@@ -149,7 +149,7 @@ func (f *lowerer) referenceOwnershipSafeCall(call *ssa.CallCommon, retaining boo
 		case "len", "cap", "real", "imag", "complex", "min", "max", "delete", "clear", "ssa:wrapnilchk":
 			return true
 		}
-		return !retaining && (builtin.Name() == "append" || builtin.Name() == "copy")
+		return byteSliceBuiltin(call, "copy") || byteSliceBuiltin(call, "append") || !retaining && (builtin.Name() == "append" || builtin.Name() == "copy")
 	}
 	if b := f.ownershipBinding(call); b != nil {
 		if b.Ownership == nil {
@@ -238,6 +238,7 @@ func (f *lowerer) referencePlanOwnership() *ownershipPlan {
 			if !ok || f.ownershipIntrinsic(&call.Call) {
 				continue
 			}
+			f.ownIndirectByteResults(call, addClone)
 			binding := f.ownershipBinding(&call.Call)
 			var sources []evm.BorrowSource
 			if binding != nil && binding.Ownership != nil {
@@ -288,7 +289,7 @@ func (f *lowerer) referencePlanOwnership() *ownershipPlan {
 						f.c.fail(ins.Pos(), "borrowed result has no ownership operation")
 						continue
 					}
-					if t == values.StringType || f.isReadRecord(t) {
+					if t == values.StringType || isByteSlice(v.Type()) || f.isReadRecord(t) {
 						add(v, origin)
 					} else {
 						addClone(v.(ssa.Instruction), v, true, "acquisition fallback: opaque borrowed value")
@@ -310,7 +311,7 @@ func (f *lowerer) referencePlanOwnership() *ownershipPlan {
 		}
 		if !t.CanOwn() && localContainers[dst] == nil {
 			s, err := f.c.env.shape(dst.Type())
-			if err != nil || s.Kind != values.InterfaceKind && s.Kind != values.StringKind {
+			if err != nil || s.Kind != values.InterfaceKind && s.Kind != values.StringKind && !isByteSlice(dst.Type()) {
 				return false
 			}
 		}
@@ -371,6 +372,10 @@ func (f *lowerer) referencePlanOwnership() *ownershipPlan {
 					}
 					if assertion, ok := i.Tuple.(*ssa.TypeAssert); ok && i.Index == 0 {
 						changed = merge(i, assertion.X) || changed
+					}
+				case *ssa.Call:
+					if byteSliceBuiltin(&i.Call, "append") {
+						changed = merge(i, i.Call.Args[0]) || changed
 					}
 				case *ssa.Slice:
 					changed = merge(i, i.X) || changed

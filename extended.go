@@ -245,7 +245,7 @@ func (p *Program) validateExtended(f *linkedFunction, op ExtendedOp) bool {
 	case ExtendedRecordCopy:
 		return s.Kind == values.StructKind && s.Cells == 1 && ins(pair) && outs(ptr)
 	case ExtendedOwn:
-		return (s.Type.CanOwn() || s.Kind == values.InterfaceKind || s.Kind == values.StringKind) && ins(s.Type.Repr()) && outs(s.Type.Repr())
+		return (s.Type.CanOwn() || byteSliceShape(s) || s.Kind == values.InterfaceKind || s.Kind == values.StringKind) && ins(s.Type.Repr()) && outs(s.Type.Repr())
 	case ExtendedGetKey, ExtendedSetKey, ExtendedGetChildKey, ExtendedRecordList, ExtendedRecordListLen, ExtendedRecordListIndex:
 		if op.Record == nil || op.Record.Model == nil || op.Index >= VMFieldBase {
 			return false

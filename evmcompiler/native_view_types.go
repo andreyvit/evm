@@ -55,6 +55,27 @@ func (e *typeEnvironment) collectNativeViewLeaves() {
 		}
 	}
 	for _, pkg := range e.packages {
+		// Generic instantiations can introduce a borrow source at compile time.
+		borrowBytes := func(sig evm.Signature, effects *evm.OwnershipEffects) bool {
+			if effects != nil {
+				for _, src := range effects.Borrowed {
+					if src.Result >= 0 && src.Result < len(sig.Results) && sig.Results[src.Result] == evm.ByteSliceType {
+						return true
+					}
+				}
+			}
+			return false
+		}
+		for _, f := range pkg.Functions {
+			if borrowBytes(f.Signature, f.Ownership) || f.Instantiate != nil && e.nativeTypes[evm.ByteSliceType].decl.Shape != nil {
+				e.nativeViewLeaves[values.Uint8] = true
+			}
+		}
+		for _, m := range pkg.Methods {
+			if borrowBytes(m.Signature, m.Ownership) || m.Instantiate != nil && e.nativeTypes[evm.ByteSliceType].decl.Shape != nil {
+				e.nativeViewLeaves[values.Uint8] = true
+			}
+		}
 		for _, row := range pkg.Records {
 			if row.Mutable {
 				for _, prop := range row.Model.AllProps() {

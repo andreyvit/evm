@@ -526,7 +526,7 @@ func (cv recordConverter) encode(k kvo.AnyType, s *values.Shape, v values.Value,
 		}
 		return state.edit.GetPathValue(path), nil
 	}
-	if v.P == nil || s.Kind == values.SliceKind && v.SliceData() == nil {
+	if v.P == nil || s.Kind == values.SliceKind && v.SliceReadData() == nil {
 		return zero, nil
 	}
 	var w row2.Writer

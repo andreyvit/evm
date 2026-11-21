@@ -24,7 +24,7 @@ func (c *Call) Interface(slot int) (*values.Type, values.Value, error) {
 func (c *Call) interfaceSlot(slot int, ts []*values.Type, l Layout) bool {
 	for i, t := range ts {
 		if int(l.Slots[i]) == slot {
-			s := c.program.shapeByType[t]
+			s := c.program.Shape(t)
 			if s != nil && s.Kind == values.InterfaceKind {
 				return true
 			}
@@ -60,7 +60,7 @@ func (c *Call) SetInterface(slot int, t *values.Type, v values.Value) (err error
 	d := &c.program.types[id]
 	for i, rt := range g.Signature.Results {
 		if int(g.results.Slots[i]) == slot {
-			s := c.program.shapeByType[rt]
+			s := c.program.Shape(rt)
 			if s != nil && s.Kind == values.InterfaceKind {
 				if !c.program.implements(d, s) {
 					return fmt.Errorf("dynamic type does not implement result interface")

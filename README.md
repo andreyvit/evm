@@ -783,6 +783,15 @@ Details: [host contracts](_docs/embedding.md), [`evmbind`](evmbind/README.md),
 - `evm.Link(module, packages...)` returns an immutable `*evm.Program`.
   `evm.LinkWithHostData(module, data, packages...)` attaches host data, read
   with `program.HostData()`.
+- `evm.NewLinkEnvironment(packages...)` validates and binds the packages
+  once. Its `Link` and `LinkWithHostData` then do only what the module needs,
+  so a host that links many modules against the same large package set should
+  build one `LinkEnvironment` and keep it. It never changes and is safe for
+  concurrent use. Both ways produce the same program.
+- `env.NewLinkEnvironment(packages...)` on an `evmcompiler.Environment` also
+  shares the linked storage shapes of the host types among the programs of
+  the modules that environment compiles. Pass the bound packages; a program
+  then keeps only the tables of its own module.
 - `evm.New(program)` creates a session. Initialization runs once, before the
   first call. Package variables persist until `vm.Reset()`.
 - `vm.RunEntryNative(ctx, "Entry", []any{...}, results, budget)` passes and
@@ -1151,6 +1160,9 @@ Details: the [GoX guide](gox/README.md).
 - `Options.Format`: `gox.HTMLFormat`, `gox.TextFormat` or `gox.CSSFormat`.
 - `tmpl.Link(packages...)` returns a `*gox.Program`. It renders concurrently;
   each render has its own package variables and builder.
+- `env.NewLinkEnvironment(packages...)` on a `gox.Environment` prepares the
+  bound packages once; its `Link(tmpl)` and `LinkModule(module)` replace
+  `tmpl.Link` and `gox.LinkModule` for a host that links many templates.
 - `program.RenderNative(ctx, []any{...}, options)` renders the entry with Go
   values. `program.RenderFuncNative(ctx, "Card", args, options)` picks a
   function by name.

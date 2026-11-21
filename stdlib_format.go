@@ -594,7 +594,7 @@ func standardPrint(c *Call) error {
 	// strings.Builder writes cannot fail.
 	var text strings.Builder
 	for i, t := range g.Signature.Params {
-		s := c.program.shapeByType[t]
+		s := c.program.Shape(t)
 		v := c.argument(i)
 		if s.Kind == values.InterfaceKind {
 			var err error

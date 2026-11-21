@@ -1,7 +1,6 @@
 package evm
 
 import (
-	"fmt"
 	"github.com/andreyvit/evm/nativebind"
 	"github.com/andreyvit/evm/values"
 	"maps"
@@ -193,34 +192,16 @@ type nativeSliceType struct {
 	decl    *NativeSliceDecl
 }
 
-func (p *Program) linkNativeSlices(packages []Package) error {
-	p.nativeSliceTypes = make(map[reflect.Type]nativeSliceType)
-	p.nativeSliceLayouts = make(map[*values.NativeLayout]*NativeSliceDecl)
-	p.nativeSliceLogicalTypes = make(map[nativeSliceLogicalKey]reflect.Type)
-	for _, pkg := range packages {
-		for _, decl := range pkg.Types {
-			if decl.NativeSlice != nil {
-				if err := validateModelLayout(decl.NativeSlice.Layout, make(map[*values.NativeLayout]bool)); err != nil {
-					return err
-				}
-				if decl.Shape.Kind != values.SliceKind || decl.NativeSlice.Layout.Slice == nil || decl.NativeSlice.Element == nil || decl.NativeSlice.Element != decl.NativeSlice.Layout.Slice.Element {
-					return fmt.Errorf("native slice declaration layout mismatch")
-				}
-				if err := validateModelShape(decl.Shape, decl.NativeSlice.Layout); err != nil {
-					return err
-				}
-				if old, ok := p.nativeSliceTypes[decl.NativeSlice.Layout.GoType]; ok && old.logical != decl.Shape.Type {
-					return fmt.Errorf("native slice %s has conflicting logical types", decl.NativeSlice.Layout.GoType)
-				}
-				seen := make(map[*values.NativeLayout]*values.NativeLayout)
-				binding := &NativeSliceDecl{Layout: snapshotNativeLayout(decl.NativeSlice.Layout, seen), Element: snapshotNativeLayout(decl.NativeSlice.Element, seen)}
-				p.nativeSliceTypes[decl.NativeSlice.Layout.GoType] = nativeSliceType{decl.Shape.Type, p.Shape(decl.Shape.Type), binding}
-				p.nativeSliceLayouts[decl.NativeSlice.Layout] = binding
-				p.nativeSliceLogicalTypes[nativeSliceLogicalKey{decl.Shape.Type, decl.NativeSlice.Layout.GoType.Elem()}] = decl.NativeSlice.Layout.GoType
-			}
-		}
+// linkNativeSlices gives each native slice declaration its shape in this
+// program. The declarations themselves belong to the environment.
+func (p *Program) linkNativeSlices(e *LinkEnvironment) {
+	p.nativeSliceLayouts = e.nativeSliceLayouts
+	p.nativeSliceLogicalTypes = e.nativeSliceLogicalTypes
+	p.nativeSliceTypes = make(map[reflect.Type]nativeSliceType, len(e.nativeSlices))
+	for _, binding := range e.nativeSlices {
+		binding.shape = p.Shape(binding.logical)
+		p.nativeSliceTypes[binding.decl.Layout.GoType] = binding
 	}
-	return nil
 }
 
 type nativeArrayViewKey struct {

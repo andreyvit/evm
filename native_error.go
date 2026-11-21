@@ -34,15 +34,13 @@ func nativeErrorProtocol(err error) int {
 	return n
 }
 
-func (p *Program) linkNativeErrors(shapes map[*values.Shape]*values.Shape) error {
-	needed := false
-	for _, s := range shapes {
-		if s.Kind == values.InterfaceKind {
-			needed = true
-			break
-		}
-	}
-	if !needed {
+// linkNativeErrors adds this many dynamic types and native methods: each of
+// the six error protocols has Error, four have Unwrap and three have Is.
+// Link reserves room for them.
+const nativeErrorTypes, nativeErrorNatives = 6, 6 + 4 + 3
+
+func (p *Program) linkNativeErrors(shapes *shapeSnapshots) error {
+	if !shapes.hasInterface() {
 		return nil
 	}
 	for i, s := range nativeErrorShapes {

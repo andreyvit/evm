@@ -72,6 +72,25 @@ func throwaway(packages []evm.Package) *Environment {
 // Packages returns the packages the environment was built from.
 func (env *Environment) Packages() []evm.Package { return slices.Clone(env.packages) }
 
+// Shapes returns the storage shapes of the host types. The modules the
+// environment compiles list a selection of them, the same shapes every time,
+// along with shapes of their own. The shapes never change.
+func (env *Environment) Shapes() []*values.Shape {
+	if env.real == nil {
+		return nil
+	}
+	return slices.Clone(env.real.shapeOrder)
+}
+
+// NewLinkEnvironment prepares packages for linking the modules this
+// environment compiles. The packages declare what the environment was built
+// from and bind the implementations, which a compile does not need. Programs
+// linked through the result share the linked form of the host shapes; see
+// [evm.LinkOptions].
+func (env *Environment) NewLinkEnvironment(packages ...evm.Package) (*evm.LinkEnvironment, error) {
+	return evm.LinkOptions{Shapes: env.Shapes()}.NewEnvironment(packages...)
+}
+
 // NewFileSet returns a file set for syntax passed to Analyze and AnalyzeFiles.
 // It already holds the host sources, so positions of host declarations
 // resolve in it. The host files are shared, not copied.

@@ -247,7 +247,12 @@ func hostArg(bank values.Repr, slot int, r []uint64, p []unsafe.Pointer) (v valu
 // ValidateDirectBindings checks register conventions against the declared packages.
 // A compiler schema may omit implementations until Link binds it to a host.
 func ValidateDirectBindings(packages []Package) error {
-	var kinds map[*values.Type]values.Repr
+	return validateDirectBindings(packages, nil)
+}
+
+// validateDirectBindings checks packages against the host types in kinds, or
+// against their own declarations if kinds is nil.
+func validateDirectBindings(packages []Package, kinds map[*values.Type]values.Repr) error {
 	check := func(d DirectBinding, sig Signature, method, variadic bool) bool {
 		if d.Op == 0 {
 			return d.Call == nil && !d.Window && d.word == nil

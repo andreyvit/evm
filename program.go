@@ -359,7 +359,7 @@ type Program struct {
 	defers                  []DeferOp
 	methodIDs               map[string]uint32
 	requirements            map[*values.Shape][]methodRequirement
-	shapeByType             map[*values.Type]*values.Shape
+	shapeByType             map[*values.Type]*values.Shape // the program's own snapshots
 	nativeGoShapes          map[reflect.Type]*values.Shape
 	nativeModels            map[reflect.Type]nativeModelBinding
 	nativeRecordModels      map[*values.Type]*kvo.Model
@@ -383,6 +383,10 @@ type Program struct {
 	init                    int
 	floatLoops              []floatLoop
 	sourceBranches          map[string]map[int]SourceBranch
+	// New fields go last: the VM reads the tables above on every
+	// instruction, and their places in the struct are part of its timing.
+	sharedShapes *sharedShapes // the environment's snapshots, or nil
+	sharedSeen   []uint64      // those this program reaches
 }
 
 func copySignature(s Signature) Signature {
@@ -404,10 +408,21 @@ func Link(m *Module, packages ...Package) (*Program, error) {
 // program. There is no setter; derived runtimes can retain their compiled data
 // without a separate program registry.
 func LinkWithHostData(m *Module, hostData any, packages ...Package) (*Program, error) {
-	packages, err := WithTimePackage(packages)
-	if err != nil {
-		return nil, err
+	p, err := newLinkEnvironment(packages, false).link(m, hostData)
+	if linkCrossCheck != nil {
+		linkCrossCheck(m, hostData, packages, p, err)
 	}
+	return p, err
+}
+
+// linkCrossCheck is set by the evmcrosscheck build; see link_crosscheck.go.
+var linkCrossCheck func(m *Module, hostData any, packages []Package, p *Program, err error)
+
+func (e *LinkEnvironment) link(m *Module, hostData any) (*Program, error) {
+	if e.packagesErr != nil {
+		return nil, e.packagesErr
+	}
+	packages := e.packages
 	if m == nil {
 		return nil, fmt.Errorf("nil module")
 	}
@@ -415,34 +430,30 @@ func LinkWithHostData(m *Module, hostData any, packages ...Package) (*Program, e
 		return nil, fmt.Errorf("invalid function/import count")
 	}
 	p := &Program{hostData: hostData, jsonTypes: m.JSONTypes, methodIDs: make(map[string]uint32), requirements: make(map[*values.Shape][]methodRequirement), typeIDs: make(map[*values.Type]uint32), words: slices.Clone(m.Words), entries: make(map[string]int), conversions: slices.Clone(m.Conversions)}
-	p.nativeCodecs = make(map[*values.Type]*NativeValueCodec)
-	for _, pkg := range packages {
-		for _, d := range pkg.Types {
-			if d.NativeCodec == nil {
-				continue
-			}
-			if d.Shape == nil || d.Shape.Type == nil || d.NativeCodec.Decode == nil || d.NativeCodec.Encode == nil {
-				return nil, fmt.Errorf("invalid native value codec")
-			}
-			if old := p.nativeCodecs[d.Shape.Type]; old != nil && old != d.NativeCodec {
-				return nil, fmt.Errorf("conflicting native value codecs for %v", d.Shape.Type)
-			}
-			p.nativeCodecs[d.Shape.Type] = d.NativeCodec
-		}
+	if e.codecsErr != nil {
+		return nil, e.codecsErr
 	}
-	for typ, codec := range p.nativeCodecs {
-		copy := *codec
-		p.nativeCodecs[typ] = &copy
-	}
+	p.nativeCodecs = e.nativeCodecs
 	p.init = -1
 	p.nativeImports = len(m.Imports)
-	seenShapes := make(map[*values.Shape]*values.Shape)
+	shapes := newShapeSnapshots(e.shapes)
+	p.shapes = make([]*values.Shape, 0, len(m.Shapes))
+	p.globals = make([]*values.Shape, 0, len(m.Globals))
+	p.extendedOps = make([]ExtendedOp, 0, len(m.ExtendedOps))
+	p.strings = make([]values.Value, 0, len(m.Strings))
+	p.functions = make([]linkedFunction, 0, len(m.Functions))
+	// Native error and panic types add their methods after the imports.
+	natives := len(m.Imports) + panicNatives
+	if len(m.Types) > 1 {
+		natives += nativeErrorNatives
+	}
+	p.natives = make([]linkedNative, 0, natives)
 	for _, set := range []struct {
 		from []*values.Shape
 		to   *[]*values.Shape
 	}{{m.Shapes, &p.shapes}, {m.Globals, &p.globals}} {
 		for _, s := range set.from {
-			c, err := snapshotShape(s, seenShapes)
+			c, err := shapes.snapshot(s)
 			if err != nil {
 				return nil, err
 			}
@@ -457,14 +468,7 @@ func LinkWithHostData(m *Module, hostData any, packages ...Package) (*Program, e
 	}
 	for _, op := range m.ExtendedOps {
 		if op.Kind == ExtendedGetKey || op.Kind == ExtendedSetKey || op.Kind == ExtendedGetChildKey || op.Kind == ExtendedRecordList || op.Kind == ExtendedRecordListLen || op.Kind == ExtendedRecordListIndex {
-			found := false
-			for _, pkg := range packages {
-				if slices.Contains(pkg.Records, op.Record) && op.Record != nil {
-					found = true
-					break
-				}
-			}
-			if !found {
+			if !e.records[op.Record] {
 				return nil, fmt.Errorf("missing KVO record declaration")
 			}
 			frozen := *op.Record
@@ -486,11 +490,11 @@ func LinkWithHostData(m *Module, hostData any, packages ...Package) (*Program, e
 			}
 		}
 		var err error
-		op.Shape, err = snapshotShape(op.Shape, seenShapes)
+		op.Shape, err = shapes.snapshot(op.Shape)
 		if err != nil {
 			return nil, err
 		}
-		op.Source, err = snapshotShape(op.Source, seenShapes)
+		op.Source, err = shapes.snapshot(op.Source)
 		if err != nil {
 			return nil, err
 		}
@@ -509,8 +513,8 @@ func LinkWithHostData(m *Module, hostData any, packages ...Package) (*Program, e
 		p.extendedOps = append(p.extendedOps, op)
 	}
 	shapeStates := make(map[*values.Shape]shapeValidationState)
-	for _, s := range seenShapes {
-		if !validateStorageShape(s, shapeStates) {
+	for _, s := range shapes.order {
+		if !validateStorageShape(s, shapeStates, e.shapes) {
 			return nil, fmt.Errorf("invalid storage layout for %s", s.Type.Name())
 		}
 	}
@@ -525,86 +529,33 @@ func LinkWithHostData(m *Module, hostData any, packages ...Package) (*Program, e
 	for _, s := range m.Strings {
 		p.strings = append(p.strings, values.String(s))
 	}
-	type exportKey struct {
-		path, name string
-		receiver   *values.Type
-	}
-	exports := make(map[exportKey]*ExternalFunction)
-	if err := ValidateDirectBindings(packages); err != nil {
-		return nil, err
-	}
-	var records map[*values.Type]*RecordType
-	var pairResults map[*values.Type]bool
-	paths := make(map[string]bool)
-	for i := range packages {
-		pkg := &packages[i]
-		if _, reserved := StandardLibrarySource(pkg.Path); reserved || pkg.Path == "evm/debug" {
-			return nil, fmt.Errorf("reserved virtual package %q", pkg.Path)
-		}
-		if pkg.Path == "" || paths[pkg.Path] {
-			return nil, fmt.Errorf("empty or duplicate package %q", pkg.Path)
-		}
-		paths[pkg.Path] = true
-		receivers := pkg.methodReceivers()
-		for i := range pkg.Methods {
-			m := &pkg.Methods[i]
-			if !receivers.owns(m.Receiver) {
-				return nil, fmt.Errorf("method receiver is not declared by package %s", pkg.Path)
-			}
-			key := exportKey{pkg.Path, m.Name, m.Receiver}
-			if m.Receiver == nil || m.Name == "" || m.Call == nil && m.Direct.Call == nil && m.Instantiate == nil {
-				return nil, fmt.Errorf("invalid native method")
-			}
-			if _, ok := exports[key]; ok {
-				return nil, fmt.Errorf("duplicate native method")
-			}
-			if m.Direct.Op != 0 && m.Direct.Call == nil {
-				return nil, fmt.Errorf("unbound direct method %s.%s", pkg.Path, m.Name)
-			}
-			binding := m.Binding()
-			exports[key] = &binding
-		}
-
-		for _, v := range pkg.Values {
-			key := exportKey{pkg.Path, v.LinkName(), nil}
-			if _, exists := exports[key]; exists || v.Name == "" || v.Type == nil || v.Read == nil {
-				return nil, fmt.Errorf("invalid or duplicate package value %s.%s", pkg.Path, v.Name)
-			}
-			exports[key] = &ExternalFunction{Name: v.LinkName(), Signature: Signature{Results: []*values.Type{v.Type}}, Call: v.Read}
-		}
-
-		for i := range pkg.Functions {
-			f := &pkg.Functions[i]
-			key := exportKey{pkg.Path, f.LinkName(), nil}
-			if _, ok := exports[key]; ok || f.Name == "" {
-				return nil, fmt.Errorf("invalid or duplicate external function %s.%s", pkg.Path, f.Name)
-			}
-			if f.Direct.Op != 0 && f.Direct.Call == nil {
-				return nil, fmt.Errorf("unbound direct function %s.%s", pkg.Path, f.Name)
-			}
-			if f.Call == nil && f.Direct.Call == nil && f.Instantiate == nil {
-				return nil, fmt.Errorf("%s.%s needs a native binding", pkg.Path, f.Name)
-			}
-			exports[key] = f
-		}
+	if e.bindingsErr != nil {
+		return nil, e.bindingsErr
 	}
 	for i := range m.Imports {
 		imp := &m.Imports[i]
-		declaration, ok := exports[exportKey{imp.Package, imp.Name, imp.Receiver}]
-		if !ok && imp.Receiver == nil {
-			if f, found := BindStandardFunction(imp.Package, imp.Name, imp.Signature); found {
-				if err := validateStandardSignature(imp, seenShapes); err != nil {
+		// Copy the declaration: the host owns it, and a program keeps its
+		// own signature and effects.
+		var f ExternalFunction
+		export, ok := e.exports[exportKey{imp.Package, imp.Name, imp.Receiver}]
+		resolved := export.resolved
+		if resolved != nil {
+			f = resolved.native.ExternalFunction
+		} else if ok {
+			f = *export.declared
+		} else if imp.Receiver == nil {
+			if standard, found := BindStandardFunction(imp.Package, imp.Name, imp.Signature); found {
+				if err := validateStandardSignature(imp, shapes); err != nil {
 					return nil, err
 				}
-				declaration, ok = f, true
+				f, ok = *standard, true
 			}
 		}
 		if !ok {
 			return nil, fmt.Errorf("unresolved import %s.%s", imp.Package, imp.Name)
 		}
-		// Copy the binding before snapshotting its signature; registration remains mutable.
-		f := *declaration
 		if f.Instantiate != nil {
+			name := f.Name
 			var err error
 			for _, arg := range imp.TypeArgs {
 				if arg == nil {
@@ -612,7 +563,7 @@ func LinkWithHostData(m *Module, hostData any, packages ...Package) (*Program, e
 				}
 			}
 			f, err = f.Instantiate(slices.Clone(imp.TypeArgs))
-			f.Name = declaration.Name
+			f.Name = name
 			if err != nil {
 				return nil, fmt.Errorf("%s.%s: %w", imp.Package, imp.Name, err)
 			}
@@ -629,57 +580,31 @@ func LinkWithHostData(m *Module, hostData any, packages ...Package) (*Program, e
 					}
 					instance.Methods = []ExternalMethod{{Name: imp.Name, Receiver: imp.Receiver, Signature: Signature{Params: f.Signature.Params[1:], Results: f.Signature.Results}, Direct: f.Direct, Variadic: f.Variadic}}
 				}
-				if err := ValidateDirectBindings(append(slices.Clone(packages), instance)); err != nil {
+				// The host types of the prepared packages decide which
+				// register forms fit the instance.
+				if err := validateDirectBindings([]Package{instance}, e.hostKinds); err != nil {
 					return nil, err
 				}
 			}
 		} else if len(imp.TypeArgs) != 0 {
 			return nil, fmt.Errorf("unexpected type arguments for %s.%s", imp.Package, imp.Name)
 		}
-		if err := f.Ownership.Validate(f.Signature); err != nil {
-			return nil, fmt.Errorf("%s.%s: %w", imp.Package, imp.Name, err)
+		if resolved == nil {
+			resolved = e.resolve(f, imp.Receiver != nil)
 		}
-		if !imp.Ownership.Equal(f.Ownership) {
+		if resolved.ownershipErr != nil {
+			return nil, fmt.Errorf("%s.%s: %w", imp.Package, imp.Name, resolved.ownershipErr)
+		}
+		if !imp.Ownership.Equal(resolved.native.Ownership) {
 			return nil, fmt.Errorf("ownership effects mismatch for %s.%s", imp.Package, imp.Name)
 		}
-		f.Ownership = f.Ownership.Clone()
-		if !sameSignature(imp.Signature, f.Signature) {
+		if !sameSignature(imp.Signature, resolved.native.Signature) {
 			return nil, fmt.Errorf("signature mismatch for %s.%s", imp.Package, imp.Name)
 		}
-		f.Signature = copySignature(f.Signature)
-		args, err := ParameterLayout(f.Signature.Params, imp.Receiver != nil)
-		if err != nil {
-			return nil, err
+		if resolved.layoutErr != nil {
+			return nil, resolved.layoutErr
 		}
-		results, err := LayoutOf(f.Signature.Results)
-		if err != nil {
-			return nil, err
-		}
-		g := linkNative(f, args, results)
-		if g.resultString {
-			if pairResults == nil {
-				pairResults = make(map[*values.Type]bool)
-				for _, pkg := range packages {
-					for _, decl := range pkg.Types {
-						if decl.Shape != nil && decl.Shape.Kind == values.TypedPairKind {
-							pairResults[decl.Shape.Type] = true
-						}
-					}
-				}
-			}
-			g.resultString = !pairResults[f.Signature.Results[0]]
-		}
-		if g.form != nil && (g.form.result == values.Pointer || g.form.result == values.Pair) {
-			if records == nil {
-				records = recordResults(packages)
-			}
-			if r := records[f.Signature.Results[0]]; r != nil {
-				snapshot := *r
-				g.record = &snapshot
-				g.resultString = false
-			}
-		}
-		p.natives = append(p.natives, g)
+		p.natives = append(p.natives, resolved.native)
 	}
 	if len(m.SourceBranches) != 0 {
 		p.sourceBranches = make(map[string]map[int]SourceBranch, len(m.SourceBranches))
@@ -738,19 +663,19 @@ func LinkWithHostData(m *Module, hostData any, packages ...Package) (*Program, e
 	if err := p.linkFunctions(m); err != nil {
 		return nil, err
 	}
-	if err := p.linkInterfaces(m, seenShapes); err != nil {
+	if err := p.linkInterfaces(m, shapes, e.shapes); err != nil {
 		return nil, err
 	}
 	if err := p.checkJSONTypes(); err != nil {
 		return nil, err
 	}
 	shapeStates = make(map[*values.Shape]shapeValidationState)
-	for _, s := range seenShapes {
-		if !validateStorageShape(s, shapeStates) {
+	for _, s := range shapes.order {
+		if !validateStorageShape(s, shapeStates, e.shapes) {
 			return nil, fmt.Errorf("invalid storage layout for %s", s.Type.Name())
 		}
 	}
-	if err := p.linkNativeErrors(seenShapes); err != nil {
+	if err := p.linkNativeErrors(shapes); err != nil {
 		return nil, err
 	}
 	if err := p.linkPanicTypes(); err != nil {
@@ -771,32 +696,55 @@ func LinkWithHostData(m *Module, hostData any, packages ...Package) (*Program, e
 	if err := p.linkDefers(m); err != nil {
 		return nil, err
 	}
-	p.shapeByType = make(map[*values.Type]*values.Shape, len(seenShapes))
+	// The program lists its own snapshots by type and finds the shared ones
+	// it reaches through the environment; see Shape.
+	p.sharedShapes, p.sharedSeen = e.shapes, shapes.seen
+	p.shapeByType = make(map[*values.Type]*values.Shape, len(shapes.own))
 	p.nativeGoShapes = make(map[reflect.Type]*values.Shape)
-	for _, s := range seenShapes {
-		p.shapeByType[s.Type] = s
-		if s.Native != nil && s.Native.GoType != nil && s.Kind != values.InterfaceKind && p.typeIDs[s.Type] != 0 {
-			typ := s.Native.GoType
-			if old := p.nativeGoShapes[typ]; old != nil && old.Type != s.Type && typ.Kind() == reflect.Pointer && (old.Type.Repr() == values.Pointer || s.Type.Repr() == values.Pointer) {
-				return nil, fmt.Errorf("conflicting opaque native pointer identities for %v: %s and %s", typ, old.Type.Name(), s.Type.Name())
-			}
-			if old := p.nativeGoShapes[typ]; old == nil || s.Type.Name() < old.Type.Name() {
-				p.nativeGoShapes[typ] = s
-			}
+	concrete := func(s *values.Shape) error {
+		if p.typeIDs[s.Type] == 0 {
+			return nil
+		}
+		typ := s.Native.GoType
+		if old := p.nativeGoShapes[typ]; old != nil && old.Type != s.Type && typ.Kind() == reflect.Pointer && (old.Type.Repr() == values.Pointer || s.Type.Repr() == values.Pointer) {
+			return fmt.Errorf("conflicting opaque native pointer identities for %v: %s and %s", typ, old.Type.Name(), s.Type.Name())
+		}
+		if old := p.nativeGoShapes[typ]; old == nil || s.Type.Name() < old.Type.Name() {
+			p.nativeGoShapes[typ] = s
+		}
+		return nil
+	}
+	required := func(s *values.Shape) error {
+		for _, m := range s.Methods {
+			p.requirements[s] = append(p.requirements[s], methodRequirement{p.methodID(m.ID), m})
+		}
+		return nil
+	}
+	for _, s := range shapes.order {
+		if p.shapeByType[s.Type] == nil {
+			p.shapeByType[s.Type] = s
 		}
 		if s.Kind == values.InterfaceKind {
-			for _, m := range s.Methods {
-				p.requirements[s] = append(p.requirements[s], methodRequirement{p.methodID(m.ID), m})
+			required(s)
+		} else if s.Native != nil && s.Native.GoType != nil {
+			if err := concrete(s); err != nil {
+				return nil, err
 			}
 		}
-
+	}
+	if e.shapes != nil {
+		if err := shapes.eachShared(e.shapes.nativeGo, concrete); err != nil {
+			return nil, err
+		}
+		shapes.eachShared(e.shapes.interfaces, required)
 	}
 	if err := p.linkNativeModels(packages); err != nil {
 		return nil, err
 	}
-	if err := p.linkNativeSlices(packages); err != nil {
-		return nil, err
+	if e.nativeSlicesErr != nil {
+		return nil, e.nativeSlicesErr
 	}
+	p.linkNativeSlices(e)
 	for i := range p.functions {
 		f := &p.functions[i]
 		for pc, ins := range f.Code {

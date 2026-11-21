@@ -134,13 +134,13 @@ func defaultOutput(text string) error { log.Print(text); return nil }
 
 func standardPrimitive(path, name string) bool { _, _, ok := standardSignature(path, name); return ok }
 
-func validateStandardSignature(imp *Import, shapes map[*values.Shape]*values.Shape) error {
+func validateStandardSignature(imp *Import, shapes *shapeSnapshots) error {
 	if imp.Package == "evm/debug" {
 		if len(imp.Signature.Results) != 0 {
 			return fmt.Errorf("debug output cannot return values")
 		}
 		for _, t := range imp.Signature.Params {
-			if standardShape(t, shapes) == nil {
+			if shapes.ofType(t) == nil {
 				return fmt.Errorf("debug argument has no storage shape")
 			}
 		}
@@ -163,15 +163,7 @@ func validateStandardSignature(imp *Import, shapes map[*values.Shape]*values.Sha
 	}
 	return nil
 }
-func standardShape(t *values.Type, shapes map[*values.Shape]*values.Shape) *values.Shape {
-	for _, s := range shapes {
-		if s.Type == t {
-			return s
-		}
-	}
-	return nil
-}
-func matchesStandardType(name string, t *values.Type, shapes map[*values.Shape]*values.Shape) bool {
+func matchesStandardType(name string, t *values.Type, shapes *shapeSnapshots) bool {
 	var want *values.Type
 	switch name {
 	case "string":
@@ -202,7 +194,7 @@ func matchesStandardType(name string, t *values.Type, shapes map[*values.Shape]*
 		if !strings.HasPrefix(name, "[]") {
 			return false
 		}
-		s := standardShape(t, shapes)
+		s := shapes.ofType(t)
 		return s != nil && s.Kind == values.SliceKind && matchesStandardType(name[2:], s.Elem.Type, shapes)
 	}
 	return t == want

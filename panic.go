@@ -35,6 +35,11 @@ var runtimeErrorObjectShape = &values.Shape{Type: values.NewType("runtime.errorS
 var runtimeErrorShape = &values.Shape{Type: values.NewType("*runtime.errorString", values.Pointer), Kind: values.PointerKind, Cells: 1, Elem: runtimeErrorObjectShape}
 var panicNilShape = &values.Shape{Type: values.NewType("*runtime.PanicNilError", values.Pointer), Kind: values.PointerKind, Cells: 1, Elem: runtimeErrorObjectShape}
 
+// linkPanicTypes adds at most this many dynamic types and native methods:
+// the panic message string, and two runtime errors with two methods each.
+// Link reserves room for them.
+const panicTypes, panicNatives = 3, 4
+
 func (p *Program) linkPanicTypes() error {
 	needed := false
 	for _, g := range p.natives {

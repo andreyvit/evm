@@ -19,6 +19,16 @@ too. Keep all of it out of the loop that runs the program. Reusing a VM and its
 argument and result storage avoids allocations after the VM's storage has
 grown.
 
+A host that compiles and links many scripts against one package set prepares
+the packages once: `evmcompiler.NewEnvironment(declared...)` for compiling and
+its `NewLinkEnvironment(bound...)` for linking. Each compile then checks only
+the script. Each link copies only the tables of its module; the programs
+share the bindings and the linked storage shapes of the host types, which the
+VM and native bindings only read. Both environments are immutable and safe
+for concurrent use, and the packages must not change while they are in use.
+A program of such a module knows the shapes its module reaches, as one linked
+from the package list does: `Program.Shape` returns nil for the others.
+
 Arguments/results use [`values.Value`](../values/README.md). Their types come
 from the entry signature. `vm.RunEntryNative(ctx, "Bonus", []any{int64(1500)},
 out, evm.Budget{})` takes and returns ordinary Go values instead, including

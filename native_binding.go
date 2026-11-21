@@ -43,8 +43,28 @@ func (p *Program) InterfaceType(v values.Value) *values.Type {
 	return p.types[id].shape.Type
 }
 
-// Shape returns immutable linked storage metadata for a host adapter.
-func (p *Program) Shape(t *values.Type) *values.Shape { return p.shapeByType[t] }
+// Shape returns immutable linked storage metadata for a host adapter, or nil
+// for a type the module does not reach.
+func (p *Program) Shape(t *values.Type) *values.Shape {
+	// Small enough to inline, as native calls expect of a program without
+	// shared shapes.
+	if p.sharedShapes != nil {
+		return p.sharedShape(t)
+	}
+	return p.shapeByType[t]
+}
+
+// sharedShape looks among the environment's snapshots first: a host type
+// costs one map read and a bit test. Inlining it would make Shape too large
+// to inline.
+//
+//go:noinline
+func (p *Program) sharedShape(t *values.Type) *values.Shape {
+	if s := p.sharedShapes.ofType(t, p.sharedSeen); s != nil {
+		return s
+	}
+	return p.shapeByType[t]
+}
 
 // UnpackInterface reads a program-local interface payload for a host adapter.
 func (p *Program) UnpackInterface(v values.Value) (*values.Shape, values.Value, error) {

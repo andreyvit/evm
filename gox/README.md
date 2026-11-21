@@ -832,6 +832,16 @@ own sources. Build one `Environment` per package set and keep it: it never
 changes and is safe for concurrent use. `env.Compiler()` compiles ordinary Go
 against the same packages.
 
+`env.NewLinkEnvironment(packages...)` does the same for linking: it validates
+and binds the packages once, and `links.Link(tmpl)` and
+`links.LinkModule(module)` then cost and keep only what the template itself
+needs. Programs of templates that `env` compiled share the linked storage
+shapes of the host types. A host that compiles Go through a separate
+`evmcompiler.Environment` names both in
+`gox.LinkOptions{Compilers: ...}.NewEnvironment(packages...)`. Without a
+compile environment, `gox.NewLinkEnvironment(packages...)` still binds the
+packages once.
+
 To let templates use a Go package, give [`evmbind.New`](../evmbind/README.md)
 that package's own source; it exposes every exported type, method, function
 and constant. Pass `schema.Package()` to `Compile` and `schema.Bind(nil)` to

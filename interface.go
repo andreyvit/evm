@@ -2,6 +2,8 @@ package evm
 
 import (
 	"fmt"
+	"slices"
+
 	"github.com/andreyvit/evm/values"
 )
 
@@ -66,8 +68,9 @@ func methodSignature(s *values.Shape) Signature {
 	}
 	return sig
 }
-func (p *Program) linkInterfaces(m *Module, seen map[*values.Shape]*values.Shape) error {
-	p.types = make([]linkedDynamicType, 1, max(1, len(m.Types)))
+func (p *Program) linkInterfaces(m *Module, shapes *shapeSnapshots, shared *sharedShapes) error {
+	p.types = make([]linkedDynamicType, 1, max(1, len(m.Types))+nativeErrorTypes+panicTypes)
+	p.invokes = make([]linkedInvoke, 0, len(m.Invokes))
 	for id, t := range m.Types {
 		if id == 0 {
 			if t.Shape != nil || len(t.Methods) != 0 {
@@ -75,22 +78,27 @@ func (p *Program) linkInterfaces(m *Module, seen map[*values.Shape]*values.Shape
 			}
 			continue
 		}
-		s, err := snapshotShape(t.Shape, seen)
+		s, err := shapes.snapshot(t.Shape)
 		if err != nil {
 			return err
 		}
-		if s != nil && !validateStorageShape(s, make(map[*values.Shape]shapeValidationState)) {
+		if s != nil && !validateStorageShape(s, make(map[*values.Shape]shapeValidationState), shared) {
 			return fmt.Errorf("invalid dynamic type storage")
 		}
 		if s == nil || s.Kind == values.InterfaceKind {
 			return fmt.Errorf("invalid dynamic concrete type")
 		}
-		d := linkedDynamicType{shape: s, methods: map[uint32]*DynamicMethod{}}
+		d := linkedDynamicType{shape: s}
+		if len(t.Methods) != 0 {
+			d.methods = make(map[uint32]*DynamicMethod, len(t.Methods))
+		}
+		methods := slices.Clone(t.Methods)
 		if _, ok := p.typeIDs[s.Type]; ok {
 			return fmt.Errorf("duplicate dynamic type")
 		}
 		p.typeIDs[s.Type] = uint32(len(p.types))
-		for _, method := range t.Methods {
+		for i := range methods {
+			method := &methods[i]
 			if method.ID == "" {
 				return fmt.Errorf("empty method identity")
 			}
@@ -108,7 +116,7 @@ func (p *Program) linkInterfaces(m *Module, seen map[*values.Shape]*values.Shape
 				return fmt.Errorf("method target captures")
 			}
 			method.Signature = copySignature(method.Signature)
-			d.methods[p.methodID(method.ID)] = &method
+			d.methods[p.methodID(method.ID)] = method
 		}
 		p.types = append(p.types, d)
 	}
@@ -117,7 +125,7 @@ func (p *Program) linkInterfaces(m *Module, seen map[*values.Shape]*values.Shape
 			return fmt.Errorf("invalid invoke signature")
 		}
 		var err error
-		op.Method.Signature, err = snapshotShape(op.Method.Signature, seen)
+		op.Method.Signature, err = shapes.snapshot(op.Method.Signature)
 		if err != nil {
 			return err
 		}

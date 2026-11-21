@@ -257,6 +257,14 @@ func runEnvironmentModule(t testing.TB, f *environmentFixture, m *evm.Module) st
 	if err != nil {
 		t.Fatal(err)
 	}
+	return runEnvironmentProgram(t, f, m, p)
+}
+
+func runEnvironmentProgram(t interface {
+	Helper()
+	Fatal(...any)
+}, f *environmentFixture, m *evm.Module, p *evm.Program) string {
+	t.Helper()
 	vm := evm.New(p)
 	out := make([]values.Value, 1)
 	if err := vm.Run(context.Background(), "Run", nil, out); err != nil {

@@ -86,11 +86,23 @@ const (
 	ExtendedNativeAddress
 )
 
+// snapshotShape copies a shape and everything it refers to, reusing the
+// copies in seen.
 func snapshotShape(s *values.Shape, seen map[*values.Shape]*values.Shape) (*values.Shape, error) {
+	return (&shapeSnapshots{own: seen}).snapshot(s)
+}
+
+func (t *shapeSnapshots) snapshot(s *values.Shape) (*values.Shape, error) {
 	if s == nil {
 		return nil, nil
 	}
-	if c := seen[s]; c != nil {
+	if t.shared != nil {
+		if i, ok := t.shared.index[s]; ok {
+			t.reach(i)
+			return t.shared.snapshots[i], nil
+		}
+	}
+	if c := t.own[s]; c != nil {
 		return c, nil
 	}
 	if s.Type == nil || s.Kind < values.BoolKind || s.Kind > values.NativeValueKind || s.Cells > 1<<32 {
@@ -118,13 +130,14 @@ func snapshotShape(s *values.Shape, seen map[*values.Shape]*values.Shape) (*valu
 		c.Native = snapshotNativeLayout(s.Native, make(map[*values.NativeLayout]*values.NativeLayout))
 	}
 	c.NativeAllocation = snapshotNativeLayout(s.NativeAllocation, make(map[*values.NativeLayout]*values.NativeLayout))
-	seen[s] = &c
+	t.own[s] = &c
+	t.order = append(t.order, &c)
 	c.Fields = slices.Clone(s.Fields)
 	c.Methods = slices.Clone(s.Methods)
 	for i := range c.Methods {
 		m := &c.Methods[i]
 		var err error
-		m.Signature, err = snapshotShape(m.Signature, seen)
+		m.Signature, err = t.snapshot(m.Signature)
 		if err != nil {
 			return nil, err
 		}
@@ -134,11 +147,11 @@ func snapshotShape(s *values.Shape, seen map[*values.Shape]*values.Shape) (*valu
 	}
 
 	var err error
-	c.Elem, err = snapshotShape(s.Elem, seen)
+	c.Elem, err = t.snapshot(s.Elem)
 	if err != nil {
 		return nil, err
 	}
-	c.Key, err = snapshotShape(s.Key, seen)
+	c.Key, err = t.snapshot(s.Key)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +159,7 @@ func snapshotShape(s *values.Shape, seen map[*values.Shape]*values.Shape) (*valu
 	c.Results = slices.Clone(s.Results)
 	for _, set := range [][]*values.Shape{c.Params, c.Results} {
 		for i, s := range set {
-			set[i], err = snapshotShape(s, seen)
+			set[i], err = t.snapshot(s)
 			if err != nil {
 				return nil, err
 			}
@@ -156,7 +169,7 @@ func snapshotShape(s *values.Shape, seen map[*values.Shape]*values.Shape) (*valu
 		}
 	}
 	for i := range c.Fields {
-		c.Fields[i].Shape, err = snapshotShape(c.Fields[i].Shape, seen)
+		c.Fields[i].Shape, err = t.snapshot(c.Fields[i].Shape)
 		if err != nil {
 			return nil, err
 		}
@@ -446,9 +459,16 @@ func (s shapeValidationState) String() string {
 	}
 }
 
-func validateStorageShape(s *values.Shape, visiting map[*values.Shape]shapeValidationState) (valid bool) {
+// validateStorageShape checks the storage layout of a snapshot. Snapshots of
+// the shared table were checked when it was built.
+func validateStorageShape(s *values.Shape, visiting map[*values.Shape]shapeValidationState, shared *sharedShapes) (valid bool) {
 	if state := visiting[s]; state != shapeUnvisited {
 		return state == shapeValid
+	}
+	if shared != nil {
+		if _, ok := shared.position[s]; ok {
+			return true
+		}
 	}
 	visiting[s] = shapeVisiting
 	defer func() {
@@ -485,7 +505,7 @@ func validateStorageShape(s *values.Shape, visiting map[*values.Shape]shapeValid
 	case values.StructKind:
 		cells := uint64(0)
 		for _, f := range s.Fields {
-			if f.Offset != cells || !validateStorageShape(f.Shape, visiting) {
+			if f.Offset != cells || !validateStorageShape(f.Shape, visiting, shared) {
 				return false
 			}
 			cells += f.Shape.Cells
@@ -517,7 +537,7 @@ func validateStorageShape(s *values.Shape, visiting map[*values.Shape]shapeValid
 		}
 		return cells == s.Cells
 	case values.ArrayKind:
-		if !validateStorageShape(s.Elem, visiting) {
+		if !validateStorageShape(s.Elem, visiting, shared) {
 			return false
 		}
 		return (s.Elem.Cells == 0 || s.Len <= uint64(1<<32)/s.Elem.Cells) && s.Cells == s.Len*s.Elem.Cells
@@ -548,7 +568,7 @@ func ValidateShape(s *values.Shape) error {
 	}
 	states := make(map[*values.Shape]shapeValidationState)
 	for _, shape := range seen {
-		if !validateStorageShape(shape, states) {
+		if !validateStorageShape(shape, states, nil) {
 			return fmt.Errorf("invalid storage layout for %s", shape.Type.Name())
 		}
 	}

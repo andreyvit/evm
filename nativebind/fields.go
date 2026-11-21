@@ -105,13 +105,13 @@ func BindSelectedFields(t reflect.Type, names []string, generated *GeneratedFiel
 				if p == nil {
 					panic("nativebind: nil struct")
 				}
-				return Load(typ, unsafe.Add(p, offset))
+				return LoadSlot(typ, unsafe.Add(p, offset))
 			},
 			Set: func(p unsafe.Pointer, v values.Value) {
 				if p == nil {
 					panic("nativebind: nil struct")
 				}
-				Store(typ, unsafe.Add(p, offset), v)
+				StoreSlot(typ, unsafe.Add(p, offset), v)
 			},
 		})
 	}
@@ -151,9 +151,9 @@ func (b *Struct) Field(name string) *Field {
 	return &b.Fields[i]
 }
 
-// Load and Store are the shared reflection fallback for native storage. The
+// LoadSlot and StoreSlot are the shared reflection fallback for native storage. The
 // supplied pointer addresses a Go value of exactly t, never VM cell storage.
-func Load(t reflect.Type, p unsafe.Pointer) values.Value {
+func LoadSlot(t reflect.Type, p unsafe.Pointer) values.Value {
 	if p == nil {
 		panic("nativebind: nil address")
 	}
@@ -177,7 +177,7 @@ func Load(t reflect.Type, p unsafe.Pointer) values.Value {
 		return values.Value{P: p}
 	}
 }
-func Store(t reflect.Type, p unsafe.Pointer, x values.Value) {
+func StoreSlot(t reflect.Type, p unsafe.Pointer, x values.Value) {
 	if p == nil {
 		panic("nativebind: nil address")
 	}
@@ -207,5 +207,60 @@ func Store(t reflect.Type, p unsafe.Pointer, x values.Value) {
 		} else {
 			v.Set(reflect.NewAt(t, x.P).Elem())
 		}
+	}
+}
+
+// Load reads a native value for a host result. Map values carry the map
+// identity and slice values retain their backing array and bounds.
+func Load(t reflect.Type, p unsafe.Pointer) values.Value {
+	switch t.Kind() {
+	case reflect.Complex64:
+		z := *(*complex64)(p)
+		return values.Uint(uint64(math.Float32bits(real(z))) | uint64(math.Float32bits(imag(z)))<<32)
+	case reflect.Complex128:
+		z := *(*complex128)(p)
+		cells := &[2]values.Value{values.Float(real(z)), values.Float(imag(z))}
+		return values.Value{P: unsafe.Pointer(cells)}
+	case reflect.Struct, reflect.Array:
+		return values.BorrowNative(t, p)
+	case reflect.Pointer:
+		v := LoadSlot(t, p)
+		if v.P != nil {
+			v.R = values.NativeAddress
+		}
+		return v
+	case reflect.Map:
+		return values.Value{P: reflect.NewAt(t, p).Elem().UnsafePointer()}
+	case reflect.Slice:
+		return sliceLayout(t).Load(p)
+	default:
+		return LoadSlot(t, p)
+	}
+}
+
+// Store writes the representation returned by Load.
+func Store(t reflect.Type, p unsafe.Pointer, v values.Value) {
+	switch t.Kind() {
+	case reflect.Struct, reflect.Array:
+		if v.R == values.NativeBorrow {
+			reflect.NewAt(t, p).Elem().Set(v.BorrowedNative().Elem())
+		} else {
+			StoreSlot(t, p, v)
+		}
+	case reflect.Complex64:
+		*(*complex64)(p) = complex(math.Float32frombits(uint32(v.R)), math.Float32frombits(uint32(v.R>>32)))
+	case reflect.Complex128:
+		var z complex128
+		if v.P != nil {
+			cells := (*[2]values.Value)(v.P)
+			z = complex(cells[0].AsFloat(), cells[1].AsFloat())
+		}
+		*(*complex128)(p) = z
+	case reflect.Map:
+		mapLayout(t).Store(p, v)
+	case reflect.Slice:
+		sliceLayout(t).Store(p, v)
+	default:
+		StoreSlot(t, p, v)
 	}
 }

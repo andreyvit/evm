@@ -5,11 +5,13 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
 	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/kvo/codec/row2"
+	"github.com/andreyvit/evm/nativebind"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -72,6 +74,14 @@ func TestMutableNativeRowAliases(t *testing.T) {
 			return nil
 		}},
 	}}
+	plain := []int64{5, 6}
+	integer := &values.Shape{Type: values.Int64, Kind: values.IntKind, Bits: 64, Cells: 1}
+	numbers := &values.Shape{Type: values.NewType("[]int64", values.Pair), Kind: values.SliceKind, Elem: integer, Cells: 1, Native: nativebind.Layout(reflect.TypeOf(plain), nil, false)}
+	host.Types = append(host.Types, evm.TypeDecl{Shape: numbers})
+	host.Functions = append(host.Functions, evm.ExternalFunction{Name: "Plain", Signature: evm.Signature{Results: []*values.Type{numbers.Type}}, Call: func(c *evm.Call) error {
+		c.SetResult(0, nativebind.Load(reflect.TypeOf(plain), unsafe.Pointer(&plain)))
+		return nil
+	}})
 	mod, err := evmcompiler.Compile("aliases.go", `import("db";"host")
  func Run(){
   p:=host.Get();p.name="after";p.count=42
@@ -88,12 +98,18 @@ func TestMutableNativeRowAliases(t *testing.T) {
   if tags[0]!="array!"{panic("slice addresses")}
   tags[0]="shared";p.tags=append(tags,"added")
   if len(p.tags)!=2{panic("changed header")}
-  data:=p.bytes;data[0]=9;data[1]=8
+  data:=p.bytes
+  if copy(data,"ab")!=2 || string(data)!="ab" || string(append(data,"cd"...))!="abcd"{panic("native byte copy")}
+  data[0]=9;data[1]=8
   if len(data)!=2||data[0]!=9||data[1]!=8{panic("byte storage")}
   guest:=[]byte{3,4};if guest[1]!=4{panic("guest slice")}
   choice:=guest;if p.count==42{choice=data};choice[1]=8
   p.nested[0][0]="nested";p.numbers[1]+=10
   if len(p.nested)!=1||len(p.nested[0])!=1||p.numbers[1]!=12{panic("nested lists")}
+  plain:=host.Plain()
+  both:=append(plain,p.numbers...)
+  if len(both)!=4||both[0]!=5||both[1]!=6||both[2]!=1||both[3]!=12{panic("mixed append")}
+  if copy(plain,p.numbers)!=2 || plain[0]!=1 || plain[1]!=12 {panic("mixed copy")}
   host.Check()
  }
  func OwnedStrings(){

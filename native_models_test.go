@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/andreyvit/evm/nativebind"
 	"reflect"
 	"strings"
 	"testing"
 	"testing/fstest"
+	"unsafe"
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmbind"
@@ -179,5 +181,41 @@ func TestNativeModelAny(t *testing.T) {
 	var out [1]values.Value
 	if err := evm.New(onlyProgram).Run(context.Background(), "Run", nil, out[:]); err != nil || out[0].AsString() != "changed" {
 		t.Fatal(out, err)
+	}
+}
+
+func TestBorrowNativeModelResults(t *testing.T) {
+	schema := kvo.NewSchema()
+	name := kvo.NewStringProp[string](schema, 1, "name", kvo.TMachineString)
+	model := kvo.NewModel(schema, kvo.NewEntityType(schema, "Person", reflect.TypeFor[AnyModelRow]()), func(b *kvo.ModelBuilder) { b.Prop(name) })
+	models, err := evm.ModelPackage("models", schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := models.Record(model, false)
+	read.NativeAllocation = reflect.TypeFor[AnyModelRow]()
+	row := AnyModelRow{Name: "Ada"}
+	borrow := func(c *evm.Call) error {
+		c.SetResult(0, nativebind.Load(reflect.TypeOf(row), unsafe.Pointer(&row)))
+		return nil
+	}
+	host := evm.Package{Path: "host", Functions: []evm.ExternalFunction{
+		{Name: "Handle", Signature: evm.Signature{Results: []*values.Type{read.Pointer}}, Call: borrow},
+		{Name: "Snapshot", Signature: evm.Signature{Results: []*values.Type{read.Value}}, Call: borrow},
+	}}
+	module, err := evmcompiler.Compile("model.go", `import "host";func Run()string{return host.Handle().name + host.Snapshot().name}`, models, host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := evm.Link(module, models, host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out [1]values.Value
+	if err := evm.New(program).Run(context.Background(), "Run", nil, out[:]); err != nil {
+		t.Fatal(err)
+	}
+	if out[0].AsString() != "AdaAda" {
+		t.Fatal(out[0].AsString())
 	}
 }

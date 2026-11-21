@@ -2,10 +2,12 @@ package evmbind
 
 import (
 	"context"
+	"github.com/andreyvit/evm/nativebind"
 	"math"
 	"reflect"
 	"testing"
 	"testing/fstest"
+	"unsafe"
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmbind/internal/omittedfixture"
@@ -96,6 +98,27 @@ func Reset(){*page.Pointer()=page.ProjectedPage{Title:"reset"}}`, schema.Package
 	}
 	if result[0].R != 1 || host.page.Title != "original" {
 		t.Fatal("native value copy lost hidden fields or changed its source")
+	}
+	bound := schema.Bind(host)
+	for i := range bound.Functions {
+		fn := &bound.Functions[i]
+		if fn.Name == "Get" {
+			fn.Direct = evm.DirectBinding{}
+			fn.Call = func(c *evm.Call) error {
+				c.SetResult(0, nativebind.Load(reflect.TypeOf(host.page), unsafe.Pointer(&host.page)))
+				return nil
+			}
+		}
+	}
+	borrowed, err := evm.Link(module, bound)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := evm.New(borrowed).Run(context.Background(), "Run", nil, result); err != nil {
+		t.Fatal(err)
+	}
+	if result[0].R != 1 || host.page.Title != "original" {
+		t.Fatal("borrowed host aggregate lost its snapshot")
 	}
 	for _, name := range []string{"NativeCopy", "NativeStore"} {
 		if err := evm.New(p).Run(context.Background(), name, nil, result); err != nil {

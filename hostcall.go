@@ -314,6 +314,9 @@ func (c *Call) directResult(x, y values.Value) (v values.Value, err error) {
 
 	g := c.native
 	v, err = g.Direct.Call(c, x, y)
+	if err == nil && v.R == values.NativeBorrow && v.P != nil && len(g.Signature.Results) != 0 {
+		v, err = c.importBorrow(g.Signature.Results[0], v)
+	}
 	if err == nil && g.record != nil && !g.record.Mutable {
 		_, err = readRecordCell(v, g.record.Model)
 	}

@@ -453,6 +453,7 @@ type Program struct {
 	// sharedMethodIDs are the method IDs the environment assigned. They
 	// come before the program's own in methodIDs.
 	sharedMethodIDs map[string]uint32
+	borrowRecords   map[*values.Type]RecordType
 }
 
 func copySignature(s Signature) Signature {

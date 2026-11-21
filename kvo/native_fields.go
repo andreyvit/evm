@@ -103,7 +103,7 @@ func unwrapValue(p *nativePlan, v values.Value) (*nativePlan, values.Value, bool
 				return p.elem, values.Value{}, false
 			}
 			p = p.elem
-			v = nativebind.Load(p.typ, v.P)
+			v = nativebind.LoadSlot(p.typ, v.P)
 		case nativeOption:
 			if p.native.Field("Present").Get(v.P).R == 0 {
 				return p.elem, values.Value{}, false
@@ -200,11 +200,11 @@ func scalarAssignment(p *nativePlan, x values.Value) (values.Value, bool) {
 
 // Keep a pointer-shaped carrier for non-scalar assignments after conversion.
 func nativeAssignment(p *nativePlan, x reflect.Value) values.Value {
-	return nativebind.Load(p.typ, x.Addr().UnsafePointer())
+	return nativebind.LoadSlot(p.typ, x.Addr().UnsafePointer())
 }
 
 func storeAssigned(p *nativePlan, dst reflect.Value, v values.Value) {
-	nativebind.Store(p.typ, dst.Addr().UnsafePointer(), v)
+	nativebind.StoreSlot(p.typ, dst.Addr().UnsafePointer(), v)
 }
 
 func unwrapForEdit(p *nativePlan, v values.Value, address unsafe.Pointer, create bool) (*nativePlan, values.Value, bool) {
@@ -216,11 +216,11 @@ func unwrapForEdit(p *nativePlan, v values.Value, address unsafe.Pointer, create
 					return p.elem, values.Value{}, false
 				}
 				v.P = reflect.New(p.elem.typ).UnsafePointer()
-				nativebind.Store(p.typ, address, v)
+				nativebind.StoreSlot(p.typ, address, v)
 			}
 			address = v.P
 			p = p.elem
-			v = nativebind.Load(p.typ, address)
+			v = nativebind.LoadSlot(p.typ, address)
 		case nativeOption:
 			present := p.native.Field("Present")
 			if present.Get(v.P).R == 0 {

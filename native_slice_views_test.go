@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+	"unsafe"
 
 	"github.com/andreyvit/evm/nativebind"
 	"github.com/andreyvit/evm/values"
@@ -121,5 +122,18 @@ func TestConcurrentNativeViewMetadata(t *testing.T) {
 	workers.Wait()
 	if len(p.viewTable().shapes) != 8 || len(p.viewTable().arrays) != 8 {
 		t.Fatal("unbounded metadata growth")
+	}
+}
+
+func TestStringFromNativeRuneView(t *testing.T) {
+	runes := []rune("aλ")
+	layout := nativebind.Layout(reflect.TypeOf(runes), nil, false)
+	elem := nativebind.Layout(reflect.TypeFor[rune](), nil, false)
+	view := values.NativeSliceValue(&values.NativeSliceView{Layout: layout, Element: elem, Data: unsafe.Pointer(&runes[0]), Length: 2, Capacity: 2})
+	shape := &values.Shape{Kind: values.SliceKind, Elem: &values.Shape{Kind: values.IntKind, Bits: 32, Cells: 1}}
+	budget := executionBudget{limits: Limits{AllocationBytes: 100, Allocations: 10}}
+	got, err := convertExtended(&values.Shape{Kind: values.StringKind}, shape, view, &budget)
+	if err != nil || got.AsString() != string(runes) {
+		t.Fatal(got, err)
 	}
 }

@@ -19,6 +19,13 @@ func (vm *VM) executeCovered(idx int, env unsafe.Pointer, args, results []values
 	}
 	clear(vm.p[:f.pSize])
 	for i, arg := range args {
+		if arg.R == values.NativeBorrow && arg.P != nil {
+			var err error
+			arg, err = vm.call.importBorrow(f.Signature.Params[i], arg)
+			if err != nil {
+				return err
+			}
+		}
 		slot := int(f.params.Slots[i])
 		switch f.Signature.Params[i].Repr() {
 		case values.Raw:

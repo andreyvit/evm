@@ -10,7 +10,7 @@ import (
 // Layout describes native memory for a reflected or generated field binding.
 // The operations are also used for native addresses retained by EVM.
 func Layout(t reflect.Type, fields *Struct, direct bool) *values.NativeLayout {
-	l := &values.NativeLayout{GoType: t, Size: uint64(t.Size()), New: func() unsafe.Pointer { return reflect.New(t).UnsafePointer() }, Load: func(p unsafe.Pointer) values.Value { return Load(t, p) }, Store: func(p unsafe.Pointer, v values.Value) { Store(t, p, v) }}
+	l := &values.NativeLayout{GoType: t, Size: uint64(t.Size()), New: func() unsafe.Pointer { return reflect.New(t).UnsafePointer() }, Load: func(p unsafe.Pointer) values.Value { return LoadSlot(t, p) }, Store: func(p unsafe.Pointer, v values.Value) { StoreSlot(t, p, v) }}
 	if t.Kind() == reflect.Array {
 		l.Array = sliceLayout(reflect.SliceOf(t.Elem()))
 	}

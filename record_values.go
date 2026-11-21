@@ -487,9 +487,9 @@ func (cv recordConverter) encode(k kvo.AnyType, s *values.Shape, v values.Value,
 			return zero, err
 		}
 		data := make([]byte, v.SliceLen())
-		storage := collectionStorageFor(s, false)
+		reader := readScalarSlice(s, v)
 		for i := range data {
-			data[i] = byte(storage.scalarLoad(storage.at(v.P, uint64(i), s.Elem.Cells)).R)
+			data[i] = byte(reader.at(uint64(i)).R)
 		}
 		return values.Bytes(data), nil
 	case *kvo.EntityType:

@@ -16,10 +16,13 @@ type nativeModelBinding struct {
 }
 
 func (p *Program) linkNativeModels(packages []Package) error {
+	p.borrowRecords = make(map[*values.Type]RecordType)
 	p.nativeModels = make(map[reflect.Type]nativeModelBinding)
 	p.nativeRecordModels = make(map[*values.Type]*kvo.Model)
 	for _, pkg := range packages {
 		for _, r := range pkg.Records {
+			p.borrowRecords[r.Pointer] = *r
+			p.borrowRecords[r.Value] = *r
 			if r.Mutable || p.typeIDs[r.Pointer] == 0 && p.typeIDs[r.Value] == 0 {
 				continue
 			}

@@ -172,16 +172,31 @@ func (st collectionStorage) clear(p unsafe.Pointer, n, cells uint64) {
 }
 
 // Scalar conversions use the declared native width, never the cell stride.
-func (st collectionStorage) scalarLoad(p unsafe.Pointer) values.Value {
-	if st.native != nil {
-		return st.elem.Native.Load(p)
-	}
-	return st.elem.Stored(p)
-}
 func (st collectionStorage) scalarStore(p unsafe.Pointer, v values.Value) {
 	if st.native != nil {
 		st.elem.Native.Store(p, v)
 	} else {
 		st.elem.Store(p, v)
 	}
+}
+
+// scalarSliceReader resolves the backing pointer, element width and decoder
+// together. A view carries its own physical element type.
+type scalarSliceReader struct {
+	data   unsafe.Pointer
+	stride uint64
+	load   func(unsafe.Pointer) values.Value
+}
+
+func readScalarSlice(s *values.Shape, v values.Value) scalarSliceReader {
+	if view := v.NativeSlice(); view != nil {
+		return scalarSliceReader{view.Data, view.Layout.Slice.ElementSize, view.Element.Load}
+	}
+	if s.Native != nil && s.Native.Slice != nil {
+		return scalarSliceReader{v.P, s.Native.Slice.ElementSize, s.Elem.Native.Load}
+	}
+	return scalarSliceReader{v.P, s.Elem.Cells * uint64(unsafe.Sizeof(values.Value{})), s.Elem.Stored}
+}
+func (r scalarSliceReader) at(i uint64) values.Value {
+	return r.load(unsafe.Add(r.data, i*r.stride))
 }

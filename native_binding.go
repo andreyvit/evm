@@ -1,7 +1,9 @@
 package evm
 
 import (
+	"context"
 	"fmt"
+	"math"
 	"unsafe"
 
 	"github.com/andreyvit/evm/values"
@@ -25,8 +27,18 @@ func (p *Program) PointerInterface(t *values.Type, ptr unsafe.Pointer) (values.V
 	}
 	return values.Value{R: uint64(id), P: ptr}, nil
 }
-func (c *Call) Argument(i int) values.Value     { return c.argument(i) }
-func (c *Call) SetResult(i int, v values.Value) { c.result(i, v) }
+func (c *Call) Argument(i int) values.Value { return c.argument(i) }
+func (c *Call) SetResult(i int, v values.Value) {
+	if v.R == values.NativeBorrow && v.P != nil {
+		var err error
+		v, err = c.importBorrow(c.native.Signature.Results[i], v)
+		if err != nil {
+			c.budget.err = err
+			return
+		}
+	}
+	c.result(i, v)
+}
 func (c *Call) AllocCells(n uint64) (unsafe.Pointer, error) {
 	p, err := allocCells(n, &c.budget.allocated, c.budget.limits)
 	if err != nil {
@@ -81,6 +93,16 @@ func (p *Program) PackInterface(t *values.Type, v values.Value) (values.Value, e
 	id, ok := p.typeIDs[t]
 	if !ok {
 		return values.Value{}, fmt.Errorf("unlinked interface type %s", t.Name())
+	}
+	if v.R == values.NativeBorrow && v.P != nil {
+		// Like other host-prepared inputs, packing happens outside a VM run.
+		b := executionBudget{limits: Limits{AllocationBytes: math.MaxUint64, Allocations: math.MaxUint64}}
+		c := Call{program: p, budget: &b, Context: context.Background()}
+		var err error
+		v, err = c.importBorrow(t, v)
+		if err != nil {
+			return values.Value{}, err
+		}
 	}
 	if result, ok := p.typeShapes.Inline(uint64(id), v); ok {
 		return result, nil

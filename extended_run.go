@@ -272,6 +272,9 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 			if repr == values.NativeAddress && s.Native.Fields[index].Cells {
 				repr = 0
 			}
+			if repr == values.NativeAddress && op.Out[0].Repr != values.Pair {
+				return ErrInvalidState
+			}
 			if repr == values.NativeAddress && field.Shape.Native != nil && field.Shape.Native.Address != nil {
 				put(0, field.Shape.Native.Address.Encode(p))
 			} else if repr == values.NativeAddress && s.Native.Fields[index].Layout != nil {
@@ -347,6 +350,15 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 		}
 		if op.Kind == ExtendedIndexAddr && x.P == nil {
 			return ErrNil
+		}
+		// Native addresses need both register banks. Reject incompatible host
+		// declarations before a later cell instruction can see the address.
+		native := s.Kind == values.ArrayKind && x.R != 0 || s.Kind == values.SliceKind && (x.NativeSlice() != nil || s.Native != nil && s.Native.Slice != nil)
+		if native && op.Kind == ExtendedIndexAddr && op.Out[0].Repr != values.Pair {
+			return ErrInvalidState
+		}
+		if s.Kind == values.ArrayKind && x.R == values.NativeAddress && (s.Native == nil || s.Native.Array == nil) {
+			return ErrInvalidState
 		}
 		if s.Kind == values.SliceKind {
 			if view := x.NativeSlice(); view != nil {
@@ -608,6 +620,11 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 			}
 			break
 		}
+		view := dst.NativeSlice()
+		if view != nil {
+			st.native = view.Layout.Slice
+			dst = values.SliceValue(view.Data, view.Length, view.Capacity)
+		}
 		srcLen := src.R
 		if op.Flags&1 == 0 {
 			srcLen = uint64(src.SliceLen())
@@ -636,7 +653,7 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 		if n > 0 {
 			target = st.at(dst.P, start, s.Elem.Cells)
 		}
-		if op.Flags&1 != 0 && op.Packed {
+		if op.Flags&1 != 0 && (op.Packed || st.native != nil && st.native.ElementSize == 1) {
 			copy(unsafe.Slice((*byte)(target), n), src.AsString())
 		} else if op.Flags&1 != 0 {
 			text := src.AsString()
@@ -652,7 +669,15 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 			st.copy(target, src.P, n, s.Elem.Cells)
 		}
 		if op.Kind == ExtendedAppend {
-			put(0, values.SliceValue(dst.P, uint32(length), uint32(capacity)))
+			result := values.SliceValue(dst.P, uint32(length), uint32(capacity))
+			if view != nil {
+				var err error
+				result, err = vm.call.NativeSlice(view.Layout, view.Element, dst.P, uint32(length), uint32(capacity))
+				if err != nil {
+					return err
+				}
+			}
+			put(0, result)
 		} else {
 			put(0, values.Uint(n))
 		}
@@ -816,6 +841,9 @@ func complexValue(s *values.Shape, v values.Value) complex128 {
 	if s.Bits == 64 {
 		return complex(float64(math.Float32frombits(uint32(v.R))), float64(math.Float32frombits(uint32(v.R>>32))))
 	}
+	if v.P == nil {
+		return 0
+	}
 	return complex(s.Elem.Stored(v.P).AsFloat(), s.Elem.Stored(values.CellAt(v.P, 1)).AsFloat())
 }
 func makeComplex(s *values.Shape, z complex128, a *allocationUsage, l Limits) (values.Value, error) {
@@ -864,6 +892,7 @@ func convertExtended(to, from *values.Shape, x values.Value, budget *executionBu
 		if err := charge(n*8, a, l); err != nil {
 			return values.Value{}, err
 		}
+		reader := readScalarSlice(from, x)
 		if from.Elem.Bits == 8 {
 			b := make([]byte, n)
 			for i := range b {
@@ -872,7 +901,7 @@ func convertExtended(to, from *values.Shape, x values.Value, budget *executionBu
 						return values.Value{}, err
 					}
 				}
-				b[i] = byte(collectionStorageFor(from, false).scalarLoad(collectionStorageFor(from, false).at(x.P, uint64(i), from.Elem.Cells)).R)
+				b[i] = byte(reader.at(uint64(i)).R)
 			}
 			return values.String(string(b)), nil
 		}
@@ -883,7 +912,7 @@ func convertExtended(to, from *values.Shape, x values.Value, budget *executionBu
 					return values.Value{}, err
 				}
 			}
-			r[i] = rune(collectionStorageFor(from, false).scalarLoad(collectionStorageFor(from, false).at(x.P, uint64(i), from.Elem.Cells)).R)
+			r[i] = rune(reader.at(uint64(i)).R)
 		}
 		return values.String(string(r)), nil
 	}

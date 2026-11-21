@@ -2,8 +2,11 @@ package evm
 
 import (
 	"fmt"
+	"reflect"
+	"slices"
 	"unsafe"
 
+	"github.com/andreyvit/evm/kvo"
 	"github.com/andreyvit/evm/values"
 )
 
@@ -24,6 +27,18 @@ func nativeLoadedValue(c *Call, s *values.Shape, v values.Value, used *allocatio
 	}
 	if codec := c.program.nativeCodecs[s.Type]; codec != nil {
 		return codec.Decode(c, v)
+	}
+	if s.Kind == values.FunctionKind && s.Native != nil && s.Native.GoType != nil && s.Native.GoType.Kind() == reflect.Func {
+		if v.P == nil || reflect.NewAt(s.Native.GoType, v.P).Elem().IsNil() {
+			return values.Value{}, nil
+		}
+		return values.Value{}, fmt.Errorf("native function %s requires a binding", s.Type.Name())
+	}
+	if s.Kind == values.ComplexKind {
+		if s.Bits == 64 {
+			return values.Uint(uint64(*(*uint64)(v.P))), nil
+		}
+		return makeComplex(s, *(*complex128)(v.P), used, limits)
 	}
 	if s.Kind == values.MapKind && s.Native != nil && s.Native.Map != nil {
 		return s.Native.Map.Load(v.P), nil
@@ -50,6 +65,23 @@ func nativeStoredValue(c *Call, s *values.Shape, v values.Value, used *allocatio
 	}
 	if codec := c.program.nativeCodecs[s.Type]; codec != nil {
 		return codec.Encode(c, v)
+	}
+	if s.Kind == values.FunctionKind && s.Native != nil && s.Native.GoType != nil && s.Native.GoType.Kind() == reflect.Func {
+		if v.R == 0 {
+			return values.Value{}, nil
+		}
+		return values.Value{}, fmt.Errorf("native function %s requires a binding", s.Type.Name())
+	}
+	if s.Kind == values.ComplexKind {
+		if err := charge(uint64(s.Bits/8), used, limits); err != nil {
+			return values.Value{}, err
+		}
+		if s.Bits == 64 {
+			bits := v.R
+			return values.Value{P: unsafe.Pointer(&bits)}, nil
+		}
+		z := complexValue(s, v)
+		return values.Value{P: unsafe.Pointer(&z)}, nil
 	}
 	if s.Kind == values.MapKind && s.Native != nil && s.Native.Map != nil {
 		if err := charge(s.Native.Size, used, limits); err != nil {
@@ -217,4 +249,62 @@ func (p *Program) nativeSlotShape(logical *values.Shape, layout *values.NativeLa
 	}
 	_, physical := p.physicalShape(logical, layout)
 	return physical
+}
+
+// A native aggregate result still addresses Go storage. Materialize it before
+// a pointer-only register discards the discriminator.
+func (c *Call) importBorrow(t *values.Type, v values.Value) (values.Value, error) {
+	s := c.program.Shape(t)
+	if row, ok := c.program.borrowRecords[t]; ok {
+		ptr := v.BorrowedNative()
+		typ := ptr.Type().Elem()
+		entity, ok := row.Model.Type().(*kvo.EntityType)
+		if !ok || typ != row.NativeAllocation && !slices.Contains(entity.NativeTypes(), typ) {
+			return values.Value{}, fmt.Errorf("unregistered %v backing for %s", typ, row.Name)
+		}
+		if t == row.Value && row.NativeAllocation != nil {
+			if typ != row.NativeAllocation {
+				return values.Value{}, ErrInvalidState
+			}
+			if err := c.ChargeAllocation(uint64(typ.Size())); err != nil {
+				return values.Value{}, err
+			}
+			snapshot := reflect.New(typ)
+			snapshot.Elem().Set(ptr.Elem())
+			return c.borrowCell(values.Value{P: snapshot.UnsafePointer()})
+		}
+		r := kvo.Bind(typ, row.Model).Record(ptr)
+		cell := r.Value()
+		if row.Mutable {
+			var err error
+			cell, err = NativeMutableRecordValue(row.Model, r)
+			if err != nil {
+				return values.Value{}, err
+			}
+		}
+		if t == row.Value {
+			return c.borrowCell(cell)
+		}
+		return cell, nil
+	}
+	if s != nil && s.Aggregate() && s.CellStruct == nil {
+		ptr := v.BorrowedNative()
+		if s.Native == nil || ptr.Type().Elem() != s.Native.GoType {
+			return values.Value{}, ErrInvalidState
+		}
+		return c.LoadNative(s, ptr.UnsafePointer())
+	}
+	if t.Repr() == values.Pointer {
+		return values.Value{}, ErrInvalidState
+	}
+	return v, nil
+}
+
+func (c *Call) borrowCell(v values.Value) (values.Value, error) {
+	p, err := c.AllocCells(1)
+	if err != nil {
+		return values.Value{}, err
+	}
+	*(*values.Value)(p) = v
+	return values.Value{P: p}, nil
 }

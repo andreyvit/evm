@@ -189,7 +189,15 @@ func (e *typeEnvironment) shape(t types.Type) (result *values.Shape, err error) 
 			return nil, err
 		}
 		sliceType := e.typeOf(types.NewSlice(array.Elem()))
-		if layout := e.nativeLayout(sliceType); layout != nil && layout.Slice != nil {
+		layout := e.nativeLayout(sliceType)
+		if layout == nil {
+			elem, err := e.shape(array.Elem())
+			if err != nil {
+				return nil, err
+			}
+			layout = e.collectionLayouts[nativeCollectionKey{elem: elem.Type}]
+		}
+		if layout != nil && layout.Slice != nil {
 			n := uint64(array.Len())
 			if n > math.MaxUint32 || (layout.Slice.ElementSize != 0 && n > uint64(^uint(0)>>1)/layout.Slice.ElementSize) {
 				return nil, fmt.Errorf("native array %s exceeds VM capacity", t)
@@ -277,6 +285,16 @@ func (e *typeEnvironment) shape(t types.Type) (result *values.Shape, err error) 
 	}
 	if err != nil {
 		return nil, err
+	}
+	if s.Native == nil && (s.Kind == values.SliceKind || s.Kind == values.MapKind) {
+		key := nativeCollectionKey{elem: s.Elem.Type}
+		if s.Key != nil {
+			key.key = s.Key.Type
+		}
+		if layout := e.collectionLayouts[key]; layout != nil {
+			s.Native = layout
+			e.nativeLayouts[vt] = layout
+		}
 	}
 	if (s.Kind == values.SliceKind || s.Kind == values.ArrayKind) && s.Elem.NativeAllocation != nil {
 		element := s.Elem.NativeAllocation

@@ -68,6 +68,12 @@ func (c *Call) SetInterface(slot int, t *values.Type, v values.Value) (err error
 			}
 		}
 	}
+	if v.R == values.NativeBorrow && v.P != nil {
+		v, err = c.importBorrow(t, v)
+		if err != nil {
+			return err
+		}
+	}
 	v, err = snapshot(d.shape, v, &c.budget.allocated, c.budget.limits)
 	if err != nil {
 		return err

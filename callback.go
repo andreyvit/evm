@@ -106,6 +106,12 @@ func (c *Call) runCallback(ref FunctionRef, native *nativeFunction, sig Signatur
 		vm.call.R, vm.call.P = vm.r[:g.rSize], vm.p[:g.pSize]
 		vm.call.usedR, vm.call.usedP = g.rSize, g.pSize
 		for i, arg := range args {
+			if arg.R == values.NativeBorrow && arg.P != nil {
+				arg, err = vm.call.importBorrow(sig.Params[i], arg)
+				if err != nil {
+					return err
+				}
+			}
 			vm.write(frame{}, Operand{g.params.Slots[i], sig.Params[i].Repr()}, arg)
 		}
 

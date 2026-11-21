@@ -90,3 +90,29 @@ func TestHiddenNativeField(t *testing.T) {
 	}()
 	b.Field("hidden")
 }
+
+func TestLoadCollectionHeaders(t *testing.T) {
+	m := map[string]int{"a": 3}
+	v := nativebind.Load(reflect.TypeOf(m), unsafe.Pointer(&m))
+	var alias map[string]int
+	nativebind.Store(reflect.TypeOf(m), unsafe.Pointer(&alias), v)
+	alias["a"]++
+	if m["a"] != 4 {
+		t.Fatal(m)
+	}
+	b := make([]byte, 1, 3)
+	v = nativebind.Load(reflect.TypeOf(b), unsafe.Pointer(&b))
+	if v.SliceLen() != 1 || v.SliceCap() != 3 || v.P != unsafe.Pointer(&b[0]) {
+		t.Fatal("slice header")
+	}
+}
+
+func TestLoadComplexParts(t *testing.T) {
+	z := complex(-1.5, 9.75)
+	v := nativebind.Load(reflect.TypeOf(z), unsafe.Pointer(&z))
+	z = 0
+	nativebind.Store(reflect.TypeOf(z), unsafe.Pointer(&z), v)
+	if z != complex(-1.5, 9.75) {
+		t.Fatal(z)
+	}
+}

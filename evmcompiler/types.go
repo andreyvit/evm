@@ -53,6 +53,7 @@ type typeEnvironment struct {
 	nativeMethodsByBase map[*values.Type][]*evm.ExternalMethod
 	sharedOwners        map[*values.Type]string
 	nativeAllocations   map[*values.Type]*values.NativeLayout
+	collectionLayouts   map[nativeCollectionKey]*values.NativeLayout
 	nativeViewLeaves    map[*values.Type]bool
 
 	// Written while importing packages. An overlay shares these with its base.
@@ -244,6 +245,7 @@ func newTypeEnvironment(packages []evm.Package) (*typeEnvironment, error) {
 			}
 		}
 	}
+	e.collectNativeSlots(packages)
 	e.collectNativeViewLeaves()
 	e.nativeSourceMemo = make(map[*values.Type]bool)
 	e.nativeMethodsByBase = make(map[*values.Type][]*evm.ExternalMethod)

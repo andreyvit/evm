@@ -10,6 +10,19 @@ import (
 // discriminator; opaque interface receivers continue to use their own ABI.
 const NativeAddress uint64 = 1
 
+// NativeBorrow marks an aggregate borrowed from a host. A typed VM boundary
+// materializes it before assigning it to an aggregate register.
+const NativeBorrow uint64 = ^uint64(0)
+
+// BorrowNative retains the Go type with its address until a host value is imported.
+func BorrowNative(typ reflect.Type, p unsafe.Pointer) Value {
+	ptr := reflect.NewAt(typ, p)
+	return Value{R: NativeBorrow, P: unsafe.Pointer(&ptr)}
+}
+
+// BorrowedNative returns the typed pointer created by BorrowNative.
+func (v Value) BorrowedNative() reflect.Value { return *(*reflect.Value)(v.P) }
+
 // NativeValueCodec converts a native slot to its logical VM value. The encode
 // callback charges any new native storage before allocating it.
 type NativeValueCodec struct {

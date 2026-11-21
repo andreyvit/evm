@@ -132,9 +132,14 @@ func (c *Call) copySliceViews(s *values.Shape, dst, src values.Value, start, cou
 		}
 		rows[i] = row
 	}
+	st := collectionStorageFor(s, false)
 	for i, row := range rows {
 		if dv != nil {
 			dv.Element.Store(unsafe.Add(dv.Data, (start+uint64(i))*dv.Layout.Slice.ElementSize), row)
+		} else if st.native != nil {
+			if err := c.StoreNative(s.Elem, st.at(dst.P, start+uint64(i), s.Elem.Cells), row); err != nil {
+				return err
+			}
 		} else {
 			s.Elem.Store(values.CellAt(dst.P, (start+uint64(i))*s.Elem.Cells), row)
 		}
@@ -164,11 +169,12 @@ func (c *Call) appendSliceViews(s *values.Shape, dst, src values.Value) (values.
 			}
 			dst = value
 		} else {
-			p, err := c.AllocCells(capacity * s.Elem.Cells)
+			st := collectionStorageFor(s, false)
+			p, err := st.allocate(capacity, s.Elem.Cells, &c.budget.allocated, c.budget.limits)
 			if err != nil {
 				return values.Value{}, err
 			}
-			copy(values.CellSlice(p, length*s.Elem.Cells), values.CellSlice(dst.P, length*s.Elem.Cells))
+			st.copy(p, dst.P, length, s.Elem.Cells)
 			dst = values.SliceValue(p, uint32(length), uint32(capacity))
 		}
 	}

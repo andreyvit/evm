@@ -55,7 +55,9 @@ func (f *lowerer) extendedInstruction(i ssa.Instruction) bool {
 	switch i := i.(type) {
 	case *ssa.Alloc:
 		s := f.shape(i.Type().Underlying().(*types.Pointer).Elem())
-		if (s.NativeStorage() || s.Kind == values.ArrayKind && s.NativeAllocation != nil) && reg(i).typ.Repr() == values.Pair {
+		// Keep the absent omitted-field snapshot of a guest literal in its VM cells.
+		localProjection := s != nil && s.Native != nil && s.Native.OpaqueCell != 0 && s.Native.Address == nil && localStructAddress(i)
+		if !localProjection && (s.NativeStorage() || s.Kind == values.ArrayKind && s.NativeAllocation != nil) && reg(i).typ.Repr() == values.Pair {
 			f.extended(evm.ExtendedNativeAlloc, s, nil, f.regs[i], 0, 0, nil)
 			return true
 		}

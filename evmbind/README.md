@@ -217,9 +217,12 @@ same omissions to `Generate`.
 
 Omitting a field changes only the script declaration, never the Go struct
 layout. Native value copies keep omitted fields intact in an inaccessible
-shallow snapshot (allocations count against the VM budget), while newly
-constructed script values leave omitted fields zeroed. Script field operations,
-equality, and hashing consider only exposed fields.
+shallow snapshot (allocations count against the VM budget) and copy them on
+assignment. Fresh native storage starts with omitted fields zeroed, whereas
+assigning a fresh script literal over existing native storage updates only the
+exposed fields and preserves the destination's omitted fields. Script field
+operations see only exposed fields, while equality (`==`) and map hashing
+include omitted fields via the snapshot.
 
 ## Share declarations across packages
 

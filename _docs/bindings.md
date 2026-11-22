@@ -235,10 +235,12 @@ fail schema construction, and you cannot specify both `Fields` and `OmitFields`
 for the same type.
 
 Field selection changes declarations, not memory layout: a pointer still points
-to the whole struct, and struct copies retain hidden fields. A model's record
-type takes its fields from the model and cannot be overridden here. Structs
-with more than one blank (`_`) padding field cannot be selected and return an
-error.
+to the whole struct, struct copies retain hidden fields and copy them on
+assignment, fresh native storage starts with hidden fields zeroed, and
+assigning a fresh literal over existing native storage preserves the
+destination's hidden fields. A model's record type takes its fields from the
+model and cannot be overridden here. Structs with more than one blank (`_`)
+padding field cannot be selected and return an error.
 
 ## Type aliases
 

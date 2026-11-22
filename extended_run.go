@@ -284,15 +284,9 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 			}
 		} else if op.Kind == ExtendedFieldStore {
 			if x.R == values.NativeAddress {
-				v := get(1)
-				if !s.Native.Fields[index].Cells {
-					var err error
-					v, err = nativeStoredValue(vm, vm.program.nativeFieldShape(s, int(index)), v, allocated, limits)
-					if err != nil {
-						return err
-					}
+				if err := storeNativeField(vm, s, int(index), x.P, get(1), allocated, limits); err != nil {
+					return err
 				}
-				s.Native.Fields[index].Set(x.P, v)
 			} else {
 				field.Shape.Store(p, get(1))
 			}

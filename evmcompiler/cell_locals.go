@@ -28,41 +28,41 @@ func (f *lowerer) findCellLocals() map[*ssa.Alloc]vreg {
 			if s == nil || s.CellStruct == nil {
 				continue
 			}
-			safe := true
-			for _, ref := range *a.Referrers() {
-				switch ref := ref.(type) {
-				case *ssa.Store:
-					safe = ref.Addr == a
-				case *ssa.UnOp:
-					safe = ref.Op == token.MUL
-				case *ssa.FieldAddr:
-					for _, use := range *ref.Referrers() {
-						switch use := use.(type) {
-						case *ssa.Store:
-							safe = use.Addr == ref
-						case *ssa.UnOp:
-							safe = use.Op == token.MUL
-						default:
-							safe = false
-						}
-						if !safe {
-							break
-						}
-					}
-				default:
-					safe = false
-				}
-				if !safe {
-					break
-				}
-			}
-			if safe {
+			if localStructAddress(a) {
 				result[a] = f.alloc(s.Type)
 			}
 		}
 	}
 	return result
 }
+
+// localStructAddress reports whether only local loads and stores use the pointer.
+func localStructAddress(a *ssa.Alloc) bool {
+	for _, ref := range *a.Referrers() {
+		if field, ok := ref.(*ssa.FieldAddr); ok {
+			for _, use := range *field.Referrers() {
+				if !localLoadOrStore(field, use) {
+					return false
+				}
+			}
+		} else if !localLoadOrStore(a, ref) {
+			return false
+		}
+	}
+	return true
+}
+
+func localLoadOrStore(addr ssa.Value, use ssa.Instruction) bool {
+	switch use := use.(type) {
+	case *ssa.Store:
+		return use.Addr == addr
+	case *ssa.UnOp:
+		return use.Op == token.MUL
+	default:
+		return false
+	}
+}
+
 func (f *lowerer) cellLocal(v ssa.Value) (vreg, *values.Shape, int, bool) {
 	index := -1
 	if field, ok := v.(*ssa.FieldAddr); ok {

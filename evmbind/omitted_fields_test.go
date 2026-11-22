@@ -88,7 +88,8 @@ func Reset(){*page.Pointer()=page.ProjectedPage{Title:"reset"}}`, schema.Package
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := &projectedPageHost{page: ProjectedPage{Title: "original", Private: &struct{}{}}}
+	marker := new(int)
+	host := &projectedPageHost{page: ProjectedPage{Title: "original", Private: marker}}
 	p, err := evm.Link(module, schema.Bind(host))
 	if err != nil {
 		t.Fatal(err)
@@ -132,8 +133,8 @@ func Reset(){*page.Pointer()=page.ProjectedPage{Title:"reset"}}`, schema.Package
 	if err := evmtest.New(p).Run(context.Background(), "Reset", nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if host.page.Private != nil || host.page.Title != "reset" {
-		t.Fatalf("new guest value retained hidden fields: %+v", host.page)
+	if host.page.Private != marker || host.page.Title != "reset" {
+		t.Fatalf("assignment lost omitted state or failed to write visible fields: %+v", host.page)
 	}
 }
 

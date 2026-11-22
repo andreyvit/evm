@@ -220,25 +220,33 @@ func storeNative(c *VM, s *values.Shape, p unsafe.Pointer, v values.Value, used 
 		if v.P != nil {
 			snapshot = (*values.Value)(values.CellAt(v.P, slot-1)).P
 		}
-		if snapshot == nil {
-			if err := charge(s.Native.Size, used, limits); err != nil {
-				return err
-			}
-			snapshot = s.Native.New()
+		if snapshot != nil {
+			s.Native.Store(p, values.Value{P: snapshot})
 		}
-		s.Native.Store(p, values.Value{P: snapshot})
 	}
 	for i, f := range s.Fields {
 		x := f.Shape.Stored(values.CellAt(v.P, f.Offset))
-		if !s.Native.Fields[i].Cells {
-			var err error
-			x, err = nativeStoredValue(c, c.program.nativeFieldShape(s, i), x, used, limits)
-			if err != nil {
-				return err
-			}
+		if err := storeNativeField(c, s, i, p, x, used, limits); err != nil {
+			return err
 		}
-		s.Native.Fields[i].Set(p, x)
 	}
+	return nil
+}
+
+func storeNativeField(c *VM, s *values.Shape, i int, p unsafe.Pointer, v values.Value, used *allocationUsage, limits Limits) error {
+	field := &s.Native.Fields[i]
+	if !field.Cells {
+		shape := c.program.nativeFieldShape(s, i)
+		if shape.Aggregate() && shape.Native != nil && shape.Native.Codec == nil && c.program.nativeCodecs[shape.Type] == nil {
+			return storeNative(c, shape, unsafe.Add(p, field.Offset), v, used, limits)
+		}
+		var err error
+		v, err = nativeStoredValue(c, shape, v, used, limits)
+		if err != nil {
+			return err
+		}
+	}
+	field.Set(p, v)
 	return nil
 }
 

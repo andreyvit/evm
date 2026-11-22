@@ -3498,10 +3498,12 @@ differences to keep in mind.
 #### 3. Host-bound structs, generics, and boundary types
 
 - **Hidden host fields:** When a host trims a struct with `Options.OmitFields`
-  or `Options.Fields`, copying a native struct still preserves hidden fields in
-  Go memory, whereas script equality (`==`) and map hashing inspect only the
-  exposed fields, and a newly constructed script value leaves hidden fields
-  zeroed.
+  or `Options.Fields`, scripts can access only exposed fields, while copying a
+  native struct preserves hidden fields in a snapshot (copied on assignment).
+  Hidden fields still participate in equality (`==`) and map hashing via that
+  snapshot. Fresh native storage starts with hidden fields zeroed, while
+  assigning a fresh literal over existing native storage updates only exposed
+  fields and preserves the destination's hidden fields.
 - **Concrete host generics only:** Generic host structs (`Options.Instances`)
   and generic host functions (`Options.GenericFunctions`) work only for the
   concrete type arguments the host pre-registered—scripts cannot instantiate

@@ -88,7 +88,7 @@ func Reset(){*page.Pointer()=page.Page{Title:"reset"}}
 		if err := evmtest.New(program).Run(context.Background(), "Reset", nil, nil); err != nil {
 			t.Fatal(err)
 		}
-		if host.page.Private != nil || host.page.Title != "reset" {
+		if host.page.Private != marker || host.page.Title != "reset" {
 			t.Fatalf("reset: %+v", host.page)
 		}
 	}

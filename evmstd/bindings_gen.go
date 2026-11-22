@@ -391,6 +391,7 @@ var nativePackages = []nativePackage{
 	{
 		Path:    "bytes",
 		Decl:    "bytes",
+		Host:    byteGuards{},
 		Imports: []string{"unicode"},
 		Options: evmbind.Options{
 			NativePackage: "bytes",
@@ -417,7 +418,6 @@ var nativePackages = []nativePackage{
 				"IndexByte":       bytes.IndexByte,
 				"IndexFunc":       bytes.IndexFunc,
 				"IndexRune":       bytes.IndexRune,
-				"Join":            bytes.Join,
 				"LastIndex":       bytes.LastIndex,
 				"LastIndexAny":    bytes.LastIndexAny,
 				"LastIndexByte":   bytes.LastIndexByte,
@@ -426,9 +426,6 @@ var nativePackages = []nativePackage{
 				"NewBuffer":       bytes.NewBuffer,
 				"NewBufferString": bytes.NewBufferString,
 				"NewReader":       bytes.NewReader,
-				"Repeat":          repeatBytes,
-				"Replace":         bytes.Replace,
-				"ReplaceAll":      bytes.ReplaceAll,
 				"Runes":           bytes.Runes,
 				"Split":           bytes.Split,
 				"SplitAfter":      bytes.SplitAfter,

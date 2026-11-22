@@ -130,12 +130,6 @@ func reasonFor(pkg, name, fallback string) string {
 	return fallback
 }
 
-// guarded functions are bound to a wrapper in evmstd instead of the standard
-// function, to bound work the VM cannot meter.
-var guarded = map[string]string{
-	"bytes.Repeat": "repeatBytes",
-}
-
 // builtinTime lists what the VM's own time package already declares. evmstd
 // leaves these out of its fragment; they are exposed all the same.
 var builtinTime = map[string]bool{
@@ -437,8 +431,8 @@ func (g *generator) native(pkg *types.Package, bindings *bytes.Buffer) {
 			}
 			fmt.Fprintf(&body, "func %s%s\n", name, signatureText(sig, qualifier))
 			target := pkg.Name() + "." + name
-			if wrapper := guarded[pkg.Path()+"."+name]; wrapper != "" {
-				target = wrapper
+			if pkg.Path() == "bytes" && (name == "Replace" || name == "ReplaceAll" || name == "Join" || name == "Repeat") {
+				continue // byteGuards methods receive the calling VM.
 			}
 			functions = append(functions, fmt.Sprintf("%q: %s", name, target))
 		case *types.Var:
@@ -483,6 +477,9 @@ func (g *generator) native(pkg *types.Package, bindings *bytes.Buffer) {
 	check(os.WriteFile(dir+"/decl.go", formatted, 0o644))
 
 	fmt.Fprintf(bindings, "\t{\n\t\tPath: %q,\n\t\tDecl: %q,\n", pkg.Path(), flat(pkg.Path()))
+	if pkg.Path() == "bytes" {
+		bindings.WriteString("\t\tHost: byteGuards{},\n")
+	}
 	var quoted []string
 	for _, p := range deps {
 		if p != "time" || pkg.Path() == "time" {

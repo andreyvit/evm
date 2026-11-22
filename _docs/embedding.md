@@ -517,9 +517,16 @@ and `unicode/utf16`. Pass `evmstd.Packages()` alongside your host packages to
   package and explains why each omitted one was excluded. Unlisted symbols fail
   type checking.
 - Most `evmstd` packages call the real Go standard library outside the VM's
-  instruction and allocation budgets, charging only their results. `cmp`,
-  `iter`, `maps`, `slices`, and `sort` compile from script source and are
-  metered like ordinary script code.
+  instruction and allocation budgets, charging only their results.
+  `bytes.Replace`, `bytes.ReplaceAll`, `bytes.Join`,
+  and `bytes.Repeat` charge their output size against the VM allocation budget
+  before allocating (`bytes.Repeat` also keeps its 16 MiB output cap). The six
+  `regexp.Regexp` `ReplaceAll` methods—literal (`ReplaceAllLiteral`,
+  `ReplaceAllLiteralString`), capture expansion (`ReplaceAll`,
+  `ReplaceAllString`), and callback (`ReplaceAllFunc`,
+  `ReplaceAllStringFunc`)—charge their output against the VM allocation budget.
+  `cmp`, `iter`, `maps`, `slices`, and `sort` compile from script source and
+  are metered like ordinary script code.
 - Linking `evmstd` makes `[]string`, `[]byte`, `[]int`, and other slices used
   by those packages native Go slices in the program, so host schemas and
   `evmbind.Codec` / `RenderNative` share their backing storage directly.

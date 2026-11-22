@@ -9,14 +9,22 @@
 //
 // Nothing here reads files, the network, the environment or the operating
 // system. API.md lists what each package exposes and what it leaves out.
-// Native functions run outside the VM's instruction and allocation budgets;
-// only the values they return are charged.
+// Most native functions run outside the VM's instruction and allocation
+// budgets, charging only the values they return. bytes.Replace, bytes.ReplaceAll,
+// bytes.Join, and bytes.Repeat charge their output size before allocating
+// (bytes.Repeat also caps output at 16 MiB). The six
+// regexp.Regexp ReplaceAll methods (literal: ReplaceAllLiteral,
+// ReplaceAllLiteralString; capture expansion: ReplaceAll, ReplaceAllString;
+// callback: ReplaceAllFunc, ReplaceAllStringFunc) charge their output against
+// the VM allocation budget. Source packages (cmp, iter, maps, slices, sort)
+// are metered like script code.
 package evmstd
 
 import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"reflect"
 	"slices"
 	"sync"
 
@@ -38,6 +46,7 @@ type nativePackage struct {
 	Decl    string   // directory under _decl
 	Imports []string // natively bound packages its declarations name
 	Options evmbind.Options
+	Host    any
 }
 
 type library struct {
@@ -53,6 +62,7 @@ var load = sync.OnceValue(func() *library {
 			panic(err)
 		}
 		opt := p.Options
+		opt.Host = reflect.TypeOf(p.Host)
 		opt.Imports = map[string]*evmbind.Schema{}
 		for _, dep := range p.Imports {
 			if lib.schemas[dep] == nil {
@@ -65,7 +75,11 @@ var load = sync.OnceValue(func() *library {
 			panic(fmt.Sprintf("evmstd: %s: %v", p.Path, err))
 		}
 		lib.schemas[p.Path] = schema
-		lib.packages = append(lib.packages, schema.Bind(nil))
+		pkg := schema.Bind(p.Host)
+		if p.Path == "regexp" {
+			bindRegexpReplacements(&pkg)
+		}
+		lib.packages = append(lib.packages, pkg)
 	}
 	for _, path := range sourcePackages {
 		text, err := sources.ReadFile("_src/" + flatten(path) + ".go")

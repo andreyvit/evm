@@ -1062,8 +1062,15 @@ Go wrappers into your host binary so calls and field accesses avoid reflection.
   `LoadLocation` are not). See [`evmstd/API.md`](evmstd/API.md) for the full
   inventory.
 - **Metering & extending:** `cmp`, `iter`, `maps`, `slices`, and `sort` compile
-  from script source and are metered; the rest call Go outside VM meters. A
-  host package at path `"time"` merges with the built-in `time` package. List
+  from script source and are metered; the rest call Go outside VM meters.
+  `bytes.Replace`, `bytes.ReplaceAll`, `bytes.Join`,
+  and `bytes.Repeat` charge their output size against the VM allocation budget
+  before allocating (`bytes.Repeat` keeps its 16 MiB cap). The six
+  `regexp.Regexp` `ReplaceAll` methods—literal (`ReplaceAllLiteral`,
+  `ReplaceAllLiteralString`), capture expansion (`ReplaceAll`,
+  `ReplaceAllString`), and callback (`ReplaceAllFunc`,
+  `ReplaceAllStringFunc`)—charge their output against the VM allocation budget.
+  A host package at path `"time"` merges with the built-in `time` package. List
   paths with `evm.StandardLibraryPaths()` and `evmstd.Paths()`.
 - **Output:** Set `vm.Output = func(s string) error` to capture `print`,
   `fmt.Print`, and `log` (`nil` writes to Go's logger; capped at

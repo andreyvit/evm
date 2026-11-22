@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"html"
 	"math/bits"
@@ -18,6 +19,7 @@ import (
 	"unicode"
 	"unicode/utf16"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmcompiler"
@@ -264,5 +266,49 @@ func Run() string {
 	want := "[1 2 2 5 8 9] true 5 9 1 true|4 true [1 2 5 8 9] 3|[Apple apple fig pear] 2|[1 2 3 4] [1 4] [1 2 3] true|[1 3] [9 3] -1|[[1 2] [3 4] [5]] [a b]|1y|0x|[a b c] [1 2 3] true 3|map[a:1] 1 -1 true 7x|[1 2 3] [a b c] 1 true [{Dee 20} {Bob 25} {Eve 25} {Ann 30} {Cid 30}]|[3 2 1] true true 8"
 	if got != want {
 		t.Errorf("got  %s\nwant %s", got, want)
+	}
+}
+
+func TestByteResultBudget(t *testing.T) {
+	const src = `import "bytes"
+	func ReplaceAll(b []byte) int {return len(bytes.ReplaceAll(b, []byte("a"), b))}
+	func ReplaceMany(b []byte) int {return len(bytes.Replace(b, []byte("a"), b, -1))}
+	func ReplaceOnce(b []byte) int {return len(bytes.Replace(b, []byte("a"), b, 1))}
+	func ReplaceNone(b []byte) int {return len(bytes.Replace(b, nil, b, 0))}
+	func EmptyOld() int {return len(bytes.ReplaceAll([]byte("é"), nil, []byte("xy")))}
+	func Repeat(b []byte) int {return len(bytes.Repeat(b, 64))}
+	func Join(b []byte) int {return len(bytes.Join([][]byte{b,b,b,b,b,b,b,b}, b))}
+	`
+	pkgs := evmstd.Packages()
+	mod, err := evmcompiler.Compile("bytes.go", src, pkgs...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := evm.Link(mod, pkgs...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := bytes.Repeat([]byte("a"), 256)
+	args := []values.Value{values.SliceValue(unsafe.Pointer(unsafe.SliceData(b)), uint32(len(b)), uint32(len(b)))}
+	for name, want := range map[string]int{"ReplaceAll": 65536, "ReplaceMany": 65536, "ReplaceOnce": 511, "ReplaceNone": 256, "EmptyOld": 6, "Repeat": 16384, "Join": 3840} {
+		t.Run(name, func(t *testing.T) {
+			in := args
+			if name == "EmptyOld" {
+				in = nil
+			}
+			for _, budget := range []uint64{2048, 1 << 20} {
+				vm := evmtest.New(p)
+				var out [1]values.Value
+				err := vm.RunWithBudget(context.Background(), name, in, out[:], evm.Limits{AllocationBytes: budget})
+				vm.Release()
+				if budget < uint64(want) {
+					if !errors.Is(err, evm.ErrAllocation) {
+						t.Fatalf("small budget: %v", err)
+					}
+				} else if err != nil || int(out[0].AsInt()) != want {
+					t.Fatalf("got %v, %v; want %d", out, err, want)
+				}
+			}
+		})
 	}
 }

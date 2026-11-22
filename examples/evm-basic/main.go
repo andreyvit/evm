@@ -54,8 +54,8 @@ func run(out io.Writer) {
 	module := must(evmcompiler.Compile("bonus.go", pluginSource, packages...))
 	limits := evm.Limits{Steps: 1_000_000, Duration: time.Second}
 	program := must(evm.LinkOptions{DefaultLimits: &limits}.Link(module, packages...))
-	customerCodec := must(evmbind.Codec[*Customer](shopSchema))
-	orderCodec := must(evmbind.Codec[*Order](shopSchema))
+	customerCodec := evmbind.Codec[*Customer](shopSchema)
+	orderCodec := evmbind.Codec[*Order](shopSchema)
 	onOrder := must(program.LookupFunction("OnOrder", &evm.Signature{Params: []*values.Type{customerCodec.Type(), orderCodec.Type(), values.TimeType}, Results: []*values.Type{values.StringType}}))
 
 	ada := &Customer{Name: "Ada", Tier: "basic", Joined: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC)}

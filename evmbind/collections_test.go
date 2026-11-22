@@ -506,21 +506,22 @@ func TestValueCodecs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	panels, err := Codec[CollectionPanel](schema)
-	if err != nil {
-		t.Fatal(err)
-	}
-	items, err := Codec[*CollectionItem](schema)
-	if err != nil {
-		t.Fatal(err)
-	}
-	styles, err := Codec[map[string]map[string]string](schema)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Codec[chan int](schema); err == nil {
+	panels := Codec[CollectionPanel](schema)
+	items := Codec[*CollectionItem](schema)
+	styles := Codec[map[string]map[string]string](schema)
+	_, setupErr := TryCodec[chan int](schema)
+	if setupErr == nil {
 		t.Fatal("unbound type accepted")
 	}
+	t.Run("Codec panics for an unbound type", func(t *testing.T) {
+		defer func() {
+			got, ok := recover().(error)
+			if !ok || got.Error() != setupErr.Error() {
+				t.Fatalf("panic = %v, want %v", got, setupErr)
+			}
+		}()
+		Codec[chan int](schema)
+	})
 	pkg := schema.Package()
 	m, err := evmcompiler.Compile("echo.go", `import "native"; func Echo(x native.CollectionPanel) native.CollectionPanel{return x}`, pkg)
 	if err != nil {

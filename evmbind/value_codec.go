@@ -19,8 +19,18 @@ type ValueCodec[T any] struct {
 	unpack func(values.Value) (T, error)
 }
 
-// Codec resolves the schema type once. Pointer codecs preserve object identity.
-func Codec[T any](s *Schema) (*ValueCodec[T], error) {
+// Codec resolves the schema type once. It panics if the conversion is unavailable
+// or ambiguous.
+func Codec[T any](s *Schema) *ValueCodec[T] {
+	codec, err := TryCodec[T](s)
+	if err != nil {
+		panic(err)
+	}
+	return codec
+}
+
+// TryCodec resolves the schema type once and returns any setup error.
+func TryCodec[T any](s *Schema) (*ValueCodec[T], error) {
 	t := reflect.TypeFor[T]()
 	c := &ValueCodec[T]{schema: s, typ: s.NativeType(t)}
 	if n, ok := s.nativeModels[t]; ok {
@@ -86,13 +96,16 @@ func Codec[T any](s *Schema) (*ValueCodec[T], error) {
 }
 func (c *ValueCodec[T]) Type() *values.Type { return c.typ }
 
-// Pack borrows a live Go struct pointer. Use PackIn for budgeted conversions.
+// Pack wraps a Go pointer without copying it. It panics if the codec requires a VM.
 func (c *ValueCodec[T]) Pack(x T) values.Value {
 	if c.pack == nil {
 		panic("this codec requires PackIn")
 	}
 	return c.pack(x)
 }
+
+// Unpack reads a Go pointer from v. It returns an error if the codec requires a VM
+// or the pointer representation is incompatible.
 func (c *ValueCodec[T]) Unpack(v values.Value) (T, error) {
 	if c.unpack == nil {
 		var zero T
@@ -100,6 +113,8 @@ func (c *ValueCodec[T]) Unpack(v values.Value) (T, error) {
 	}
 	return c.unpack(v)
 }
+
+// PackIn converts x using the VM's linked types and charges any metered allocation.
 func (c *ValueCodec[T]) PackIn(vm *evm.VM, x T) (v values.Value, err error) {
 	if c.pack != nil {
 		return c.pack(x), nil
@@ -110,6 +125,8 @@ func (c *ValueCodec[T]) PackIn(vm *evm.VM, x T) (v values.Value, err error) {
 	defer Catch(c.typ.Name(), &err)
 	return encode(&Frame{VM: vm, s: c.schema}, c.node, reflect.ValueOf(&x).Elem()), nil
 }
+
+// UnpackIn converts v back to Go using the VM's linked types and conversion budget.
 func (c *ValueCodec[T]) UnpackIn(vm *evm.VM, v values.Value) (x T, err error) {
 	if c.unpack != nil {
 		return c.unpack(v)

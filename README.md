@@ -45,8 +45,8 @@ runs it on a pooled VM with live Go pointers:
 module := must(evmcompiler.Compile("bonus.go", pluginSource, packages...))
 limits := evm.Limits{Steps: 1_000_000, Duration: time.Second}
 program := must(evm.LinkOptions{DefaultLimits: &limits}.Link(module, packages...))
-customerCodec := must(evmbind.Codec[*Customer](shopSchema))
-orderCodec := must(evmbind.Codec[*Order](shopSchema))
+customerCodec := evmbind.Codec[*Customer](shopSchema)
+orderCodec := evmbind.Codec[*Order](shopSchema)
 onOrder := must(program.LookupFunction("OnOrder", &evm.Signature{Params: []*values.Type{customerCodec.Type(), orderCodec.Type(), values.TimeType}, Results: []*values.Type{values.StringType}}))
 // ...
 vm := program.AcquireVM(context.Background())
@@ -273,8 +273,8 @@ packages := append(evmstd.Packages(), shopSchema.Bind(nil))
 module := must(evmcompiler.Compile("bonus.go", pluginSource, packages...))
 limits := evm.Limits{Steps: 1_000_000, Duration: time.Second}
 program := must(evm.LinkOptions{DefaultLimits: &limits}.Link(module, packages...))
-customerCodec := must(evmbind.Codec[*Customer](shopSchema))
-orderCodec := must(evmbind.Codec[*Order](shopSchema))
+customerCodec := evmbind.Codec[*Customer](shopSchema)
+orderCodec := evmbind.Codec[*Order](shopSchema)
 onOrder := must(program.LookupFunction("OnOrder", &evm.Signature{Params: []*values.Type{customerCodec.Type(), orderCodec.Type(), values.TimeType}, Results: []*values.Type{values.StringType}}))
 
 ada := &Customer{Name: "Ada", Tier: "basic", Joined: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC)}
@@ -522,9 +522,9 @@ env := NewEnv()
 // program is immutable and renders concurrently.
 tmpl := must(env.Options.CompileFiles("Page", Views, env.Packages...))
 page := must(tmpl.Link(env.Packages...))
-storeCodec := must(evmbind.Codec[*Store](env.Schema))
-userCodec := must(evmbind.Codec[*User](env.Schema))
-cartCodec := must(evmbind.Codec[*Cart](env.Schema))
+storeCodec := evmbind.Codec[*Store](env.Schema)
+userCodec := evmbind.Codec[*User](env.Schema)
+cartCodec := evmbind.Codec[*Cart](env.Schema)
 
 user := &User{Name: "Ada Lovelace", Email: "ada@example.com", Admin: true, Joined: time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC)}
 cart := &Cart{Coupon: "SPRING", Lines: []CartLine{

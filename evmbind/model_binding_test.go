@@ -82,10 +82,7 @@ func TestNativeModelSignatures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	codec, err := evmbind.Codec[*BoundModel](dep)
-	if err != nil {
-		t.Fatal(err)
-	}
+	codec := evmbind.Codec[*BoundModel](dep)
 	vm := p.AcquireVM(t.Context())
 	defer vm.Release()
 	encoded, err := codec.PackIn(vm, instance.row)
@@ -96,10 +93,7 @@ func TestNativeModelSignatures(t *testing.T) {
 	if err != nil || decoded != instance.row {
 		t.Fatal("model pointer identity", err)
 	}
-	copies, err := evmbind.Codec[BoundModel](host)
-	if err != nil {
-		t.Fatal(err)
-	}
+	copies := evmbind.Codec[BoundModel](host)
 	snapshot, err := copies.PackIn(vm, *instance.row)
 	if err != nil {
 		t.Fatal(err)

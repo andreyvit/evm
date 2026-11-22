@@ -362,7 +362,11 @@ func generateSource(s *source, nativeImport, outputPackage string) ([]byte, erro
 				idx++
 			}
 			if n.kind == nodeNativeFunction {
-				args = append(args, fmt.Sprintf("f.DecodeNativeCallback(%q,f.CallArgument(%d)).(%s)", n.name, idx, typ(n)))
+				if b := op.callbackBorrow; b != nil && b.argument == i {
+					args = append(args, fmt.Sprintf("f.DecodeBorrowedCallback(%q,f.CallArgument(%d),%q).(%s)", n.name, idx, b.domain, typ(n)))
+				} else {
+					args = append(args, fmt.Sprintf("f.DecodeNativeCallback(%q,f.CallArgument(%d)).(%s)", n.name, idx, typ(n)))
+				}
 			} else {
 				args = append(args, fmt.Sprintf("read%s(f,f.CallArgument(%d))", ids[n], idx))
 			}
@@ -394,6 +398,8 @@ func generateSource(s *source, nativeImport, outputPackage string) ([]byte, erro
 		writeInvocation(line, target, args, lhs)
 		if op.byteBorrow != nil {
 			line("f.SetBorrowedBytesResult(0,r0)")
+		} else if b := op.callbackBorrow; b != nil && b.argument < 0 {
+			line("f.SetCallResult(0,f.EncodeBorrowedIterator(%q,r0,%q))", op.outs[0].name, b.domain)
 		} else {
 			for i, n := range op.outs {
 				line("f.SetCallResult(%d,write%s(f,r%d))", i, ids[n], i)

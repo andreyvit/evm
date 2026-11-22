@@ -3,6 +3,7 @@ package evmcompiler
 import (
 	"go/types"
 	"reflect"
+	"slices"
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/kvo"
@@ -58,6 +59,12 @@ func (e *typeEnvironment) collectNativeViewLeaves() {
 		// Generic instantiations can introduce a borrow source at compile time.
 		borrowBytes := func(sig evm.Signature, effects *evm.OwnershipEffects) bool {
 			if effects != nil {
+				if domain := effects.CallbackBytes; domain != "" {
+					if !slices.Contains(e.callbackByteDomains, domain) {
+						e.callbackByteDomains = append(e.callbackByteDomains, domain)
+					}
+					return true
+				}
 				for _, src := range effects.Borrowed {
 					if src.Result >= 0 && src.Result < len(sig.Results) && sig.Results[src.Result] == evm.ByteSliceType {
 						return true
@@ -84,6 +91,7 @@ func (e *typeEnvironment) collectNativeViewLeaves() {
 			}
 		}
 	}
+	slices.Sort(e.callbackByteDomains)
 }
 
 func (e *typeEnvironment) mayViewNative(t types.Type) bool {

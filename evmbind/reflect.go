@@ -188,7 +188,11 @@ func reflectWrapper(op *operation, host reflect.Type, ts map[*node]reflect.Type,
 			}
 		}
 		for i, n := range op.args {
-			args = append(args, decodeArgument(f, n, f.CallArgument(start+i), ts))
+			if b := op.callbackBorrow; b != nil && b.argument == i {
+				args = append(args, f.decodeCallback(n, f.CallArgument(start+i), b.domain))
+			} else {
+				args = append(args, decodeArgument(f, n, f.CallArgument(start+i), ts))
+			}
 		}
 		var results []reflect.Value
 		if op.variadic {
@@ -198,6 +202,10 @@ func reflectWrapper(op *operation, host reflect.Type, ts map[*node]reflect.Type,
 		}
 		if op.byteBorrow != nil {
 			f.SetBorrowedBytesResult(0, results[0].Bytes())
+			return
+		}
+		if b := op.callbackBorrow; b != nil && b.argument < 0 {
+			f.SetCallResult(0, f.encodeFunction(op.outs[0], results[0], b.domain))
 			return
 		}
 		for i, v := range results {

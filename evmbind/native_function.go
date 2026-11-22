@@ -1,6 +1,7 @@
 package evmbind
 
 import (
+	"bytes"
 	"fmt"
 	"reflect"
 	"unsafe"
@@ -60,6 +61,10 @@ func (f *Frame) decodeNativeFunction(n *node, v values.Value) reflect.Value {
 }
 
 func (f *Frame) decodeFunction(n *node, v values.Value) reflect.Value {
+	return f.decodeCallback(n, v, "")
+}
+
+func (f *Frame) decodeCallback(n *node, v values.Value, domain string) reflect.Value {
 	b := f.s.nativeFunctions[n]
 	if v.R == 0 {
 		return reflect.Zero(b.typ)
@@ -68,12 +73,13 @@ func (f *Frame) decodeFunction(n *node, v values.Value) reflect.Value {
 	if _, err := fn.Value(f.Program(), n.functionSignature); err != nil {
 		panic(err)
 	}
-	if original, ok := f.Program().NativeFunctionData(v).(reflect.Value); ok && original.Type() == b.typ {
+	if original, ok := f.Program().NativeFunctionData(v).(reflect.Value); ok && domain == "" && original.Type() == b.typ {
 		return original
 	}
 	if err := f.ChargeAllocation(128); err != nil {
 		panic(err)
 	}
+	acceptsBorrow := domain != "" && fn.AcceptsBorrowedBytes(domain)
 	scope := f.VM.CallbackScope()
 	schema := f.s
 	return reflect.MakeFunc(b.typ, func(in []reflect.Value) []reflect.Value {
@@ -91,7 +97,23 @@ func (f *Frame) decodeFunction(n *node, v values.Value) reflect.Value {
 			slots := make([]values.Value, len(in)+b.typ.NumOut())
 			args, out := slots[:len(in)], slots[len(in):]
 			for i, x := range in {
-				args[i] = encode(frame, n.functionArgs[i], x)
+				if domain != "" && n.functionArgs[i].shape.Type == evm.ByteSliceType {
+					if acceptsBorrow {
+						args[i], err = c.BorrowBytes(x.Bytes())
+						if err != nil {
+							return err
+						}
+					} else {
+						// Native and previously compiled targets may retain an ordinary slice.
+						if err := c.ChargeAllocation(uint64(x.Len())); err != nil {
+							return err
+						}
+						data := bytes.Clone(x.Bytes())
+						args[i] = encode(frame, n.functionArgs[i], reflect.ValueOf(data[:len(data):len(data)]))
+					}
+				} else {
+					args[i] = encode(frame, n.functionArgs[i], x)
+				}
 			}
 			if err := c.Run(*fn, slots); err != nil {
 				return err
@@ -110,6 +132,10 @@ func (f *Frame) decodeFunction(n *node, v values.Value) reflect.Value {
 }
 
 func (f *Frame) encodeNativeFunction(n *node, x reflect.Value) values.Value {
+	return f.encodeFunction(n, x, "")
+}
+
+func (f *Frame) encodeFunction(n *node, x reflect.Value, domain string) values.Value {
 	if x.IsNil() {
 		return values.Value{}
 	}
@@ -117,6 +143,11 @@ func (f *Frame) encodeNativeFunction(n *node, x reflect.Value) values.Value {
 	// Copy the function value; never retain the address of a mutable field.
 	fn := reflect.ValueOf(x.Interface())
 	schema := f.s
+	var original any = fn
+	if domain != "" {
+		// Preserve the adapter across native round trips.
+		original = nil
+	}
 	v, err := f.VM.NativeFunctionWithData(b.signature, func(c *evm.VM) (err error) {
 		defer Catch("native function", &err)
 		if err := c.ChargeAllocation(uint64(len(n.functionArgs)+len(n.functionOuts)) * uint64(unsafe.Sizeof(reflect.Value{}))); err != nil {
@@ -126,14 +157,18 @@ func (f *Frame) encodeNativeFunction(n *node, x reflect.Value) values.Value {
 		types := b.types
 		in := make([]reflect.Value, len(n.functionArgs))
 		for i, a := range n.functionArgs {
-			in[i] = decodeArgument(frame, a, c.CallArgument(i), types)
+			if domain != "" {
+				in[i] = frame.decodeCallback(a, c.CallArgument(i), domain)
+			} else {
+				in[i] = decodeArgument(frame, a, c.CallArgument(i), types)
+			}
 		}
 		out := fn.Call(in)
 		for i, value := range out {
 			c.SetCallResult(i, encode(frame, n.functionOuts[i], value))
 		}
 		return nil
-	}, fn)
+	}, original)
 	if err != nil {
 		panic(err)
 	}
@@ -179,4 +214,14 @@ func (f *Frame) DecodeNativeCallback(name string, v values.Value) any {
 		panic(evm.ErrFunction)
 	}
 	return f.decodeFunction(n, v).Interface()
+}
+
+// EncodeBorrowedIterator adapts the []byte arguments of a returned iterator's yield function.
+func (f *Frame) EncodeBorrowedIterator(name string, x any, domain string) values.Value {
+	return f.encodeFunction(f.s.src.nodes[name], reflect.ValueOf(x), domain)
+}
+
+// DecodeBorrowedCallback adapts a method callback whose []byte arguments are borrowed.
+func (f *Frame) DecodeBorrowedCallback(name string, v values.Value, domain string) any {
+	return f.decodeCallback(f.s.src.nodes[name], v, domain).Interface()
 }

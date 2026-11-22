@@ -155,6 +155,24 @@ reflection bindings expose the original guest method name. Guest reads use the
 lent storage directly, while any write, mutable address, or escape triggers a
 single writable copy shared across all slices of that result.
 
+Methods can also lend bytes to a guest callback. Name the callback parameter
+on a method that calls it directly, or annotate the method that returns an
+iterator:
+
+```go
+//evm:borrow-callback-bytes edb.tx visit
+func (c *Cursor) Visit(visit func(key, value []byte) bool)
+
+//evm:borrow-yield-bytes edb.tx
+func (c *Cursor) RawValues() func(yield func(key, value []byte) bool)
+```
+
+Each `[]byte` argument of that callback borrows its backing storage for the
+call. Guest reads use those bytes directly. Writes detach the slice and its
+subslice aliases. Saving a slice past the call also detaches it. Native
+callbacks and guest functions compiled without tracking that domain receive
+owned bytes. Unannotated callbacks keep their ordinary Go slice semantics.
+
 ### Editable model slots
 
 To expose selected native model pointer parameters or results as editable rows

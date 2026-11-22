@@ -2,6 +2,7 @@ package evm
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"unsafe"
 
@@ -157,6 +158,10 @@ func (p *Program) Callable(v values.Value) (Callable, error) {
 	return Callable{t, v.P}, nil
 }
 
+// AcceptsBorrowedBytes reports whether the compiler tracks byte arguments from domain.
+func (f Callable) AcceptsBorrowedBytes(domain string) bool {
+	return f.callTarget != nil && f.index >= 0 && slices.Contains(f.program.functions[f.index].CallbackByteDomains, domain)
+}
 func (f Callable) HasCaptures() bool { return f.callTarget != nil && f.captures != nil }
 func (f Callable) Program() *Program {
 	if f.callTarget == nil {

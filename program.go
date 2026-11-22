@@ -82,6 +82,8 @@ type SourceBranch struct {
 }
 
 type Function struct {
+	// CallbackByteDomains lists the borrow domains tracked for []byte parameters.
+	CallbackByteDomains []string
 	// OwnershipSites describes compiler-emitted clone locations before linking.
 	OwnershipSites []OwnershipSite
 	// LocalRecordReads marks instructions whose result cannot outlive its next execution in this frame.

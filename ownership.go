@@ -41,6 +41,8 @@ type OwnershipEffects struct {
 	Borrowed     []BorrowSource
 	Ends         []ScopeEnd
 	Callbacks    []ScopedCallback
+	// CallbackBytes is the domain of borrowed []byte arguments passed to guest callbacks.
+	CallbackBytes string
 }
 
 func (e *OwnershipEffects) Clone() *OwnershipEffects {

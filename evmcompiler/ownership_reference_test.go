@@ -220,6 +220,12 @@ func (f *lowerer) referencePlanOwnership() *ownershipPlan {
 		where[ins] = append(where[ins], ownershipClone{v, reason})
 	}
 	for _, param := range f.fn.Params {
+		// Any function with a matching signature can be passed as a callback.
+		if isByteSlice(param.Type()) {
+			for _, domain := range f.c.env.callbackByteDomains {
+				add(param, referenceBorrowOrigin{domain, nil})
+			}
+		}
 		order = append(order, param)
 		if t := f.ownershipType(param); t != nil && t.CanOwn() && f.isReadRecord(t) {
 			add(param, referenceBorrowOrigin{"evm.record", nil})

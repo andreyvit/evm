@@ -89,7 +89,7 @@ func moduleTables(m *evm.Module) string {
 	signature := func(s evm.Signature) string { return "(" + typeNames(s.Params) + ")(" + typeNames(s.Results) + ")" }
 	fmt.Fprintf(&b, "json %+v noopt=%v strict=%v init=%q\n", m.JSONTypes, m.NoOptimization, m.StrictCallWindows, m.Init)
 	for i, f := range m.Functions {
-		fmt.Fprintf(&b, "function %d %s %s method=%v internal=%v transparent=%v r=%d p=%d recover=%d code=%v position=%v positions=%v lines=%v captures=%d ownership=%v local=%v\n", i, f.Name, signature(f.Signature), f.Method, f.Internal, f.RecoverTransparent, f.RCount, f.PCount, f.RecoverPC, f.Code, f.Position, f.Positions, f.Lines, len(f.Captures), f.OwnershipSites, slices.Sorted(maps.Keys(f.LocalRecordReads)))
+		fmt.Fprintf(&b, "function %d %s %s method=%v internal=%v transparent=%v r=%d p=%d recover=%d code=%v position=%v positions=%v lines=%v captures=%d ownership=%v borrowedByteParams=%v local=%v\n", i, f.Name, signature(f.Signature), f.Method, f.Internal, f.RecoverTransparent, f.RCount, f.PCount, f.RecoverPC, f.Code, f.Position, f.Positions, f.Lines, len(f.Captures), f.OwnershipSites, f.CallbackByteDomains, slices.Sorted(maps.Keys(f.LocalRecordReads)))
 		for _, c := range f.Captures {
 			fmt.Fprintf(&b, "  capture %s slot=%d\n", typeNames([]*values.Type{c.Type}), c.Slot)
 		}

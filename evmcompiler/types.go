@@ -54,6 +54,7 @@ type typeEnvironment struct {
 	sharedOwners        map[*values.Type]string
 	nativeAllocations   map[*values.Type]*values.NativeLayout
 	collectionLayouts   map[nativeCollectionKey]*values.NativeLayout
+	callbackByteDomains []string
 	nativeViewLeaves    map[*values.Type]bool
 
 	// Written while importing packages. An overlay shares these with its base.

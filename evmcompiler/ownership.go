@@ -240,6 +240,13 @@ func (f *lowerer) planOwnership() *ownershipPlan {
 		}
 	}
 	for _, param := range f.fn.Params {
+		// Any function with a matching signature can be passed as a callback.
+		if isByteSlice(param.Type()) {
+			f.code.CallbackByteDomains = f.c.env.callbackByteDomains
+			for _, domain := range f.c.env.callbackByteDomains {
+				add(param, domain)
+			}
+		}
 		if t := f.ownershipType(param); t != nil && t.CanOwn() && f.isReadRecord(t) {
 			add(param, "evm.record")
 		}

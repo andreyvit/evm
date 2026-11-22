@@ -190,7 +190,13 @@ type byteBorrow struct {
 	method string
 }
 
+type callbackBorrow struct {
+	domain    string
+	parameter string // empty for the yield function of a returned iterator
+	argument  int    // index in operation.args, or -1 for a returned iterator
+}
 type operation struct {
+	callbackBorrow  *callbackBorrow
 	byteBorrow      *byteBorrow
 	paramNames      []string
 	doc             string
@@ -275,6 +281,7 @@ func parseOptions(path string, files fs.FS, selected []string, typesOnly bool, o
 	}
 	var syntax []*ast.File
 	docs := map[string]string{}
+	callbackBorrows := map[token.Pos]*callbackBorrow{}
 	byteBorrows := map[token.Pos]*byteBorrow{}
 	fset := token.NewFileSet()
 	for _, name := range names {
@@ -297,6 +304,18 @@ func parseOptions(path string, files fs.FS, selected []string, typesOnly bool, o
 						docs[fn.Name.Name] += comment.Text + "\n"
 					}
 					parts := strings.Fields(comment.Text)
+					if len(parts) > 0 && (parts[0] == "//evm:borrow-yield-bytes" || parts[0] == "//evm:borrow-callback-bytes") {
+						direct := parts[0] == "//evm:borrow-callback-bytes"
+						if fn.Recv == nil || (!direct && len(parts) != 2) || (direct && len(parts) != 3) || callbackBorrows[fn.Name.Pos()] != nil {
+							fail("%s: invalid %s declaration", fn.Name.Name, parts[0])
+						}
+						b := &callbackBorrow{domain: parts[1]}
+						if direct {
+							b.parameter = parts[2]
+						}
+						callbackBorrows[fn.Name.Pos()] = b
+						continue
+					}
 					if len(parts) == 0 || parts[0] != "//evm:borrow-bytes" {
 						continue
 					}
@@ -565,6 +584,10 @@ func parseOptions(path string, files fs.FS, selected []string, typesOnly bool, o
 							}
 							op.byteBorrow = borrow
 						}
+						if b := callbackBorrows[m.Pos()]; b != nil {
+							op.checkCallbackBorrow(b)
+							op.callbackBorrow = b
+						}
 						s.ops = append(s.ops, op)
 						abi = append(abi, op.abi())
 					}
@@ -697,6 +720,9 @@ func (op *operation) abi() string {
 	if b := op.byteBorrow; b != nil {
 		prefix += "borrow-bytes " + b.domain + " " + b.method + " "
 	}
+	if b := op.callbackBorrow; b != nil {
+		prefix += fmt.Sprintf("callback-bytes %s %d ", b.domain, b.argument)
+	}
 	return prefix + op.key + "(" + strings.Join(p, ",") + ")(" + strings.Join(r, ",") + ")"
 }
 func (s *source) op(f *types.Func, recv *node) *operation {
@@ -722,6 +748,28 @@ func (s *source) op(f *types.Func, recv *node) *operation {
 	s.annotateMutable(op)
 	return op
 }
+func (op *operation) checkCallbackBorrow(b *callbackBorrow) {
+	if op.byteBorrow != nil {
+		fail("%s: callback borrow conflicts with borrowed result", op.key)
+	}
+	b.argument = -1
+	var callback *node
+	if b.parameter != "" {
+		b.argument = slices.Index(op.paramNames, b.parameter)
+		if b.argument >= 0 {
+			callback = op.args[b.argument]
+		}
+	} else if len(op.outs) == 1 {
+		iter := op.outs[0]
+		if iter.kind == nodeNativeFunction && len(iter.functionArgs) == 1 && len(iter.functionOuts) == 0 {
+			callback = iter.functionArgs[0]
+		}
+	}
+	if callback == nil || callback.kind != nodeNativeFunction || !slices.ContainsFunc(callback.functionArgs, func(n *node) bool { return n.shape.Type == evm.ByteSliceType }) {
+		fail("%s: expected callback with a []byte argument", op.key)
+	}
+}
+
 func nodesTypes(ns []*node) []*values.Type {
 	var out []*values.Type
 	for _, n := range ns {
@@ -737,7 +785,7 @@ func (op *operation) nativeMethod() string {
 }
 
 func (op *operation) directOpcode() evm.Opcode {
-	if op.variadic || op.byteBorrow != nil {
+	if op.variadic || op.byteBorrow != nil || op.callbackBorrow != nil {
 		return 0
 	}
 	for _, n := range append(slices.Clone(op.args), op.outs...) {

@@ -80,6 +80,18 @@ func TestTypedFunctionBindings(t *testing.T) {
 			t.Fatal(err)
 		}
 		module, err := evmcompiler.Compile("functions.go", `import "callbacks"
+func BorrowedArguments() bool {
+	box := callbacks.NativeSlot()
+	data := []byte{1,2,3}
+	var saved []byte
+	box.Visit(data, func(b []byte) { saved = b[1:] })
+	data[1] = 9
+	if saved[0] != 2 { return false }
+	var written byte
+	box.Bytes(data)(func(b []byte) bool { a:=b[1:]; a[0]++; written=b[1]; return false })
+	box.Visit(data, box.Writer())
+	return written == 10 && data[1] == 9 && data[0] == 1
+}
 func Twice(n int)int{return n*2}
 func Text(s string)string{return s+"!"}
 func Value(n int)any{return n}
@@ -122,6 +134,10 @@ func ReadNative()int{return callbacks.NativeSlot().Apply(1)}
 		program, err := evm.Link(module, schema.Bind(host))
 		if err != nil {
 			t.Fatal(err)
+		}
+		var borrowed [1]values.Value
+		if err := evmtest.New(program).Run(t.Context(), "BorrowedArguments", nil, borrowed[:]); err != nil || borrowed[0].R != 1 {
+			t.Fatalf("borrowed callback arguments (static=%v): result %v, error %v", static, borrowed, err)
 		}
 		if err := evmtest.New(program).Run(context.Background(), "Register", nil, nil); err != nil {
 			t.Fatal(err)

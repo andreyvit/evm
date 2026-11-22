@@ -681,6 +681,12 @@ func (s *Schema) method(op *operation, recv *values.Type, e entry, direct evm.Di
 	if b := op.byteBorrow; b != nil {
 		effects = &evm.OwnershipEffects{NoRetain: true, NoInvalidate: true, Borrowed: []evm.BorrowSource{{Domain: b.domain, ScopeParameter: 1}}}
 	}
+	if b := op.callbackBorrow; b != nil {
+		if effects == nil {
+			effects = &evm.OwnershipEffects{}
+		}
+		effects.CallbackBytes = b.domain
+	}
 	s.pkg.Methods = append(s.pkg.Methods, evm.ExternalMethod{Ownership: effects, Direct: direct, Name: op.name, Receiver: recv, Signature: op.sig(), Variadic: op.variadic})
 	s.methods = append(s.methods, e)
 }

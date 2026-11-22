@@ -112,10 +112,19 @@ func writeCollection10(f *evmbind.Frame, x []any) values.Value {
 	}
 	return values.SliceValue(unsafe.Pointer(unsafe.SliceData(x)), uint32(len(x)), uint32(cap(x)))
 }
-func readCollection11(f *evmbind.Frame, v values.Value) []string {
+func readCollection11(f *evmbind.Frame, v values.Value) []byte {
+	return ([]byte)(unsafe.Slice((*byte)(evmbind.NativeSliceData(v, reflect.TypeFor[byte]())), int(v.SliceCap()))[:int(v.SliceLen())])
+}
+func writeCollection11(f *evmbind.Frame, x []byte) values.Value {
+	if uint64(cap(x)) > 1<<32-1 {
+		panic("native slice exceeds VM capacity")
+	}
+	return values.SliceValue(unsafe.Pointer(unsafe.SliceData(x)), uint32(len(x)), uint32(cap(x)))
+}
+func readCollection12(f *evmbind.Frame, v values.Value) []string {
 	return ([]string)(unsafe.Slice((*string)(evmbind.NativeSliceData(v, reflect.TypeFor[string]())), int(v.SliceCap()))[:int(v.SliceLen())])
 }
-func writeCollection11(f *evmbind.Frame, x []string) values.Value {
+func writeCollection12(f *evmbind.Frame, x []string) values.Value {
 	if uint64(cap(x)) > 1<<32-1 {
 		panic("native slice exceeds VM capacity")
 	}
@@ -127,16 +136,46 @@ func readScalarAny(f *evmbind.Frame, v values.Value) any {
 func writeScalarAny(f *evmbind.Frame, x any) values.Value {
 	return f.EncodeAny(x)
 }
+func readScalarBool(f *evmbind.Frame, v values.Value) bool {
+	return bool(v.AsBool())
+}
+func writeScalarBool(f *evmbind.Frame, x bool) values.Value {
+	return values.Bool(bool(x))
+}
+func readScalarByte(f *evmbind.Frame, v values.Value) byte {
+	return byte(v.AsUint())
+}
+func writeScalarByte(f *evmbind.Frame, x byte) values.Value {
+	return values.Uint(uint64(x))
+}
+func readNativeFunction16(f *evmbind.Frame, v values.Value) func([]byte) {
+	return f.DecodeNativeFunction("func([]byte)", v).(func([]byte))
+}
+func writeNativeFunction16(f *evmbind.Frame, x func([]byte)) values.Value {
+	return f.EncodeNativeFunction("func([]byte)", x)
+}
+func readNativeFunction17(f *evmbind.Frame, v values.Value) func([]byte) bool {
+	return f.DecodeNativeFunction("func([]byte) bool", v).(func([]byte) bool)
+}
+func writeNativeFunction17(f *evmbind.Frame, x func([]byte) bool) values.Value {
+	return f.EncodeNativeFunction("func([]byte) bool", x)
+}
+func readNativeFunction18(f *evmbind.Frame, v values.Value) func(func([]byte) bool) {
+	return f.DecodeNativeFunction("func(func([]byte) bool)", v).(func(func([]byte) bool))
+}
+func writeNativeFunction18(f *evmbind.Frame, x func(func([]byte) bool)) values.Value {
+	return f.EncodeNativeFunction("func(func([]byte) bool)", x)
+}
 func readScalarInt(f *evmbind.Frame, v values.Value) int {
 	return int(v.AsInt())
 }
 func writeScalarInt(f *evmbind.Frame, x int) values.Value {
 	return values.Int(int64(x))
 }
-func readCollection14(f *evmbind.Frame, v values.Value) map[string]any {
+func readCollection20(f *evmbind.Frame, v values.Value) map[string]any {
 	return *(*map[string]any)(unsafe.Pointer(&v.P))
 }
-func writeCollection14(f *evmbind.Frame, x map[string]any) values.Value {
+func writeCollection20(f *evmbind.Frame, x map[string]any) values.Value {
 	return values.Value{P: *(*unsafe.Pointer)(unsafe.Pointer(&x))}
 }
 func readScalarString(f *evmbind.Frame, v values.Value) string {
@@ -163,7 +202,7 @@ var fieldsTypeNativeBox = nativebind.GeneratedFields{Type: reflect.TypeFor[api.N
 		}
 	}},
 }}
-var Bindings = evmbind.Static{Fingerprint: "084ea2d7b3426fb1d2c8a17b04f356e3efb3534be7a388dec8c818986c36bb78",
+var Bindings = evmbind.Static{Fingerprint: "70900643e963950b32e0807c6f806b8ac2f509b4928cd8a1f69fc5a508014e7f",
 	Fields: map[string]*nativebind.GeneratedFields{
 		"FunctionSlot": &fieldsTypeFunctionSlot,
 		"NativeBox":    &fieldsTypeNativeBox,
@@ -200,6 +239,17 @@ var Bindings = evmbind.Static{Fingerprint: "084ea2d7b3426fb1d2c8a17b04f356e3efb3
 		"KeepAny": func(f *evmbind.Frame) {
 			f.Host.(interface{ KeepAny(*evm.VM, *evm.Callable) }).KeepAny(f.VM, readFunction0(f, f.CallArgument(0)))
 		},
+		"*NativeBox.Visit": func(f *evmbind.Frame) {
+			readPtrNativeBox(f, f.CallArgument(0)).Visit(readCollection11(f, f.CallArgument(1)), f.DecodeBorrowedCallback("func([]byte)", f.CallArgument(2), "fixture.rows").(func([]byte)))
+		},
+		"*NativeBox.Bytes": func(f *evmbind.Frame) {
+			r0 := readPtrNativeBox(f, f.CallArgument(0)).Bytes(readCollection11(f, f.CallArgument(1)))
+			f.SetCallResult(0, f.EncodeBorrowedIterator("func(func([]byte) bool)", r0, "fixture.rows"))
+		},
+		"*NativeBox.Writer": func(f *evmbind.Frame) {
+			r0 := readPtrNativeBox(f, f.CallArgument(0)).Writer()
+			f.SetCallResult(0, writeNativeFunction16(f, r0))
+		},
 		"NativeSlot": func(f *evmbind.Frame) {
 			r0 := f.Host.(interface{ NativeSlot(*evm.VM) *api.NativeBox }).NativeSlot(f.VM)
 			f.SetCallResult(0, writePtrNativeBox(f, r0))
@@ -223,7 +273,7 @@ var Bindings = evmbind.Static{Fingerprint: "084ea2d7b3426fb1d2c8a17b04f356e3efb3
 			f.SetCallResult(0, writePtrFunctionSlot(f, r0))
 		},
 		"Strings": func(f *evmbind.Frame) {
-			f.Host.(interface{ Strings(*evm.VM, []string) }).Strings(f.VM, readCollection11(f, f.CallArgument(0)))
+			f.Host.(interface{ Strings(*evm.VM, []string) }).Strings(f.VM, readCollection12(f, f.CallArgument(0)))
 		},
 	},
 	Direct: map[string]evmbind.DirectFactory{

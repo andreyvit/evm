@@ -3574,8 +3574,9 @@ copies for borrowed host data (transaction-scoped KVO records and
   receiver/captures and owning `*evm.Program` alive; delayed invocation
   acquires a fresh VM from `fn.Program().AcquireVM(ctx)` (with fresh globals;
   callers must synchronize concurrent access to shared mutable captures). A
-  script-defined `error` returned to Go needs an active call or
-  `vm.OpenCallbackScope` while Go calls `Error()`.
+  script-defined `error` returned to Go needs an active host call or an open
+  `vm.OpenCallbackScope(limits)` while Go calls `Error()`—even after `vm.Run` and
+  `vm.Release()` (see §7.3 and §7.8).
 
 > **Key takeaways — Chapter 6**
 > - Constants, `iota`, type aliases, and open generic templates vanish at compile time; only concrete, reachable code emits bytecode.
@@ -3895,6 +3896,102 @@ for guest-only aggregates and maps, obtain the linked guest types from the
 resolved signature and use `vm.PackAggregate` / `vm.UnpackAggregate` and
 `vm.PackMap` / `vm.UnpackMap`.
 
+#### Scripts implementing Go host interfaces
+
+`schema.PackInterface` works in the Go → script direction, wrapping a registered
+native Go implementation for script code. EVM does not synthesize runtime Go
+proxies for arbitrary script-defined types: passing a guest type directly into a
+native Go interface parameter, struct field, slice, or map fails explicitly
+because Go cannot fabricate a new concrete type implementing an arbitrary
+interface at run time.
+
+The one built-in exception is `error`. When a script-defined type implements
+`Error() string` (and optionally `Is(error) bool`, `Unwrap() error`, or
+`Unwrap() []error`), `vm.NativeError`—and `evmbind`'s `error` boundary—wraps it
+in an internal Go `error` adapter backed by `CallbackScope.WithCall`. Inside an
+active host binding, `Error()` re-enters synchronously on the borrowed `*evm.VM`
+with its globals and remaining budget. Outside an active call, calling `Error()`
+while the VM is idle panics with `evm.ErrCallbackInactive`, and after
+`vm.Release()` it panics with `evm.ErrCallbackExpired`. Opening
+`scope, err := vm.OpenCallbackScope(limits)` while the VM is idle keeps guest
+`error` methods callable until `scope.Close()`—both while `vm` is idle and after
+`vm.Release()`—running each call on a fresh VM lease from the same
+`*evm.Program` and Go `ctx` with fresh globals and a fresh per-call budget of
+`limits` (see Section 7.8 for the full callback model):
+
+```go
+vm := program.AcquireVM(ctx)
+scope, err := vm.OpenCallbackScope(evm.Limits{Steps: 10_000, Duration: 100 * time.Millisecond})
+if err != nil {
+    vm.Release()
+    return "", err
+}
+defer scope.Close()
+
+slots := [2]values.Value{values.Int(15)}
+if err := vm.Run(checkFn, slots[:]); err != nil {
+    vm.Release()
+    return "", err
+}
+guestErr, err := vm.NativeError(slots[1])
+vm.Release()
+if err != nil || guestErr == nil {
+    return "", err
+}
+return guestErr.Error(), nil // works after Run and Release until scope.Close()
+```
+
+For any other Go host interface—say `PricingRule` with `Name() string` and
+`Discount(cents int) int`—the script still implements `shop.PricingRule`
+normally inside script code, and the host bridges it with a small precompiled Go
+adapter struct whose methods dispatch through bound `evm.Callable`s resolved
+once with `vm.LookupMethod`:
+
+```go
+type guestPricingRule struct {
+    ctx        context.Context
+    nameFn     evm.Callable
+    discountFn evm.Callable
+}
+
+func newGuestPricingRule(ctx context.Context, vm *evm.VM, iface values.Value) (PricingRule, error) {
+    if iface.R == 0 {
+        return nil, nil
+    }
+    nameFn, err := vm.LookupMethod(iface, "Name", evm.Signature{
+        Results: []*values.Type{values.StringType},
+    })
+    if err != nil {
+        return nil, err
+    }
+    discountFn, err := vm.LookupMethod(iface, "Discount", evm.Signature{
+        Params:  []*values.Type{values.IntType},
+        Results: []*values.Type{values.IntType},
+    })
+    if err != nil {
+        return nil, err
+    }
+    return &guestPricingRule{ctx: ctx, nameFn: nameFn, discountFn: discountFn}, nil
+}
+
+func (r *guestPricingRule) Discount(cents int) int {
+    vm := r.discountFn.Program().AcquireVM(r.ctx)
+    defer vm.Release()
+    slots := [2]values.Value{values.Int(int64(cents))}
+    if err := vm.Run(r.discountFn, slots[:]); err != nil {
+        panic(err)
+    }
+    return int(slots[1].AsInt())
+}
+```
+
+When the adapter must re-enter an active host binding (sharing its globals and
+remaining budget) or share an `OpenCallbackScope` lifetime, store
+`vm.CallbackScope()` instead of calling `AcquireVM` and run `vm.Run` inside
+`scope.WithCall`—the exact pattern EVM's built-in `error` adapter uses. See
+[embedding.md](embedding.md#scripts-implementing-go-host-interfaces) for full
+rules on error returns, registration functions, and concurrency.
+
 ### 7.4 Generated wrappers vs. reflection
 
 `evmbind` validates every declaration against its Go signature at setup time,
@@ -4098,10 +4195,171 @@ inserted through `Function.OwnershipSites`. Unannotated host calls are treated
 conservatively (assumed to retain and invalidate), while simple read-only guest
 helpers are analyzed automatically.
 
+### 7.8 Callbacks, retained functions, and callback scopes
+
+Crossing from script into Go is only half of the host boundary. Real host APIs
+regularly call **back** into script code—sometimes immediately (a comparator
+passed to a Go sort helper), sometimes much later (a registered HTTP handler or
+template renderer), and sometimes through an ordinary Go signature that has no
+`*evm.VM` parameter at all (`err.Error()` or a `func(int) int` struct field).
+
+EVM separates these into three mechanisms with distinct lifetimes and budget
+rules.
+
+#### 1. Synchronous re-entry inside a host binding
+
+When a script calls a Go host function and passes a callback that Go invokes
+*before returning to the script*, the originating `*evm.VM` is already active on
+the current goroutine. Calling `vm.Run(cb, slots)` inside that host binding
+re-enters the same VM directly:
+
+- **Isolated register segment:** Re-entry swaps in a pooled `executionBuffers`
+  segment (`callbackBuffers` in `vm_pool.go`) and restores the outer binding's
+  `R`/`P` windows on return, error, panic, or budget exhaustion. Even if the
+  callback grows its register banks, the outer host binding's argument and
+  result slots stay valid.
+- **Shared execution state:** The callback shares the outer call's package
+  globals, Go `context.Context`, remaining budget (steps, deadline, allocations,
+  output bytes), call-depth counter, and active record scopes.
+- **Unwinding:** A guest panic inside the callback unwinds native Go defers and
+  remains recoverable by a `recover()` in the outer script caller.
+
+No `OpenCallbackScope` is needed here—the VM is already live.
+
+#### 2. Long-lived `evm.Callable` handles (host-controlled invocation)
+
+When Go wants to keep a script function, closure, or bound method and invoke it
+later—potentially across requests or concurrently on multiple goroutines—the
+cleanest boundary type is `evm.Callable` (exposed in `evmbind` schemas as
+`*evm.FunctionOf[func(...)]` for compile-time signature checking, or
+`*evm.FunctionOf[any]` when the host validates the signature itself with
+`fn.CheckSignature(want)`). For interface methods, `vm.LookupMethod` produces a
+bound `evm.Callable` that retains its guest receiver.
+
+Because `evm.Callable` is invoked explicitly through `vm.Run(fn, slots)`:
+
+- The caller chooses **when** to run it, **which** `context.Context` to use, and
+  **what** `evm.Limits` budget to set on the acquired `*evm.VM`
+  (`vm := fn.Program().AcquireVM(ctx); defer vm.Release(); vm.SetBudget(...)`).
+- Each outermost `vm.Run` gets fresh package globals and its own budget while
+  still seeing the closure's captures or bound receiver.
+- Because `Callable` carries no implicit `*evm.VM` or `context.Context`, it
+  never needs `OpenCallbackScope` and cannot leak a request context.
+
+> **Concurrency note:** Independent VMs may call the same `evm.Callable`
+> concurrently, but EVM does not synchronize guest access to shared mutable
+> captures or shared native Go pointers. Check `fn.HasCaptures()` (and
+> `fn.Name()`) if a host registration requires a stateless top-level function,
+> or synchronize access on the host side.
+
+#### 3. Plain Go adapters (`func(...)` and `error`) and `CallbackScope`
+
+Sometimes Go code expects an ordinary Go type whose signature has no `*evm.VM`
+or `context.Context` parameter:
+
+- a native Go function parameter, return value, or struct field (e.g.
+  `cfg.Filter = func(x int) bool { ... }`), or
+- a script-defined type implementing built-in `error` (`Error() string`, plus
+  optional `Is(error) bool` and `Unwrap()`).
+
+When a script exports one of these values into Go, EVM wraps it in a Go adapter
+holding a `*evm.CallbackScope` (`callback_scope.go`) from the originating VM.
+Every call to `cfg.Filter(x)` or `err.Error()` routes through
+`scope.WithCall(fn)`.
+
+What `WithCall` does depends on the scope's state:
+
+| State when Go calls `fn(...)` or `err.Error()` | What happens | Globals & budget |
+| --- | --- | --- |
+| Inside an active host binding (`vm.inNativeCall`) | Re-enters the active `vm` synchronously | Outer call's globals, `ctx`, and remaining budget |
+| After `vm.Run`, `vm` idle, **no** `OpenCallbackScope` | Panics with `evm.ErrCallbackInactive` | — |
+| After `vm.Release()`, **no** `OpenCallbackScope` | Panics with `evm.ErrCallbackExpired` | — |
+| `OpenCallbackScope(limits)` open (`vm` idle **or** released) | Acquires a fresh pooled `*evm.VM` from the same `*Program` and `ctx`, sets `limits`, runs, and releases it | Fresh globals and a **fresh per-call budget of `limits`** |
+| After `scope.Close()` | Panics with `evm.ErrCallbackExpired` | — |
+
+> **Why this way?** *(Clear trade-off.)* EVM refuses idle and post-release
+> adapter calls by default instead of silently leasing a VM forever. Otherwise,
+> any script-defined `error` logged in another goroutine or any forgotten
+> `func` field on a Go struct could pin a request's `context.Context` and
+> `*evm.Program` indefinitely, or trigger hidden unbounded script execution
+> after the request has finished. Requiring `vm.OpenCallbackScope(limits)` and
+> `defer scope.Close()` forces the host to state two things explicitly: **how
+> long** exported Go adapters remain callable, and **what per-call budget** each
+> invocation gets.
+
+#### Using `OpenCallbackScope(limits)` properly
+
+Open the scope on an acquired, idle `*evm.VM` before exporting or invoking
+retained adapters, and close it when Go is done with those values:
+
+```go
+vm := program.AcquireVM(ctx)
+defer vm.Release()
+
+// Explicit per-call budget for any callback or guest error.Error() invoked
+// after vm.Run returns (both before and after vm.Release()).
+scope, err := vm.OpenCallbackScope(evm.Limits{
+    Steps:           10_000,
+    AllocationBytes: 64 << 10,
+    Allocations:     1_000,
+    Duration:        100 * time.Millisecond,
+})
+if err != nil {
+    return err
+}
+defer scope.Close()
+
+if err := vm.Run(setupFn, slots[:]); err != nil {
+    return err
+}
+// cfg.Filter(42) and guestErr.Error() now run on a fresh VM lease with
+// the scope's per-call budget, without touching vm's own budget.
+```
+
+Key rules and edge cases:
+
+- **Per-call budget, not cumulative:** Every outside-of-binding call through an
+  open scope gets a fresh VM lease with `vm.SetBudget(limits)`. Zero quotas are
+  unlimited (matching `vm.SetBudget`), so pass `program.DefaultLimits()` if you
+  want the program's link-time defaults rather than an empty `evm.Limits{}`.
+  Invalid limits (such as a negative duration or a soft limit exceeding its hard
+  limit) fail immediately at `OpenCallbackScope`.
+- **Same behavior before and after `vm.Release()`:** Whether you call the
+  exported adapter while `vm` is still held (e.g. under `defer vm.Release()`) or
+  after releasing `vm` back to the pool, an open scope runs the callback on a
+  fresh VM lease with `limits`. It never consumes or overwrites the originating
+  idle VM's budget.
+- **Nested callbacks inside an open-scope call:** While that temporary callback
+  VM is running, it is the active VM on `scope`, so synchronous callbacks
+  invoked *from inside* that callback re-enter it and share its per-call budget,
+  and any new guest errors or functions it exports inherit the same `scope`.
+- **Lifecycle errors:** Calling `OpenCallbackScope` on a running VM returns
+  `evm.ErrReentry`; calling it twice on the same VM returns
+  `evm.ErrCallbackScopeOpen`; calling `scope.Close()` while any VM on the scope
+  is actively running returns `evm.ErrReentry`. Once `scope.Close()` succeeds,
+  the scope zeros its references to `program`, `ctx`, and `vm` so they can be
+  garbage-collected.
+- **Serialization and `ctx` lifetime:** A single `CallbackScope` is not safe for
+  concurrent calls from multiple goroutines—serialize access if multiple
+  goroutines can invoke adapters from the same scope, and keep the `ctx` passed
+  to `AcquireVM(ctx)` valid until `scope.Close()`.
+- **Identity without wrapper stacking:** Round-tripping a guest function through
+  a native Go `func` field (or a guest `error` through a Go `error`) recovers
+  the original program-owned handle via weak tracking rather than stacking
+  wrappers. Native Go functions and native Go errors (`errors.New(...)`) pass
+  through untouched and never use a `CallbackScope`.
+
+**Rule of thumb:** Use `evm.Callable` (`*evm.FunctionOf[...]`) whenever Go owns
+the call site and can pass a VM; use a plain Go `func` or `error` when interop
+with an existing Go signature requires it, and open `vm.OpenCallbackScope(limits)`
+only if Go will call that adapter after `vm.Run` returns.
+
 > **Key takeaways — Chapter 7**
 > - Host calls share the exact same overlapping register-window ABI as script calls, plus fast direct-call opcodes (`call.host.d*`) for small, non-escaping calls.
 > - `evmbind` derives script-facing schemas directly from real Go source files and generates reflection-free wrappers verified by source fingerprints.
 > - Native struct pointers, slices, and maps keep their real Go backing storage across the boundary; `any` preserves native types and wraps guest-only values in `*evm.GuestValue`.
+> - Built-in `error` bridges guest implementations automatically, while arbitrary Go host interfaces have no runtime proxy and use a small precompiled Go adapter backed by `vm.LookupMethod`.
+> - Synchronous callbacks re-enter the active `*evm.VM` on a pooled register segment; long-lived host registrations use `evm.Callable`; plain Go `func(...)` and guest `error` adapters invoked after `vm.Run` require an explicit `vm.OpenCallbackScope(limits)` with a per-call budget and `scope.Close()`.
 > - Virtual standard packages (`strings`, `fmt`, `evmstd`, etc.) are type-checked lazily and compiled only when reached, keeping startup fast.
 > - Compile-time ownership analysis (`OwnershipEffects` and `//evm:borrow-bytes`) lets scripts read borrowed records and byte slices with zero copies while automatically detaching any value that escapes its scope.
 

@@ -321,9 +321,12 @@ ordinary call window rather than direct-call opcodes. Variadic native function
 Resolve a bound Go type once during setup with `evmbind.Codec[T](schema)`:
 
 ```go
-customerCodec, err := evmbind.Codec[*Customer](shopSchema)
-tagsCodec, err := evmbind.Codec[map[string][]string](shopSchema)
+customerCodec := evmbind.Codec[*Customer](shopSchema)
+tagsCodec := evmbind.Codec[map[string][]string](shopSchema)
 ```
+
+`Codec` panics if it cannot resolve a unique conversion. Use
+`evmbind.TryCodec[T](schema)` to handle setup errors.
 
 - `codec.Type()` returns the bound `*values.Type` for `program.LookupFunction`.
 - For ordinary bound native struct pointers, `codec.Pack(ptr)` and
@@ -361,6 +364,11 @@ unwrap already-packed EVM values.)
   interface.
 - Embedded host interfaces can be passed wherever a smaller method set is
   expected.
+- `evmbind` binds registered native Go implementations into script interfaces
+  (Go → script); it does not synthesize runtime Go proxies for arbitrary
+  script-defined types. For built-in guest-defined `error` bridging and the
+  precompiled Go adapter pattern for arbitrary interfaces, see
+  [Scripts implementing Go host interfaces](../_docs/embedding.md#scripts-implementing-go-host-interfaces).
 
 ### Data structs, pointers, and collections
 
@@ -407,8 +415,10 @@ scalars:
   records.
 - **`error`:** Built-in `error` works in arguments, results, struct fields, and
   map values. Native and guest errors preserve identity, `nil`, and `Error()`
-  through EVM's error bridge in both generated and reflected bindings. Native
-  `[]error` storage is not yet supported.
+  through EVM's error bridge in both generated and reflected bindings (see
+  [Scripts implementing Go host interfaces](../_docs/embedding.md#scripts-implementing-go-host-interfaces)
+  for `OpenCallbackScope` after `Run` or `Release`). Native `[]error` storage is
+  not yet supported.
 
 ## Native package functions
 
@@ -480,17 +490,20 @@ serialized like any other use of that VM (EVM provides no blanket guarantee of
 guest race safety on shared captures or native pointers). Guest panics unwind
 native defers and remain recoverable by guest callers.
 
-- **Idle callbacks:** Native Go function fields remember their originating VM.
-  While that VM is idle, open `scope, err := vm.OpenCallbackScope()` if host
-  code needs to invoke those Go function wrappers outside a running guest call
-  (close `scope` when done). An open scope keeps exported adapters callable
-  even after `vm.Release()`, acquiring a fresh VM with the same program, Go
-  context, and default budget. Without an open scope, idle calls fail
-  (`ErrCallbackInactive`), and `vm.Release()` expires them
-  (`ErrCallbackExpired`). Guest-defined `error` methods follow the same
-  rules—keep an active call or open scope and a valid context while Go formats
-  or inspects them. Native Go errors and native-created functions are
-  unaffected.
+- **Idle and post-release callbacks (`OpenCallbackScope`):** Native Go function
+  wrappers and script-defined `error`s remember their originating VM's
+  `CallbackScope`. While a host binding is actively running, they re-enter that
+  VM directly (no `OpenCallbackScope` needed). If host code needs to invoke them
+  *after* `vm.Run` returns, open `scope, err := vm.OpenCallbackScope(limits)`
+  while `vm` is idle and `defer scope.Close()`. Every callback invoked outside
+  an active host binding—whether `vm` is idle or already released—acquires a
+  fresh VM lease from the same program and Go context with fresh package globals
+  and a **fresh per-call budget of `limits`** (zero quotas are unlimited,
+  matching `vm.SetBudget`; pass `program.DefaultLimits()` to reuse the program's
+  defaults). Without an open scope, idle calls panic with
+  `ErrCallbackInactive`, and `vm.Release()` expires them (`ErrCallbackExpired`).
+  Keep `ctx` valid until `scope.Close()` and serialize calls sharing one scope.
+  Native Go errors and native-created functions are unaffected.
 - **Identity without wrapper stacking:** Native callable values remember their
   original Go function value, and guest-created functions read back from native
   storage recover their program-owned handle (tracked weakly and cleaned up

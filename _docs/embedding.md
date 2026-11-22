@@ -95,11 +95,13 @@ accordingly.
 
 #### Live pointers and typed `nil`
 
-Use `evmbind.Codec[T](schema)` once during setup to resolve a bound Go type:
+Use `evmbind.Codec[T](schema)` once during setup to resolve a bound Go type.
+It panics if the conversion is unavailable or ambiguous. Use
+`evmbind.TryCodec[T](schema)` to handle the setup error.
 
 ```go
-customerCodec := must(evmbind.Codec[*Customer](shopSchema))
-orderCodec := must(evmbind.Codec[*Order](shopSchema))
+customerCodec := evmbind.Codec[*Customer](shopSchema)
+orderCodec := evmbind.Codec[*Order](shopSchema)
 onOrder := must(program.LookupFunction("OnOrder", &evm.Signature{
     Params:  []*values.Type{customerCodec.Type(), orderCodec.Type(), values.TimeType},
     Results: []*values.Type{values.StringType},
@@ -154,7 +156,9 @@ repack when crossing to another `*evm.Program`.
 
 Schemas follow their declared types and static-only policy: you cannot register
 arbitrary Go types at run time to pass them through `any`. Unregistered concrete
-types return an error from `PackInterface` or `PackIn`.
+types return an error from `PackInterface` or `PackIn`. For the reverse
+direction—calling methods on a script-defined type from Go—see
+[Scripts implementing Go host interfaces](#scripts-implementing-go-host-interfaces).
 
 #### Nested collections and guest storage
 
@@ -162,7 +166,7 @@ For native-backed slices, maps, and structs bound by a schema, resolve a typed
 codec and use its metered `PackIn` / `UnpackIn` methods on an acquired VM:
 
 ```go
-tagsCodec := must(evmbind.Codec[map[string][]string](shopSchema))
+tagsCodec := evmbind.Codec[map[string][]string](shopSchema)
 tagsVal, err := tagsCodec.PackIn(vm, map[string][]string{
     "ada": {"vip", "early"},
 })
@@ -417,6 +421,206 @@ functions, and runtime native closures:
   same closure or bound receiver can run concurrently on separate VMs, the host
   must synchronize access or keep captures read-only.
 - **Signature inspection:** `fn.Signature()` returns a defensive copy.
+
+### Scripts implementing Go host interfaces
+
+EVM does not synthesize runtime Go proxies for arbitrary host interfaces. A
+script-defined type can satisfy a declared host interface inside script code,
+and it can cross to Go through `any` (as `*evm.GuestValue`) or as a raw
+interface `values.Value` in a hand-written binding, but passing a guest type
+directly into a native Go interface parameter, struct field, slice, or map fails
+explicitly. Two patterns cover calling script methods through a Go interface:
+
+#### Built-in guest-defined `error` and `OpenCallbackScope`
+
+Built-in `error` is the one Go interface EVM bridges automatically in both
+directions (`vm.NativeError`, `vm.NativeAny`, and `evmbind` `error` parameters,
+results, struct fields, and map values). A script-defined type implementing
+`Error() string`—and optionally `Is(error) bool`, `Unwrap() error`, or
+`Unwrap() []error`—arrives in Go as a Go `error` that forwards those methods
+back into the VM and preserves identity when passed back to the same program.
+
+```go
+// Guest script:
+//   import "fmt"
+//   type QuotaError struct { Limit int }
+//   func (e *QuotaError) Error() string { return fmt.Sprintf("quota %d exceeded", e.Limit) }
+//   func Check(n int) error {
+//       if n > 10 { return &QuotaError{Limit: 10} }
+//       return nil
+//   }
+checkFn := must(program.LookupFunction("Check", &evm.Signature{
+    Params:  []*values.Type{values.IntType},
+    Results: []*values.Type{values.ErrorType},
+}))
+
+vm := program.AcquireVM(ctx)
+scope, err := vm.OpenCallbackScope(evm.Limits{
+    Steps:           10_000,
+    AllocationBytes: 64 << 10,
+    Duration:        100 * time.Millisecond,
+})
+if err != nil {
+    vm.Release()
+    return "", err
+}
+defer scope.Close()
+
+slots := [2]values.Value{values.Int(15)}
+if err := vm.Run(checkFn, slots[:]); err != nil {
+    vm.Release()
+    return "", err
+}
+guestErr, err := vm.NativeError(slots[1])
+vm.Release()
+if err != nil || guestErr == nil {
+    return "", err
+}
+// Still callable after vm.Run and vm.Release while scope stays open.
+return guestErr.Error(), nil
+```
+
+Guest `error` method calls (and native Go `func(...)` wrappers exported from a VM)
+follow `CallbackScope` lifetimes:
+
+- **Inside an active host binding:** `guestErr.Error()` (as well as `errors.Is`
+  and `errors.Unwrap`) and native Go callbacks re-enter synchronously on the
+  borrowed `*evm.VM` with its active globals, context, and remaining budget.
+  You do **not** need `OpenCallbackScope` for synchronous callbacks that finish
+  before the host binding returns.
+- **Without `OpenCallbackScope`:** Calling a script-backed `error` or `func(...)`
+  after `vm.Run` returns while `vm` is idle panics with
+  `evm.ErrCallbackInactive`; after `vm.Release()` it panics with
+  `evm.ErrCallbackExpired`. EVM blocks these by default so leaked Go wrappers
+  cannot silently retain a `context.Context`/`*evm.Program` or run unbounded
+  script code after a request finishes.
+- **With `OpenCallbackScope(limits)`:** Open `scope, err := vm.OpenCallbackScope(limits)`
+  while `vm` is idle (invalid limits fail immediately; passing a second time on
+  the same VM returns `evm.ErrCallbackScopeOpen`). While `scope` stays open,
+  every call outside an active host binding—both while `vm` is idle after
+  `vm.Run` and after `vm.Release()`—acquires a fresh VM lease from the same
+  `*evm.Program` and Go `ctx`, applies a **fresh per-call budget of `limits`**
+  (zero quotas are unlimited, matching `vm.SetBudget`; pass
+  `program.DefaultLimits()` to reuse the program's default policy), runs with
+  fresh package globals, and releases that VM when the call returns. It does not
+  consume or overwrite the originating idle VM's budget. After `scope.Close()`,
+  calls panic with `evm.ErrCallbackExpired` and references are cleared (calling
+  `Close` while a VM on the scope is running returns `evm.ErrReentry`).
+- **Host responsibilities:** Serialize calls on exported adapters sharing one
+  scope, and keep `ctx` valid until `scope.Close()`. Native Go errors
+  (`errors.New(...)` round-tripped through a script) and native-created Go
+  functions do not use a callback scope.
+
+#### Precompiled Go adapter for arbitrary interfaces
+
+Because Go cannot create a new concrete Go type implementing an arbitrary
+interface at run time, bridge any other host interface with a small precompiled
+Go adapter struct. Resolve each method once with `vm.LookupMethod` into a bound
+`evm.Callable` (which retains the guest receiver and owning `*evm.Program`), and
+forward each Go method call with `vm.Run`:
+
+```go
+// Host package "shop" (exposed with evmbind):
+type PricingRule interface {
+    Name() string
+    Discount(cents int) int
+}
+
+// Guest script:
+//   import "shop"
+//   type VIPRule struct { Percent int }
+//   func (r *VIPRule) Name() string { return "vip" }
+//   func (r *VIPRule) Discount(cents int) int { return cents * r.Percent / 100 }
+//   func NewRule() shop.PricingRule { return &VIPRule{Percent: 15} }
+
+type guestPricingRule struct {
+    ctx        context.Context
+    nameFn     evm.Callable
+    discountFn evm.Callable
+}
+
+func newGuestPricingRule(ctx context.Context, vm *evm.VM, iface values.Value) (PricingRule, error) {
+    if iface.R == 0 {
+        return nil, nil
+    }
+    nameFn, err := vm.LookupMethod(iface, "Name", evm.Signature{
+        Results: []*values.Type{values.StringType},
+    })
+    if err != nil {
+        return nil, err
+    }
+    discountFn, err := vm.LookupMethod(iface, "Discount", evm.Signature{
+        Params:  []*values.Type{values.IntType},
+        Results: []*values.Type{values.IntType},
+    })
+    if err != nil {
+        return nil, err
+    }
+    return &guestPricingRule{ctx: ctx, nameFn: nameFn, discountFn: discountFn}, nil
+}
+
+func (r *guestPricingRule) Name() string {
+    vm := r.nameFn.Program().AcquireVM(r.ctx)
+    defer vm.Release()
+    var slots [1]values.Value
+    if err := vm.Run(r.nameFn, slots[:]); err != nil {
+        panic(err)
+    }
+    return slots[0].AsString()
+}
+
+func (r *guestPricingRule) Discount(cents int) int {
+    vm := r.discountFn.Program().AcquireVM(r.ctx)
+    defer vm.Release()
+    slots := [2]values.Value{values.Int(int64(cents))}
+    if err := vm.Run(r.discountFn, slots[:]); err != nil {
+        panic(err)
+    }
+    return int(slots[1].AsInt())
+}
+```
+
+Obtain the interface value from an entry function (such as
+`program.LookupFunction("NewRule", &evm.Signature{Results: []*values.Type{shopSchema.Type("PricingRule")}})`)
+and construct the adapter before releasing that VM:
+
+```go
+vm := program.AcquireVM(ctx)
+var out [1]values.Value
+if err := vm.Run(newRuleFn, out[:]); err != nil {
+    vm.Release()
+    return nil, err
+}
+rule, err := newGuestPricingRule(ctx, vm, out[0])
+vm.Release()
+```
+
+Keep these adapter details in mind:
+
+- **Re-entry during an active host call:** If Go code invokes the adapter from
+  inside a host binding—or needs the same `OpenCallbackScope` lifetime as guest
+  errors—store `scope := vm.CallbackScope()` on the adapter and run `vm.Run`
+  inside `scope.WithCall(func(vm *evm.VM) error { ... })` instead of calling
+  `AcquireVM`. That re-enters synchronously on the active VM with its globals
+  and remaining budget, and falls back to a fresh VM after `Release` while the
+  scope stays open.
+- **VM errors in interface methods:** If the Go interface method returns
+  `error`, return the `vm.Run` error instead of panicking (if the script method
+  also returns an `error`, open a callback scope before inspecting or returning
+  it past `vm.Release`). Inside an active host callback whose signature cannot
+  return `error`, call `vm.PanicCallback(err)` so guest `recover()` and VM traps
+  unwind cleanly.
+- **Accepting implementations through a host function:** If the script registers
+  its implementation by calling a host function instead of returning it from an
+  entry point, declare the host parameter as `any` (non-`error` guest types
+  arrive as `*evm.GuestValue` carrying `gv.Value`) or use a hand-written
+  `ExternalFunction` taking `shopSchema.Type("PricingRule")`, and call
+  `vm.LookupMethod` inside that binding. Alternatively, expose
+  `*evm.FunctionOf[...]` parameters or struct fields when explicit callbacks fit
+  better than a guest type.
+- **Concurrency:** `AcquireVM` gives each call fresh globals, but all calls on
+  one adapter share the same guest receiver. Synchronize access in the adapter
+  if the guest receiver mutates its fields across concurrent Go calls.
 
 ### Native field codecs
 

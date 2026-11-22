@@ -148,7 +148,7 @@ func TestRetainedFunctionNativeInterfaces(t *testing.T) {
 		t.Fatal(err)
 	}
 	nativeVM := evmtest.New(p)
-	scope, err := nativeVM.OpenCallbackScope()
+	scope, err := nativeVM.OpenCallbackScope(p.DefaultLimits())
 	if err != nil {
 		t.Fatal(err)
 	}

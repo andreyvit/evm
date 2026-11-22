@@ -15,6 +15,7 @@ type CallbackScope struct {
 	program *Program
 	ctx     context.Context
 	vm      *VM
+	limits  Limits
 	open    bool
 }
 
@@ -27,7 +28,8 @@ func (vm *VM) CallbackScope() *CallbackScope {
 }
 
 // WithCall borrows the active VM from a binding. An explicitly opened scope
-// also accepts calls while idle and acquires a fresh VM after release.
+// also accepts calls outside an active host binding, running each call on a
+// fresh VM lease with its configured per-call budget.
 func (s *CallbackScope) WithCall(fn func(*VM) error) error {
 	if s == nil {
 		return ErrCallbackExpired
@@ -42,21 +44,25 @@ func (s *CallbackScope) WithCall(fn func(*VM) error) error {
 		}
 		return ErrCallbackInactive
 	}
-	if vm == nil {
-		vm = s.program.AcquireVM(s.ctx)
-		s.vm = vm
-		vm.callbackScope = s
-		defer vm.Release()
-	}
-	v, err := vm.program.NativeFunction(nativeEntryType, fn)
+	cbVM := s.program.AcquireVM(s.ctx)
+	cbVM.SetBudget(s.limits)
+	prev := s.vm
+	s.vm = cbVM
+	cbVM.callbackScope = s
+	defer func() {
+		cbVM.callbackScope = nil
+		s.vm = prev
+		cbVM.Release()
+	}()
+	v, err := cbVM.program.NativeFunction(nativeEntryType, fn)
 	if err != nil {
 		return err
 	}
-	target, err := vm.program.Callable(v)
+	target, err := cbVM.program.Callable(v)
 	if err != nil {
 		return err
 	}
-	return vm.Run(target, nil)
+	return cbVM.Run(target, nil)
 }
 
 func (vm *VM) enterNativeCall() func() {
@@ -65,14 +71,21 @@ func (vm *VM) enterNativeCall() func() {
 	return func() { vm.inNativeCall = previous }
 }
 
-// OpenCallbackScope keeps exported Go adapters callable until Close. After
-// Release they use the same program and Go context with a fresh VM budget.
-func (vm *VM) OpenCallbackScope() (*CallbackScope, error) {
+// OpenCallbackScope keeps exported Go adapters callable until Close. Each
+// callback invoked outside an active host binding—whether the originating VM
+// is idle or already released—runs on a fresh VM lease with the same program
+// and Go context and a fresh per-call budget of limits (zero quotas are
+// unlimited, matching VM.SetBudget; pass program.DefaultLimits() to reuse the
+// program's default policy).
+func (vm *VM) OpenCallbackScope(limits Limits) (*CallbackScope, error) {
 	if vm.baseContext == nil {
 		return nil, ErrInvalidState
 	}
 	if vm.running {
 		return nil, ErrReentry
+	}
+	if err := limits.validate(); err != nil {
+		return nil, err
 	}
 
 	if vm.callbackScope == nil {
@@ -83,7 +96,7 @@ func (vm *VM) OpenCallbackScope() (*CallbackScope, error) {
 		return nil, ErrCallbackScopeOpen
 	}
 	scope.open = true
-	scope.program, scope.ctx = vm.program, vm.baseContext
+	scope.program, scope.ctx, scope.limits = vm.program, vm.baseContext, limits
 	return scope, nil
 }
 

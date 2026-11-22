@@ -383,6 +383,9 @@ func linkNative(fn ExternalFunction, params, results Layout) linkedNative {
 	return linkedNative{form: form, resultString: stringResult, ExternalFunction: fn, params: params, results: results, rSize: max(params.RCount, results.RCount), pSize: max(params.PCount, results.PCount)}
 }
 
+// DefaultLimits returns the program's default per-VM execution limits.
+func (p *Program) DefaultLimits() Limits { return p.defaultLimits }
+
 // Program is an immutable linked snapshot. Registration and symbol lookup stay
 // outside the execution loop. Independent VMs may share a Program if its native
 // wrappers support concurrent use.

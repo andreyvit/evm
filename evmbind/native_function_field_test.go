@@ -104,7 +104,7 @@ func TestNativeFunctionFieldRetainsGuestClosure(t *testing.T) {
 		saved(1)
 	}()
 	limited := evmtest.New(program)
-	scope, err := limited.OpenCallbackScope()
+	scope, err := limited.OpenCallbackScope(evm.Limits{Steps: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,6 @@ func TestNativeFunctionFieldRetainsGuestClosure(t *testing.T) {
 				t.Fatalf("idle callback budget: %v", err)
 			}
 		}()
-		limited.SetBudget(evm.Limits{Steps: 10})
 		host.box.Apply(1)
 	}()
 	if err := limited.Run(context.Background(), "Clear", nil, nil); err != nil {
@@ -157,7 +156,7 @@ func TestNativeFunctionFieldSharesCallingVMGlobals(t *testing.T) {
 	if err := vm.Run(ctx, "Run", nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	scope, err := vm.OpenCallbackScope()
+	scope, err := vm.OpenCallbackScope(p.DefaultLimits())
 	if err != nil {
 		t.Fatal(err)
 	}

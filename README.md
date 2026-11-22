@@ -967,11 +967,15 @@ Go wrappers into your host binary so calls and field accesses avoid reflection.
   `vm.PackAggregate` / `vm.UnpackAggregate` and `vm.PackMap` / `vm.UnpackMap`.
 - **`time.Time`:** One type on both sides. `values.NativeTime(t)` preserves
   location and monotonic reading; `values.Time(t)` stores a UTC instant.
-- **`any` and `error`:** `any` carries registered native Go values with their
-  types (never arbitrary unregistered Go types); script-only values arrive in
-  Go as `*evm.GuestValue` and round-trip intact. `error` crosses both ways with
-  its identity (script-defined errors need an active VM or callback scope when
-  Go calls `Error()`).
+- **`any`, `error`, and host interfaces:** `any` carries registered native Go
+  values with their types (never arbitrary unregistered Go types); script-only
+  values arrive in Go as `*evm.GuestValue` and round-trip intact. Built-in
+  `error` crosses both ways with its identity; open `vm.OpenCallbackScope(limits)` to
+  keep script-defined `error` methods and exported Go `func` wrappers callable
+  after `vm.Run` or `vm.Release` until `scope.Close()`, with a fresh per-call
+  budget of `limits`. EVM does not synthesize runtime Go proxies for
+  arbitrary interfaces—use a precompiled Go adapter backed by `vm.LookupMethod`
+  (see [embedding guide](_docs/embedding.md#scripts-implementing-go-host-interfaces)).
 
 #### Functions and callbacks
 

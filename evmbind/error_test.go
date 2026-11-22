@@ -83,7 +83,7 @@ func testNativeErrorBindings(t *testing.T, schema *evmbind.Schema) {
 		t.Fatal(err)
 	}
 	vm := evmtest.New(program)
-	scope, err := vm.OpenCallbackScope()
+	scope, err := vm.OpenCallbackScope(program.DefaultLimits())
 	if err != nil {
 		t.Fatal(err)
 	}

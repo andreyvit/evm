@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmbind"
@@ -210,7 +211,7 @@ func TestNativeErrorGuestTargetRetention(t *testing.T) {
 		t.Fatal(err)
 	}
 	vm := evmtest.New(program)
-	scope, err := vm.OpenCallbackScope()
+	scope, err := vm.OpenCallbackScope(program.DefaultLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +297,7 @@ func TestNativeErrorFieldRetention(t *testing.T) {
 		t.Fatal(err)
 	}
 	vm := evmtest.New(program)
-	scope, err := vm.OpenCallbackScope()
+	scope, err := vm.OpenCallbackScope(program.DefaultLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,4 +318,121 @@ func TestNativeErrorFieldRetention(t *testing.T) {
 	if got := box.Value.(error).Error(); got != "retained" {
 		t.Fatal(got)
 	}
+}
+
+func TestOpenCallbackScopePerCallBudget(t *testing.T) {
+	module, err := evmcompiler.Compile("scope_budget.go", `
+type LoopError struct{ N int }
+func (e *LoopError) Error() string {
+	sum := 0
+	for i := 0; i < e.N; i++ {
+		sum += i
+	}
+	if sum < 0 {
+		return "neg"
+	}
+	return "ok"
+}
+func Make(n int) error { return &LoopError{N: n} }
+func Fast() int { return 7 }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := evm.Link(module)
+	if err != nil {
+		t.Fatal(err)
+	}
+	makeFn, err := program.LookupFunction("Make", &evm.Signature{
+		Params:  []*values.Type{values.IntType},
+		Results: []*values.Type{values.ErrorType},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fastFn, err := program.LookupFunction("Fast", &evm.Signature{
+		Results: []*values.Type{values.IntType},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	vm := program.AcquireVM(context.Background())
+	if _, err := vm.OpenCallbackScope(evm.Limits{Duration: -time.Second}); err == nil {
+		vm.Release()
+		t.Fatal("expected invalid limits error from OpenCallbackScope")
+	}
+
+	// Small per-call budget: enough for N=5 (per call), not enough for N=100.
+	scope, err := vm.OpenCallbackScope(evm.Limits{Steps: 60})
+	if err != nil {
+		vm.Release()
+		t.Fatal(err)
+	}
+	defer scope.Close()
+
+	// Run Make(5) and Make(100) using vm's own (larger) budget.
+	vm.SetBudget(evm.Limits{Steps: 1000})
+	slotsSmall := [2]values.Value{values.Int(5)}
+	if err := vm.Run(makeFn, slotsSmall[:]); err != nil {
+		vm.Release()
+		t.Fatal(err)
+	}
+	smallErr, err := vm.NativeError(slotsSmall[1])
+	if err != nil {
+		vm.Release()
+		t.Fatal(err)
+	}
+	slotsLarge := [2]values.Value{values.Int(100)}
+	if err := vm.Run(makeFn, slotsLarge[:]); err != nil {
+		vm.Release()
+		t.Fatal(err)
+	}
+	largeErr, err := vm.NativeError(slotsLarge[1])
+	if err != nil {
+		vm.Release()
+		t.Fatal(err)
+	}
+
+	// While vm is idle: each call gets a fresh 60-step budget (three calls succeed
+	// even though 3*cost > 60), while largeErr exceeds the 60-step per-call budget.
+	for i := 0; i < 3; i++ {
+		if got := smallErr.Error(); got != "ok" {
+			vm.Release()
+			t.Fatalf("idle call %d: got %q", i, got)
+		}
+	}
+	func() {
+		defer func() {
+			err, ok := recover().(error)
+			if !ok || !errors.Is(err, evm.ErrSteps) {
+				t.Fatalf("expected ErrSteps on idle callback, got %v", err)
+			}
+		}()
+		_ = largeErr.Error()
+	}()
+
+	// Originating idle VM is still usable with its own budget untouched.
+	var fastOut [1]values.Value
+	if err := vm.Run(fastFn, fastOut[:]); err != nil || fastOut[0].AsInt() != 7 {
+		vm.Release()
+		t.Fatalf("originating VM after idle callback: %v, %v", fastOut, err)
+	}
+
+	// After vm.Release(): same per-call budget applies.
+	vm.Release()
+	for i := 0; i < 3; i++ {
+		if got := smallErr.Error(); got != "ok" {
+			t.Fatalf("post-release call %d: got %q", i, got)
+		}
+	}
+	func() {
+		defer func() {
+			err, ok := recover().(error)
+			if !ok || !errors.Is(err, evm.ErrSteps) {
+				t.Fatalf("expected ErrSteps on post-release callback, got %v", err)
+			}
+		}()
+		_ = largeErr.Error()
+	}()
 }

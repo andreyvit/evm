@@ -50,3 +50,12 @@ func TestMutableMap_BasicsAndGetAnyMap(t *testing.T) {
 		_ = root.Get(999999)
 	})
 }
+
+func TestUpdateRecordRejectsTruncatedDirectory(t *testing.T) {
+	defer func() {
+		if got := recover(); got != "fast1: truncated object directory" {
+			t.Fatalf("unexpected panic: %v", got)
+		}
+	}()
+	UpdateRecord(ImmutableRecordData{3, 0}.Record(nil))
+}

@@ -41,6 +41,9 @@ func UpdateRecord(orig ImmutableRecord) MutableMap {
 		data = emptyImmutableRecordData
 	}
 	n := data.ObjectCount()
+	if n > len(data)-1 {
+		panic("fast1: truncated object directory")
+	}
 	rec := &MutableRecord{rootType: orig.rootType, original: data}
 	if n <= len(rec.small) {
 		rec.objects = rec.small[:n]

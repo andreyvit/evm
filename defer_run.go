@@ -249,7 +249,7 @@ func (vm *VM) drain(cur *frame, budget *executionBudget) error {
 			}
 			clear(args)
 			if d.target.Native {
-				if err := vm.invokeFunctionNative(cur, d.target, d.env, budget, vm.program.functions[d.origin.function].position(d.origin.pc-1)); err != nil {
+				if err := vm.invokeFunctionNative(cur, d.target, d.env, budget, &d.origin); err != nil {
 					if _, ok := err.(*standardPanic); ok {
 						if err := vm.beginPanic(cur, d.origin, values.Value{}, err, budget); err != nil {
 							return err

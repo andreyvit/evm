@@ -638,6 +638,20 @@ func (f *lowerer) edge(from, to *ssa.BasicBlock) int {
 	return to.Index
 }
 func (f *lowerer) instruction(i ssa.Instruction) {
+	if registration := f.c.concurrentSites[i]; registration != nil {
+		start := len(f.code.Code)
+		defer func() {
+			for pc := start; pc < len(f.code.Code); pc++ {
+				switch f.code.Code[pc].Op() {
+				case evm.OpCallVirt, evm.OpCallHost, evm.OpDefer:
+					if f.code.ConcurrentBorrowCalls == nil {
+						f.code.ConcurrentBorrowCalls = map[int][]int{}
+					}
+					f.code.ConcurrentBorrowCalls[pc] = registration
+				}
+			}
+		}()
+	}
 	if len(f.c.env.recordMethods) > 0 && f.recordInstruction(i) {
 		return
 	}

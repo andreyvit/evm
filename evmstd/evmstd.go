@@ -30,6 +30,7 @@ import (
 
 	"github.com/andreyvit/evm"
 	"github.com/andreyvit/evm/evmbind"
+	"github.com/andreyvit/evm/evmstd/internal/cachecore"
 )
 
 //go:generate go run ../internal/genstd
@@ -88,8 +89,21 @@ var load = sync.OnceValue(func() *library {
 		}
 		lib.packages = append(lib.packages, evm.Package{Path: path, Source: string(text)})
 	}
+	lib.packages = append(lib.packages, ConcurrencyPackages()...)
 	return lib
 })
+
+var concurrencyPackages = sync.OnceValue(func() []evm.Package {
+	src, err := sources.ReadFile("_src/concurrency.go")
+	if err != nil {
+		panic(err)
+	}
+	return []evm.Package{cachecore.Package(), {Path: "evmruntime/concurrency", Source: string(src)}}
+})
+
+// ConcurrencyPackages exposes the cache and its native bindings without the rest
+// of evmstd. Packages already includes these declarations.
+func ConcurrencyPackages() []evm.Package { return slices.Clone(concurrencyPackages()) }
 
 // sourcePackages are written in script Go and compiled with the script.
 var sourcePackages = []string{"cmp", "iter", "maps", "slices", "sort"}

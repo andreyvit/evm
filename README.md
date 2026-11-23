@@ -150,9 +150,19 @@ EVM runs sequential Go 1.23 with 64-bit `int`/`uint` sizes, and 95% of what you
 write works identically to ordinary Go. The deliberate differences fall into
 five areas:
 
-- **No concurrency or `unsafe`:** Goroutines, channels, `select`, `unsafe`,
-  and cgo are rejected at compile time. Slice lengths and capacities fit in 32
-  bits, and single-file scripts may omit the `package` clause.
+- **No guest concurrency or `unsafe` (share-nothing by default):** Goroutines,
+  channels, `select`, `unsafe`, and cgo are rejected at compile time. Instead,
+  EVM follows a PHP-style share-nothing model: one immutable `*evm.Program` is
+  shared across goroutines, each request leases a pooled single-goroutine
+  `*evm.VM`, and package globals start fresh on every outermost `vm.Run`.
+  For callbacks invoked concurrently across VMs, host APIs declare registration
+  parameters as `*evm.ConcurrentFunctionOf[S]` so the compiler checks captured state
+  at statically visible calls and `evmbind` enforces the proof at the native
+  boundary, while `evmruntime/concurrency` (in `evmstd.Packages()`) provides a
+  synchronized `concurrency.Cache` (see
+  [Concurrency model](#concurrency-model-share-nothing-by-default); plain
+  `*evm.FunctionOf[S]` callbacks remain unchecked). Slice lengths and capacities
+  fit in 32 bits, and single-file scripts may omit the `package` clause.
 - **Host-defined virtual packages:** Scripts can import only host-supplied
   packages plus EVM's curated standard library (no filesystem, network, or
   env). Host package variables (`Package.Values`) are read-only and
@@ -981,10 +991,15 @@ Go wrappers into your host binary so calls and field accesses avoid reflection.
 
 - **Accepting and validating callables:** Use `*evm.FunctionOf[func(int) int]`
   (or `*evm.FunctionOf[any]` for host-checked registrations; both alias
-  `evm.Callable`) to accept named functions, closures, bound methods, or native
-  functions. Retain a function value with `program.Callable(v)` and verify
-  untyped registrations with `fn.CheckSignature(want)`. A retained `Callable`
-  keeps its receiver/captures and owning `*evm.Program` alive across runs.
+  `evm.Callable`) for retained callables that run on one VM at a time or under
+  host serialization. For registration parameters whose callbacks may run
+  concurrently across pooled VMs, declare `*evm.ConcurrentFunctionOf[S]` (`S` =
+  non-variadic function signature or `any`, also aliasing `evm.Callable`): the
+  compiler verifies captures/receiver at statically visible calls, and `evmbind`
+  enforces `fn.CheckConcurrentUse()` at the native boundary. Retain a function value
+  with `program.Callable(v)` and verify untyped registrations with
+  `fn.CheckSignature(want)`. A retained `Callable` keeps its receiver/captures
+  and owning `*evm.Program` alive across runs.
 - **Calling back mid-call:** `vm.Run(cb, slots)` runs on the same `*evm.VM`
   whether invoked at the top level (including a native root) or synchronously
   from inside a host binding (sharing the goroutine, globals, remaining budget,
@@ -998,12 +1013,86 @@ Go wrappers into your host binary so calls and field accesses avoid reflection.
   guest `recover()` working.
 - **Later invocations & concurrency:** Invoke a retained `Callable` later by
   acquiring a fresh VM from `fn.Program().AcquireVM(ctx)`. Captures stay shared
-  while package globals start fresh—EVM does not synchronize concurrent guest
-  writes to shared captures or native pointers, so callers must synchronize
-  concurrent access.
+  while package globals start fresh—plain `*evm.FunctionOf[S]` callbacks are
+  not checked by the compiler, and EVM does not synchronize concurrent guest
+  writes to shared captures or native pointers. Use `*evm.ConcurrentFunctionOf[S]`
+  on concurrent registration parameters plus `concurrency.Cache` (see
+  [Concurrency model](#concurrency-model-share-nothing-by-default)), or
+  synchronize concurrent access on the host side.
 - **Passing Go closures to scripts:** Cache `evm.NewNativeFunctionType(sig)`
   and create script-callable closures with `vm.NativeFunction` (metered during
   a call) or `program.NativeFunction` (for `Run` inputs).
+
+#### Concurrency model (share-nothing by default)
+
+EVM uses a **PHP-style share-nothing model** for host concurrency:
+
+- **Immutable program, pooled per-goroutine VMs:** Compile and link once into a
+  shared `*evm.Program`. Any number of Go goroutines can run it concurrently by
+  leasing pooled single-goroutine `*evm.VM`s (`program.AcquireVM(ctx)` /
+  `defer vm.Release()`). Scripts themselves have no goroutines, channels, or
+  locks.
+- **Fresh globals per outermost `vm.Run`:** Every outermost `vm.Run` allocates
+  fresh package globals, runs package `init()`, and clears globals and buffers
+  on exit. Concurrent requests cannot step on each other's package variables.
+- **Caveat — shared captures, mutable receivers, and native pointers:** The one
+  place script state can outlive a single run is a retained `evm.Callable`
+  (or exported Go adapter) that captures variables or binds a guest struct
+  receiver (for example, an integration struct initialized once at plugin load
+  time), plus any shared native Go pointers passed in by the host. If the host
+  invokes that callable concurrently across multiple VMs, those captured cells
+  and receiver fields are shared, and EVM does **not** synchronize concurrent
+  guest mutations to them. Plain `*evm.FunctionOf[S]` callbacks remain
+  unchecked; without `*evm.ConcurrentFunctionOf[S]`, the host must require stateless
+  top-level functions (`!fn.HasCaptures()`), keep captured/receiver state
+  read-only after setup, or serialize calls on the host side.
+- **Host-declared `*evm.ConcurrentFunctionOf[S]` verification:** Declare a
+  concurrent registration parameter as `*evm.ConcurrentFunctionOf[S]` (`S` =
+  non-variadic function signature or `any`, e.g.
+  `AddAdminHandler(path, method string, handler *evm.ConcurrentFunctionOf[func(HandlerContext) any], ...)`).
+  Plugins pass `c.Handle` or a closure directly—no wrapper call is needed.
+  `evmbind` records the parameter index in `Package.ConcurrentCallbackParams`, tells the
+  compiler to verify statically visible calls before optimization, and enforces
+  `fn.CheckConcurrentUse()` at the native boundary (`nil` passes through for optional
+  callbacks). For capturing callbacks the binding also checks the registration site
+  with `vm.CheckConcurrentBorrow(i)`. Hand-written host bindings must check both. Verification accepts `nil`, plain top-level functions,
+  and statically known closures/bound methods whose captures and receiver are
+  used read-only (allowing `len`/`cap`, static guest helpers,
+  `*concurrency.Cache` methods, and synchronous nested closures including
+  `GetOrLoad` loaders), while rejecting writes, escaping aliases, captured or
+  indirect calls, and other external calls on tracked state. Dynamic callback
+  expressions fail compilation. **Limitations:** calling the registration
+  function indirectly (e.g. `add := ctx.AddAdminHandler; add(...)`) is not
+  statically visible, so `evmbind` rejects unverified capturing callbacks at
+  run time. Taking a method or closure for a concurrent registration also
+  borrows its receiver and captures. The builder can read them afterwards.
+  Writes through tracked aliases fail compilation, including after a branch
+  that might register the callback. Go code holding its own pointer still
+  needs to synchronize. See
+  [Concurrent callbacks and caches](_docs/embedding.md#concurrent-callbacks-and-caches)
+  for allowed and forbidden plugin examples.
+- **Shared `concurrency.Cache[K, V]`:** Synchronized cache for concurrent callbacks
+  (`NewCache`, `Get`, `Set`, `GetOrLoad`, `InvalidateIfCurrent`, and versioned
+  `Entry[V]`, exposed by `evmruntime/concurrency` in `evmstd.Packages()` and
+  `evmstd.ConcurrencyPackages()`). Guest `GetOrLoad` omits `ctx` because the VM
+  supplies `vm.Context`, while native Go
+  (`github.com/andreyvit/evm/evmruntime/concurrency`) takes `ctx` explicitly:
+  - Guest: `(*Cache[K, V]).GetOrLoad(key K, fetch func() (V, time.Time, error)) (Entry[V], error)`
+  - Native Go: `(*Cache[K, V]).GetOrLoad(ctx context.Context, key K, load func() (V, time.Time, error)) (Entry[V], error)`
+  - **Behavior and limits:** Holds at most 1,024 entries (evicts one arbitrary
+    entry when full); zero `time.Time` does not expire while past/present expiry
+    is not stored and expired entries drop on `Get`; `InvalidateIfCurrent`
+    deletes only if the publication version matches; single-flight `GetOrLoad`
+    lets waiters cancel independently via `ctx`, releases waiters to retry on
+    loader error or panic, and prevents an older loader from overwriting a
+    concurrent `Set`. Guest caches must be created with `NewCache` (zero value
+    panics; native Go zero value is ready to use, do not copy after first use),
+    accept only `bool`/integer/`string` (plus guest structs/arrays of those) as
+    keys, and scalars or guest structs/arrays of those scalars as values
+    (values also admit floats). Native Go accepts any
+    reflexive `comparable` key and any value. Guest caches reject nested
+    `GetOrLoad` misses on the same VM (`concurrency: nested cache load would
+    block`). See [Concurrent callbacks and caches](_docs/embedding.md#concurrent-callbacks-and-caches).
 
 #### Limits and budgets
 
@@ -1035,6 +1124,11 @@ Go wrappers into your host binary so calls and field accesses avoid reflection.
 
 #### Errors and panics
 
+Each leased VM has its own budget. Concurrent VMs share the Go heap,
+and native functions can allocate outside VM accounting. If the host must
+survive a worker running out of memory, run guest compilation and execution
+in a separate process with an OS memory limit.
+
 - **Execution errors:** Failures return `*evm.ExecutionError{Function, PC, Position, Err}`
   which unwraps cleanly for `errors.Is` (`evm.ErrNil`, `ErrBounds`,
   `ErrNilMap`, `ErrDivideByZero`, `ErrNegativeShift`, `ErrTypeAssertion`,
@@ -1059,12 +1153,14 @@ Go wrappers into your host binary so calls and field accesses avoid reflection.
   `evmruntime`, `evmruntime/log`, and basic `time.Time` are always available.
 - **Standard library (`evmstd.Packages()`):** Adds `bytes`, `cmp`,
   `encoding/base64`, `encoding/hex`, `encoding/json` (validation/reformatting
-  only), `html`, `iter`, `maps`, `math/bits`, `net/url`, `path`,
-  `path/filepath`, `regexp`, `slices`, `sort`, `time`, `unicode`,
-  `unicode/utf8`, and `unicode/utf16` (included automatically by GoX). Nothing
-  touches disk, network, or env (`time.Now` is exposed; `time.Local` and
-  `LoadLocation` are not). See [`evmstd/API.md`](evmstd/API.md) for the full
-  inventory.
+  only), `evmruntime/concurrency`, `html`, `iter`, `maps`, `math/bits`,
+  `net/url`, `path`, `path/filepath`, `regexp`, `slices`, `sort`, `time`,
+  `unicode`, `unicode/utf8`, and `unicode/utf16` (included automatically by
+  GoX). Nothing touches disk, network, or env (`time.Now` is exposed;
+  `time.Local` and `LoadLocation` are not). See [`evmstd/API.md`](evmstd/API.md)
+  for the generated Go standard library inventory; `evmruntime/concurrency` is
+  documented in [Concurrency model](#concurrency-model-share-nothing-by-default)
+  and [Concurrent callbacks and caches](_docs/embedding.md#concurrent-callbacks-and-caches).
 - **Metering & extending:** `cmp`, `iter`, `maps`, `slices`, and `sort` compile
   from script source and are metered; the rest call Go outside VM meters.
   `bytes.Replace`, `bytes.ReplaceAll`, `bytes.Join`,
@@ -1285,7 +1381,7 @@ imports `kvo`; the other two codecs sit below because `kvo` imports them.
 |---|---|
 | `examples/*` | `evm`, `evmbind`, `evmcompiler`, `evmstd`, `gox`, `kvo`, `kvo/codec/msgpack`, `kvo/codec/row2`, `values` |
 | `gox` | `evm`, `evmbind`, `evmcompiler`, `evmruntime`, `evmstd`, `values` |
-| `evmstd` | `evm`, `evmbind` |
+| `evmstd` | `evm`, `evmbind`, `evmruntime/concurrency`, `values` |
 | `evmbind` | `evm`, `evmcompiler`, `kvo`, `nativebind`, `values` |
 | `evmcompiler` | `evm`, `kvo`, `nativebind`, `values` |
 | `evmasm` | `evm`, `values` |
@@ -1294,7 +1390,7 @@ imports `kvo`; the other two codecs sit below because `kvo` imports them.
 | `kvo` | `kvo/codec/msgpack`, `kvo/codec/row2`, `nativebind`, `values` |
 | `kvo/codec/row2`, `kvo/codec/msgpack` | `values` |
 | `nativebind` | `values` |
-| `values`, `evmruntime` | nothing |
+| `values`, `evmruntime`, `evmruntime/concurrency` | nothing |
 
 ## Documentation
 

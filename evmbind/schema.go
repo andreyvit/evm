@@ -43,6 +43,9 @@ type Static struct {
 type MutableSlots struct{ Params, Results []int }
 
 type Options struct {
+	// InterfaceAdapters builds native implementations for concurrent interface
+	// parameters. Each factory receives the checked methods bound to one guest receiver.
+	InterfaceAdapters map[reflect.Type]func(map[string]evm.Callable) any
 	// Selective exposes only what the options name, instead of everything the
 	// source exports: the types in Only (every exported type when Only is nil),
 	// the methods in Methods, the functions in Functions and GenericFunctions,
@@ -154,19 +157,20 @@ type entry struct {
 	pointer  *nativePointer
 }
 type Schema struct {
-	nodesByNative   map[*node]reflect.Type
-	values          []entry // bound package variables, parallel to pkg.Values
-	src             *source
-	pkg             evm.Package
-	funcs, methods  []entry
-	host            reflect.Type
-	pointers        map[reflect.Type]*nativePointer
-	reverse         map[*values.Type]*nativePointer
-	static          bool
-	fields          map[reflect.Type]*nativebind.Struct
-	nativeTypes     map[reflect.Type]*values.Type
-	nativeModels    map[reflect.Type]*node
-	nativeFunctions map[*node]*nativeFunctionBinding
+	interfaceAdapters map[reflect.Type]func(map[string]evm.Callable) any
+	nodesByNative     map[*node]reflect.Type
+	values            []entry // bound package variables, parallel to pkg.Values
+	src               *source
+	pkg               evm.Package
+	funcs, methods    []entry
+	host              reflect.Type
+	pointers          map[reflect.Type]*nativePointer
+	reverse           map[*values.Type]*nativePointer
+	static            bool
+	fields            map[reflect.Type]*nativebind.Struct
+	nativeTypes       map[reflect.Type]*values.Type
+	nativeModels      map[reflect.Type]*node
+	nativeFunctions   map[*node]*nativeFunctionBinding
 }
 
 func (s *Schema) UsesStatic() bool     { return s.static }
@@ -216,7 +220,7 @@ func newSchema(src *source, opt Options) (schema *Schema, err error) {
 			}
 		}
 	}()
-	s := &Schema{src: src, pkg: src.pkg, host: opt.Host, pointers: map[reflect.Type]*nativePointer{}, reverse: map[*values.Type]*nativePointer{}}
+	s := &Schema{interfaceAdapters: maps.Clone(opt.InterfaceAdapters), src: src, pkg: src.pkg, host: opt.Host, pointers: map[reflect.Type]*nativePointer{}, reverse: map[*values.Type]*nativePointer{}}
 	if opt.Mode > StaticOnly {
 		fail("invalid binding mode")
 	}
@@ -453,6 +457,26 @@ func newSchema(src *source, opt Options) (schema *Schema, err error) {
 
 	wrappers := map[string]Wrapper{}
 	for _, op := range expected {
+		if len(op.concurrentInterfaces) > 0 {
+			if s.pkg.ConcurrentInterfaceParams == nil {
+				s.pkg.ConcurrentInterfaceParams = map[string][]int{}
+			}
+			s.pkg.ConcurrentInterfaceParams[strings.TrimPrefix(op.key, "*")] = op.concurrentInterfaces
+			for _, i := range op.concurrentInterfaces {
+				if s.interfaceAdapters[native[op.args[i]]] == nil {
+					fail("%s: missing InterfaceAdapters entry for %s", op.key, op.args[i].name)
+				}
+			}
+		}
+		for i, arg := range op.args {
+			if arg.concurrentFunction {
+				if s.pkg.ConcurrentCallbackParams == nil {
+					s.pkg.ConcurrentCallbackParams = map[string][]int{}
+				}
+				key := strings.TrimPrefix(op.key, "*")
+				s.pkg.ConcurrentCallbackParams[key] = append(s.pkg.ConcurrentCallbackParams[key], i)
+			}
+		}
 		// Validate the actual host ABI once, even when generated code is supplied.
 		w := reflectWrapper(op, opt.Host, native, functions[op.name])
 		if s.static {
@@ -658,15 +682,19 @@ func (s *Schema) addImplementation(impl Implementation, interfaces []*node, nati
 	s.reverse[ptr.Type] = np
 	s.pkg.Types = append(s.pkg.Types, evm.TypeDecl{Name: name, Shape: empty}, evm.TypeDecl{Shape: ptr})
 	s.pkg.EntryTypes = append(s.pkg.EntryTypes, ptr.Type)
-	seen := map[string]bool{}
+	seen := map[string]*operation{}
 	matches := false
 	for _, n := range interfaces {
 		if t.Implements(native[n]) {
 			matches = true
 			for _, op := range n.methods {
-				if !seen[op.name] {
+				if prev := seen[op.name]; prev != nil {
+					if !slices.Equal(prev.concurrentInterfaces, op.concurrentInterfaces) || !slices.Equal(s.pkg.ConcurrentCallbackParams[prev.key], s.pkg.ConcurrentCallbackParams[op.key]) {
+						fail("%s implements conflicting concurrent callback requirements for %s and %s", t, prev.key, op.key)
+					}
+				} else {
 					s.method(op, ptr.Type, entry{op: op, wrapper: wrappers[op.key], pointer: np}, evm.DirectBinding{})
-					seen[op.name] = true
+					seen[op.name] = op
 				}
 			}
 		}
@@ -720,9 +748,55 @@ func (s *Schema) Bind(host any) evm.Package {
 	return pkg
 }
 func (s *Schema) bind(e entry, host any) evm.Native {
+	key := strings.TrimPrefix(e.op.key, "*")
+	concurrentParams := s.pkg.ConcurrentCallbackParams[key]
+
 	return func(c *evm.VM) (err error) {
 		defer Catch(e.op.key, &err)
 		f := Frame{VM: c, Host: host, s: s}
+		for _, i := range e.op.concurrentInterfaces {
+			slot := i
+			if e.op.recv != nil {
+				slot++
+			}
+			if c.CallArgument(slot) != (values.Value{}) {
+				if err := c.CheckConcurrentBorrow(i); err != nil {
+					return err
+				}
+			}
+		}
+		for _, i := range concurrentParams {
+			slot := i
+			if e.op.recv != nil {
+				slot++
+			}
+			v := c.CallArgument(slot)
+			if e.op.args[i].boxedFunction {
+				shape, raw, err := c.Program().UnpackInterface(v)
+				if err != nil {
+					return err
+				}
+				if shape != nil && shape.Kind != values.FunctionKind {
+					return evm.ErrFunction
+				}
+				v = raw
+			}
+			if v == (values.Value{}) {
+				continue
+			}
+			fn, err := c.Program().Callable(v)
+			if err != nil {
+				return err
+			}
+			if err := fn.CheckConcurrentUse(); err != nil {
+				return err
+			}
+			if fn.HasCaptures() {
+				if err := c.CheckConcurrentBorrow(i); err != nil {
+					return err
+				}
+			}
+		}
 		if e.pointer != nil {
 			p := c.CallArgument(0).P
 			if e.pointer.receiver != nil {

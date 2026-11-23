@@ -74,18 +74,19 @@ type VM struct {
 	// Output receives fmt/log/debug output. Nil uses the normal Go logger.
 	Output func(string) error
 	executionBuffers
-	meter         executionBudget
-	budget        *executionBudget
-	invalidLimits error
-	baseContext   context.Context
-	cancel        context.CancelFunc
-	Context       context.Context
-	Position      SourcePosition
-	R             []uint64
-	P             []unsafe.Pointer
-	usedR, usedP  int
-	native        *linkedNative
-	program       *Program
+	meter              executionBudget
+	budget             *executionBudget
+	invalidLimits      error
+	baseContext        context.Context
+	cancel             context.CancelFunc
+	Context            context.Context
+	Position           SourcePosition
+	R                  []uint64
+	P                  []unsafe.Pointer
+	usedR, usedP       int
+	native             *linkedNative
+	hostCaller, hostPC int
+	program            *Program
 
 	running       bool
 	globals       []unsafe.Pointer
@@ -609,7 +610,7 @@ dispatch:
 				r[f.RCount] = r[b]
 			}
 			budget.remaining = remaining
-			failure = vm.invokeNative(&cur, index, budget, f.position(cur.pc-1), ins.Op() != OpCallHostRR)
+			failure = vm.invokeNative(&cur, index, budget, &cur, ins.Op() != OpCallHostRR)
 			remaining = budget.remaining
 			limits = budget.limits
 			if failure != nil {
@@ -669,7 +670,7 @@ dispatch:
 
 			if ref.Native {
 				budget.remaining = remaining
-				failure = vm.invokeFunctionNative(&cur, ref, env, budget, f.position(cur.pc-1))
+				failure = vm.invokeFunctionNative(&cur, ref, env, budget, &cur)
 				remaining = budget.remaining
 				if failure != nil {
 					goto nativeFault
@@ -796,27 +797,27 @@ dispatch:
 	}
 }
 
-func (vm *VM) invokeNative(cur *frame, index uint32, budget *executionBudget, position SourcePosition, mayReturnRecord bool) error {
+func (vm *VM) invokeNative(cur *frame, index uint32, budget *executionBudget, origin *frame, mayReturnRecord bool) error {
 	g := &vm.program.natives[index]
-	return vm.invokeNativeCall(cur, g, g.Call, budget, position)
+	return vm.invokeNativeCall(cur, g, g.Call, budget, origin)
 }
 
-func (vm *VM) invokeFunctionNative(cur *frame, ref FunctionRef, env unsafe.Pointer, budget *executionBudget, position SourcePosition) error {
+func (vm *VM) invokeFunctionNative(cur *frame, ref FunctionRef, env unsafe.Pointer, budget *executionBudget, origin *frame) error {
 	// A reference an instruction or a function value holds indexes the
 	// natives bytecode calls. Method tables can also name a native that
 	// nothing else does, and a native function value carries its own.
 	if ref.Index >= MethodImportBase {
 		if ref.Index == nativeFunctionIndex {
 			f := (*nativeFunction)(env)
-			return vm.invokeNativeCall(cur, &f.typ.native, f.call, budget, position)
+			return vm.invokeNativeCall(cur, &f.typ.native, f.call, budget, origin)
 		}
 		g := &vm.program.methodNatives[ref.Index-MethodImportBase]
-		return vm.invokeNativeCall(cur, g, g.Call, budget, position)
+		return vm.invokeNativeCall(cur, g, g.Call, budget, origin)
 	}
-	return vm.invokeNative(cur, ref.Index, budget, position, false)
+	return vm.invokeNative(cur, ref.Index, budget, origin, false)
 }
 
-func (vm *VM) invokeNativeCall(cur *frame, g *linkedNative, call Native, budget *executionBudget, position SourcePosition) (err error) {
+func (vm *VM) invokeNativeCall(cur *frame, g *linkedNative, call Native, budget *executionBudget, origin *frame) (err error) {
 	defer recoverGuestErrorPanic(vm, &err)
 	if err := budget.contextErr(); err != nil {
 		return err
@@ -830,7 +831,8 @@ func (vm *VM) invokeNativeCall(cur *frame, g *linkedNative, call Native, budget 
 	if g.params.PCount < pn {
 		clear(vm.p[pb+g.params.PCount : pb+pn])
 	}
-	vm.native, vm.Context, vm.Position = g, budget.ctx, position
+	vm.native, vm.Context, vm.Position = g, budget.ctx, vm.program.functions[origin.function].position(origin.pc-1)
+	vm.hostCaller, vm.hostPC = origin.function, origin.pc
 
 	vm.R = vm.r[rb : rb+rn : rb+rn]
 	vm.P = vm.p[pb : pb+pn : pb+pn]

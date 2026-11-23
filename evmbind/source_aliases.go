@@ -4,7 +4,7 @@ import "go/types"
 
 func isFunctionOf(t types.Type) bool {
 	a, ok := t.(*types.Alias)
-	return ok && a.Obj().Pkg() != nil && a.Obj().Pkg().Path() == "github.com/andreyvit/evm" && a.Obj().Name() == "FunctionOf"
+	return ok && a.Obj().Pkg() != nil && a.Obj().Pkg().Path() == "github.com/andreyvit/evm" && (a.Obj().Name() == "FunctionOf" || a.Obj().Name() == "ConcurrentFunctionOf")
 }
 
 func aliasesFunctionOf(t types.Type) bool {

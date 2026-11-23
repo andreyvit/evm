@@ -82,6 +82,12 @@ type SourceBranch struct {
 }
 
 type Function struct {
+	// CapturesVerifiedForConcurrency reports whether the compiler verified use of the
+	// bound receiver and closure captures for concurrent calls.
+	CapturesVerifiedForConcurrency bool
+	// ConcurrentBorrowCalls lists instructions whose registration arguments
+	// were checked for post-borrow writes by the compiler.
+	ConcurrentBorrowCalls map[int][]int
 	// CallbackByteDomains lists the borrow domains tracked for []byte parameters.
 	CallbackByteDomains []string
 	// OwnershipSites describes compiler-emitted clone locations before linking.
@@ -250,6 +256,11 @@ type SharedType struct {
 type SourceFile struct{ Name, Text string }
 
 type Package struct {
+	// ConcurrentCallbackParams lists the zero-based indexes of callback parameters
+	// the host may invoke concurrently. Keys are function names or Receiver.Method.
+	ConcurrentCallbackParams map[string][]int
+	// ConcurrentInterfaceParams identifies retained interface arguments by the same convention.
+	ConcurrentInterfaceParams map[string][]int
 	// StructValues optionally chooses compact storage for source-defined generic
 	// structs. A nil result retains ordinary storage. Callbacks run at compile time.
 	StructValues map[string]func(string, []*values.Shape) *values.CellStruct
@@ -312,6 +323,30 @@ func MergePackages(packages ...Package) ([]Package, error) {
 					return nil, fmt.Errorf("package %q has two struct value rules for %s", p.Path, name)
 				}
 				m.StructValues[name] = factory
+			}
+		}
+		if len(p.ConcurrentCallbackParams) > 0 {
+			m.ConcurrentCallbackParams = maps.Clone(m.ConcurrentCallbackParams)
+			if m.ConcurrentCallbackParams == nil {
+				m.ConcurrentCallbackParams = map[string][]int{}
+			}
+			for k, v := range p.ConcurrentCallbackParams {
+				if _, exists := m.ConcurrentCallbackParams[k]; exists {
+					return nil, fmt.Errorf("duplicate concurrent callback parameter declaration %s.%s", p.Path, k)
+				}
+				m.ConcurrentCallbackParams[k] = v
+			}
+		}
+		if len(p.ConcurrentInterfaceParams) > 0 {
+			m.ConcurrentInterfaceParams = maps.Clone(m.ConcurrentInterfaceParams)
+			if m.ConcurrentInterfaceParams == nil {
+				m.ConcurrentInterfaceParams = map[string][]int{}
+			}
+			for k, v := range p.ConcurrentInterfaceParams {
+				if _, exists := m.ConcurrentInterfaceParams[k]; exists {
+					return nil, fmt.Errorf("duplicate concurrent interface parameter declaration %s.%s", p.Path, k)
+				}
+				m.ConcurrentInterfaceParams[k] = v
 			}
 		}
 		m.SourceFiles = slices.Concat(m.SourceFiles, p.SourceFiles)

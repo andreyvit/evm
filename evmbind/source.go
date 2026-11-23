@@ -157,6 +157,7 @@ func basicNodeKind(k types.BasicKind) nodeKind {
 }
 
 type node struct {
+	concurrentFunction         bool
 	functionSignatureReady     bool
 	boxedFunction              bool
 	genericInstance            bool
@@ -196,18 +197,20 @@ type callbackBorrow struct {
 	argument  int    // index in operation.args, or -1 for a returned iterator
 }
 type operation struct {
-	callbackBorrow  *callbackBorrow
-	byteBorrow      *byteBorrow
-	paramNames      []string
-	doc             string
-	packageFunction bool
-	value           bool // a bound package variable, read through its function
-	variadic        bool
-	name, key       string
-	recv            *node
-	args, outs      []*node
+	concurrentInterfaces []int
+	callbackBorrow       *callbackBorrow
+	byteBorrow           *byteBorrow
+	paramNames           []string
+	doc                  string
+	packageFunction      bool
+	value                bool // a bound package variable, read through its function
+	variadic             bool
+	name, key            string
+	recv                 *node
+	args, outs           []*node
 }
 type source struct {
+	concurrentParams   map[token.Pos]bool
 	cellStructs        map[string]*values.CellStruct
 	mutable            map[string]MutableSlots
 	mutableUsed        map[string]bool
@@ -281,6 +284,7 @@ func parseOptions(path string, files fs.FS, selected []string, typesOnly bool, o
 	}
 	var syntax []*ast.File
 	docs := map[string]string{}
+	concurrentParams := map[token.Pos]bool{}
 	callbackBorrows := map[token.Pos]*callbackBorrow{}
 	byteBorrows := map[token.Pos]*byteBorrow{}
 	fset := token.NewFileSet()
@@ -297,6 +301,7 @@ func parseOptions(path string, files fs.FS, selected []string, typesOnly bool, o
 			return nil, e
 		}
 		syntax = append(syntax, f)
+		collectConcurrentParams(f, concurrentParams)
 		for _, decl := range f.Decls {
 			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Doc != nil {
 				for _, comment := range fn.Doc.List {
@@ -444,7 +449,7 @@ func parseOptions(path string, files fs.FS, selected []string, typesOnly bool, o
 	if err != nil {
 		return nil, explainImportError(err, syntax)
 	}
-	s = &source{cellStructs: opt.CellStructs, mutable: maps.Clone(opt.Mutable), mutableUsed: map[string]bool{}, typeNames: maps.Clone(opt.TypeNames), nativePackage: opt.NativePackage, models: models, nativeImports: importer.(nativeSchemaImporter).byPackage, omittedFields: omitted, imports: imports, importedNodes: map[*node]*node{}, goPackage: pkg, name: pkg.Name(), pkg: evm.Package{Path: path}, nodes: map[string]*node{}}
+	s = &source{concurrentParams: concurrentParams, cellStructs: opt.CellStructs, mutable: maps.Clone(opt.Mutable), mutableUsed: map[string]bool{}, typeNames: maps.Clone(opt.TypeNames), nativePackage: opt.NativePackage, models: models, nativeImports: importer.(nativeSchemaImporter).byPackage, omittedFields: omitted, imports: imports, importedNodes: map[*node]*node{}, goPackage: pkg, name: pkg.Name(), pkg: evm.Package{Path: path}, nodes: map[string]*node{}}
 	for name, guest := range opt.TypeNames {
 		obj, ok := pkg.Scope().Lookup(name).(*types.TypeName)
 		if !ok || !obj.Exported() || !exposed[name] {
@@ -701,7 +706,11 @@ type schemaError struct{ error }
 func fail(f string, a ...any) { panic(schemaError{fmt.Errorf(f, a...)}) }
 func (op *operation) abi() string {
 	var p, r []string
-	for _, n := range op.args {
+	for i, n := range op.args {
+		if slices.Contains(op.concurrentInterfaces, i) {
+			p = append(p, "concurrent-interface "+n.name)
+			continue
+		}
 		p = append(p, n.name)
 	}
 	for _, n := range op.outs {
@@ -735,7 +744,15 @@ func (s *source) op(f *types.Func, recv *node) *operation {
 		op.key = recv.name + "." + op.name
 	}
 	for i := 0; i < sig.Params().Len(); i++ {
-		op.args = append(op.args, s.callNode(sig.Params().At(i).Type()))
+		arg := sig.Params().At(i).Type()
+		n := s.callNode(arg)
+		if s.concurrentParams[sig.Params().At(i).Pos()] {
+			if n.kind != nodeInterface || n.shape == nil || n.shape.Kind != values.InterfaceKind {
+				fail("%s: concurrent parameter requires a named interface", op.key)
+			}
+			op.concurrentInterfaces = append(op.concurrentInterfaces, i)
+		}
+		op.args = append(op.args, n)
 		op.paramNames = append(op.paramNames, sig.Params().At(i).Name())
 	}
 	for i := 0; i < sig.Results().Len(); i++ {
@@ -785,11 +802,11 @@ func (op *operation) nativeMethod() string {
 }
 
 func (op *operation) directOpcode() evm.Opcode {
-	if op.variadic || op.byteBorrow != nil || op.callbackBorrow != nil {
+	if len(op.concurrentInterfaces) > 0 || op.variadic || op.byteBorrow != nil || op.callbackBorrow != nil {
 		return 0
 	}
 	for _, n := range append(slices.Clone(op.args), op.outs...) {
-		if n.kind == nodeRecord && n.model.row.Mutable {
+		if n.concurrentFunction || n.kind == nodeRecord && n.model.row.Mutable {
 			return 0
 		}
 	}
@@ -831,7 +848,7 @@ var basics = map[nodeKind]*values.Type{
 }
 
 func (n *node) inputOnly() bool {
-	return n.kind == nodeCallback || n.kind == nodeRetainedFunction && n.boxedFunction
+	return n.kind == nodeCallback || n.kind == nodeRetainedFunction && (n.boxedFunction || n.concurrentFunction)
 }
 
 var errorMethodShape = &values.Shape{
@@ -978,7 +995,8 @@ func (s *source) node(t types.Type) *node {
 		return n
 	}
 	if ptr, ok := t.(*types.Pointer); ok {
-		if alias, ok := ptr.Elem().(*types.Alias); ok && alias.Obj().Pkg() != nil && alias.Obj().Pkg().Path() == "github.com/andreyvit/evm" && alias.Obj().Name() == "FunctionOf" {
+		if alias, ok := ptr.Elem().(*types.Alias); ok && isFunctionOf(alias) {
+			n.concurrentFunction = alias.Obj().Name() == "ConcurrentFunctionOf"
 			if types.Identical(alias.TypeArgs().At(0), types.Universe.Lookup("any").Type()) {
 				n.kind = nodeRetainedFunction
 				n.boxedFunction = true
@@ -1370,4 +1388,52 @@ func declareBoundValues(files []*ast.File, opt Options) error {
 		return fmt.Errorf("bound value %s is not declared as a variable in source", name)
 	}
 	return nil
+}
+
+// //evm:concurrent names interface parameters on a function or interface method.
+func collectConcurrentParams(file *ast.File, result map[token.Pos]bool) {
+	mark := func(doc *ast.CommentGroup, sig *ast.FuncType) {
+		if doc == nil {
+			return
+		}
+		for _, comment := range doc.List {
+			words := strings.Fields(comment.Text)
+			if len(words) == 0 || words[0] != "//evm:concurrent" {
+				continue
+			}
+			if len(words) != 2 {
+				fail("expected //evm:concurrent parameter")
+			}
+			found := false
+			for _, field := range sig.Params.List {
+				for _, name := range field.Names {
+					if name.Name == words[1] {
+						if result[name.Pos()] {
+							fail("duplicate concurrent parameter %s", name)
+						}
+						result[name.Pos()] = true
+						found = true
+					}
+				}
+			}
+			if !found {
+				fail("unknown concurrent parameter %s", words[1])
+			}
+		}
+	}
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.FuncDecl:
+			mark(x.Doc, x.Type)
+			return false
+		case *ast.InterfaceType:
+			for _, m := range x.Methods.List {
+				if sig, ok := m.Type.(*ast.FuncType); ok {
+					mark(m.Doc, sig)
+				}
+			}
+			return false
+		}
+		return true
+	})
 }

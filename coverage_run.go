@@ -412,7 +412,7 @@ dispatch:
 				r[f.RCount] = r[b]
 			}
 			budget.remaining = remaining
-			failure = vm.invokeNative(&cur, index, budget, f.position(cur.pc-1), ins.Op() != OpCallHostRR)
+			failure = vm.invokeNative(&cur, index, budget, &cur, ins.Op() != OpCallHostRR)
 			remaining = budget.remaining
 			limits = budget.limits
 			if failure != nil {
@@ -472,7 +472,7 @@ dispatch:
 
 			if ref.Native {
 				budget.remaining = remaining
-				failure = vm.invokeFunctionNative(&cur, ref, env, budget, f.position(cur.pc-1))
+				failure = vm.invokeFunctionNative(&cur, ref, env, budget, &cur)
 				remaining = budget.remaining
 				if failure != nil {
 					goto nativeFault

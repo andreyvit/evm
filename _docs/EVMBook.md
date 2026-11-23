@@ -147,6 +147,12 @@ architectural choices that hold EVM together:
    counter polls cancellation every 256 dispatches and stops infinite loops
    precisely; allocation reservations cap memory before Go allocates it; and
    budget or cancellation errors trap fatally without running script `defer`s.
+6. **PHP-style share-nothing concurrency.** Scripts have no goroutines or
+   channels; instead, a concurrent Go host shares one immutable `*evm.Program`
+   across goroutines and leases a pooled single-goroutine `*evm.VM` per call,
+   with fresh package globals on every outermost `vm.Run` (Chapter 8.1 covers
+   the model, its caveat for shared closures/receivers, host-declared
+   `*evm.ConcurrentFunctionOf[S]` verification, and `concurrency.Cache`).
 
 ### 1.3 Compile, bind, link, run: separating declarations from implementations
 
@@ -1443,11 +1449,18 @@ c.pkg = prog.CreatePackage(pkg, syntax, info, true)
 c.pkg.Build()
 // ... gather the declarations of every file into allDecls ...
 functions := c.discoverFunctions(prog, allDecls, info, needsInit)
+// when any imported package declares ConcurrentCallbackParams:
+c.checkConcurrentCallbacks(functions, verifiedCaptures)
 ```
 
 SSA hands the lowerer an already-normalized control-flow graph: basic blocks,
 `phi` nodes for loops, concrete generic instantiations, and lifted closure
-functions with explicit free variables.
+functions with explicit free variables. Right after `discoverFunctions`, when
+any imported package declares `ConcurrentCallbackParams` (populated by `evmbind` from
+`*evm.ConcurrentFunctionOf[S]` registration parameters), `checkConcurrentCallbacks`
+(`evmcompiler/shared.go`) runs on the unoptimized SSA form to verify callbacks
+passed at statically visible calls to those parameters (leaving plain
+`*evm.FunctionOf[S]` callbacks untouched; see §8.1).
 
 ### 5.3 Lowering SSA values to register slots
 
@@ -3459,7 +3472,12 @@ differences to keep in mind.
 
 - **No concurrency:** Goroutines (`go`), channels (`chan`, `<-`, `close`),
   `select`, and `range` over channels are rejected at compile time. Scripts are
-  strictly sequential.
+  strictly sequential. For callbacks invoked concurrently across pooled VMs,
+  host registration parameters declared as `*evm.ConcurrentFunctionOf[S]` trigger
+  compile-time capture verification and `evmbind` native-boundary enforcement,
+  while `evmruntime/concurrency` (via `evmstd.Packages()`) provides a
+  synchronized `concurrency.Cache` (see §8.1); plain `*evm.FunctionOf[S]`
+  callbacks remain unchecked.
 - **No `unsafe` or cgo:** `import "unsafe"`, `//go:linkname`, and arbitrary
   native imports are unavailable.
 - **Fixed Go 1.23 semantics and 64-bit sizes:** Scripts always type-check as
@@ -3573,10 +3591,12 @@ copies for borrowed host data (transaction-scoped KVO records and
 - **Retained closures and guest errors:** A retained `evm.Callable` keeps its
   receiver/captures and owning `*evm.Program` alive; delayed invocation
   acquires a fresh VM from `fn.Program().AcquireVM(ctx)` (with fresh globals;
-  callers must synchronize concurrent access to shared mutable captures). A
-  script-defined `error` returned to Go needs an active host call or an open
-  `vm.OpenCallbackScope(limits)` while Go calls `Error()`—even after `vm.Run` and
-  `vm.Release()` (see §7.3 and §7.8).
+  plain `*evm.FunctionOf[S]` callbacks are unchecked, so declare concurrent
+  registration parameters as `*evm.ConcurrentFunctionOf[S]` and keep shared mutable
+  entries in `concurrency.Cache`, or synchronize access on the host side—see
+  §8.1). A script-defined `error` returned to Go needs an active host call or an
+  open `vm.OpenCallbackScope(limits)` while Go calls `Error()`—even after
+  `vm.Run` and `vm.Release()` (see §7.3 and §7.8).
 
 > **Key takeaways — Chapter 6**
 > - Constants, `iota`, type aliases, and open generic templates vanish at compile time; only concrete, reachable code emits bytecode.
@@ -3900,10 +3920,12 @@ resolved signature and use `vm.PackAggregate` / `vm.UnpackAggregate` and
 
 `schema.PackInterface` works in the Go → script direction, wrapping a registered
 native Go implementation for script code. EVM does not synthesize runtime Go
-proxies for arbitrary script-defined types: passing a guest type directly into a
-native Go interface parameter, struct field, slice, or map fails explicitly
-because Go cannot fabricate a new concrete type implementing an arbitrary
-interface at run time.
+proxies for arbitrary script-defined types. A host can declare
+`//evm:concurrent impl` on a function or interface method taking `impl Foo`
+and supply an adapter factory through `evmbind.Options.InterfaceAdapters`.
+The compiler checks the guest receiver for every method of `Foo` and checks
+the code that lends it. The factory receives the verified bound methods.
+Ordinary native interface fields, slices and maps still need native Go values.
 
 The one built-in exception is `error`. When a script-defined type implements
 `Error() string` (and optionally `Is(error) bool`, `Unwrap() error`, or
@@ -4247,10 +4269,13 @@ Because `evm.Callable` is invoked explicitly through `vm.Run(fn, slots)`:
   never needs `OpenCallbackScope` and cannot leak a request context.
 
 > **Concurrency note:** Independent VMs may call the same `evm.Callable`
-> concurrently, but EVM does not synchronize guest access to shared mutable
-> captures or shared native Go pointers. Check `fn.HasCaptures()` (and
-> `fn.Name()`) if a host registration requires a stateless top-level function,
-> or synchronize access on the host side.
+> concurrently, but plain `*evm.FunctionOf[S]` callbacks are unchecked and EVM
+> does not synchronize guest access to shared mutable captures or shared native
+> Go pointers. Declare concurrent registration parameters as
+> `*evm.ConcurrentFunctionOf[S]` (enforced by the compiler and `evmbind`) and store
+> shared mutable values in `concurrency.Cache` (§8.1), check `fn.HasCaptures()`
+> (and `fn.Name()`) for stateless registrations, or synchronize access on the
+> host side.
 
 #### 3. Plain Go adapters (`func(...)` and `error`) and `CallbackScope`
 
@@ -4349,10 +4374,12 @@ Key rules and edge cases:
   wrappers. Native Go functions and native Go errors (`errors.New(...)`) pass
   through untouched and never use a `CallbackScope`.
 
-**Rule of thumb:** Use `evm.Callable` (`*evm.FunctionOf[...]`) whenever Go owns
-the call site and can pass a VM; use a plain Go `func` or `error` when interop
-with an existing Go signature requires it, and open `vm.OpenCallbackScope(limits)`
-only if Go will call that adapter after `vm.Run` returns.
+**Rule of thumb:** Use `evm.Callable` (`*evm.FunctionOf[...]` for ordinary
+retained callbacks, or `*evm.ConcurrentFunctionOf[...]` for concurrent
+registrations) whenever Go owns the call site and can pass a VM; use a plain Go
+`func` or `error` when interop with an existing Go signature requires it, and
+open `vm.OpenCallbackScope(limits)` only if Go will call that adapter after
+`vm.Run` returns.
 
 > **Key takeaways — Chapter 7**
 > - Host calls share the exact same overlapping register-window ABI as script calls, plus fast direct-call opcodes (`call.host.d*`) for small, non-escaping calls.
@@ -4442,6 +4469,232 @@ meter, and allocation bytes track *cumulative reservations* rather than live Go
 heap size (GC never refunds the meter). Work is charged on every exit including
 failure, so an exhausted meter stays exhausted until `vm.SetBudget` or a fresh
 `AcquireVM`.
+
+#### Concurrency model: share-nothing by default (and its caveat)
+
+A Go application embedding EVM is almost always heavily concurrent—handling
+hundreds of HTTP requests, webhooks, or template renders at once—while EVM
+scripts themselves are strictly sequential (no goroutines, channels, or guest
+locks).
+
+EVM bridges that gap with a **PHP-style share-nothing model**:
+
+- **Compile and link once; execute on pooled VMs.** `*evm.Program` is immutable
+  once linked and safe to share across any number of goroutines. Each goroutine
+  leases its own `*evm.VM` via `program.AcquireVM(ctx)` and returns its cleared
+  register/frame buffers via `defer vm.Release()`.
+- **No shared package globals across runs.** Every outermost `vm.Run` allocates
+  fresh package globals and runs package `init()`, then clears them on exit.
+  Two concurrent requests executing the same script never share package
+  variables and never contend on a VM-wide lock.
+
+> **Why this way?** *(Clear trade-off — share-nothing pooled VMs vs. fibers or
+> VM cloning.)* Giving EVM internal fibers/routines or a shared mutable VM heap
+> would force locking or race rules into the interpreter and every guest
+> container. Cloning a post-`init` VM snapshot would copy mutable state per
+> request, defeating zero-copy sharing of immutable setup data while still
+> making shared caches ambiguous. Pooling single-goroutine VMs over an
+> immutable `*evm.Program` keeps the evaluator lock-free, matches Go's own
+> goroutine-per-request concurrency, and makes request isolation the default.
+
+**The caveat: closures, mutable receivers, and shared native pointers.**
+Share-nothing holds automatically for top-level functions and package globals,
+but plugin systems often run a setup/registration step once and keep the
+resulting `evm.Callable`s—closures or bound methods on a guest struct (for
+example, an integration struct holding configuration or an in-memory cache).
+When later requests invoke that retained `evm.Callable` concurrently on
+separate pooled VMs:
+
+- Package globals are still fresh per run, **but** the closure's captured
+  variables and the bound receiver's struct fields are the *same* heap objects
+  across every concurrent VM.
+- Shared native Go pointers/structs passed in by the host are likewise shared.
+- EVM does **not** synchronize concurrent guest writes to those shared captures,
+  receivers, or native pointers—concurrent mutation is a data race.
+
+Plain `*evm.FunctionOf[S]` callbacks remain unchecked by the compiler. For
+unchecked callables, hosts rely on three patterns:
+
+1. **Require stateless registrations** when no per-instance state is needed
+   (check `!fn.HasCaptures()` and `fn.Name() != ""`).
+2. **Keep captured/receiver state read-only after setup**, and push any mutable
+   shared state (caches, rate limiters, counters) into synchronized Go host
+   APIs rather than guest struct fields.
+3. **Serialize calls on the host side** (e.g., per-plugin mutex or single-writer
+   guard) whenever a retained capturing callable may mutate its captures or
+   receiver.
+
+#### Concurrent callbacks (`*evm.ConcurrentFunctionOf[S]`) and `concurrency.Cache`
+
+Use `*evm.FunctionOf[S]` to retain a guest callback. When calls to that callback
+may overlap across VMs, declare the parameter as `*evm.ConcurrentFunctionOf[S]`.
+
+- **Host declaration:** Declare a registration parameter as
+  `*evm.ConcurrentFunctionOf[S]` (`S` = non-variadic function signature or `any`;
+  both `FunctionOf` and `ConcurrentFunctionOf` alias `evm.Callable` so Go receives
+  `*evm.Callable`), for example:
+
+```go
+type InitContext interface {
+    AddBlock(renderer *evm.ConcurrentFunctionOf[any])
+    AddAdminHandler(path, method string, handler *evm.ConcurrentFunctionOf[func(HandlerContext) any], options *AdminHandler)
+}
+```
+
+- **Plugin usage:** Plugins pass `c.Handle` or a closure directly with no
+  wrapper call, importing `"evmruntime/concurrency"` only when they need
+  `concurrency.Cache`:
+
+```go
+// Allowed: immutable config field + concurrency.Cache, passed directly.
+type Client struct {
+    prefix string
+    tokens *concurrency.Cache[string, string]
+}
+
+func (c *Client) Handle(h bh.HandlerContext) any {
+    entry, err := c.tokens.GetOrLoad("token", func() (string, time.Time, error) {
+        var expiry time.Time
+        return c.prefix + h.Method(), expiry, nil
+    })
+    if err != nil {
+        panic(err)
+    }
+    return entry.Value
+}
+
+func Initialize(ctx bh.InitContext) {
+    c := &Client{prefix: "first-", tokens: concurrency.NewCache[string, string]()}
+    ctx.AddAdminHandler("token", "GET", c.Handle, &bh.AdminHandler{
+        Permission: security.PermissionAccessSuperadmin,
+    })
+}
+
+// Forbidden:
+// - mutating c.prefix or a captured map/slice inside Handle (compile error)
+// - returning/storing an alias to captured mutable state (compile error)
+// - passing a dynamic function variable/parameter to AddAdminHandler (compile error)
+// - indirect call `add := ctx.AddAdminHandler; add(..., c.Handle, ...)`
+//   (not statically visible; rejected at runtime at the evmbind boundary)
+```
+
+**Guest vs. native Go `concurrency.Cache` API:** `evmstd.Packages()` (or
+`evmstd.ConcurrencyPackages()`) exposes `evmruntime/concurrency`, backed by Go
+package `github.com/andreyvit/evm/evmruntime/concurrency`. In guest scripts,
+the VM supplies `vm.Context` to `GetOrLoad` automatically, whereas native Go
+callers pass `context.Context` explicitly:
+
+```go
+// Guest script (import "evmruntime/concurrency"):
+func NewCache[K comparable, V any]() *Cache[K, V]
+func (c *Cache[K, V]) Get(key K) (Entry[V], bool)
+func (c *Cache[K, V]) Set(key K, v V, expiry time.Time) Entry[V]
+func (c *Cache[K, V]) GetOrLoad(key K, fetch func() (V, time.Time, error)) (Entry[V], error)
+func (c *Cache[K, V]) InvalidateIfCurrent(key K, e Entry[V])
+
+// Native Go (import "github.com/andreyvit/evm/evmruntime/concurrency"):
+func NewCache[K comparable, V any]() *Cache[K, V]
+func (c *Cache[K, V]) Get(key K) (Entry[V], bool)
+func (c *Cache[K, V]) Set(key K, value V, expiry time.Time) Entry[V]
+func (c *Cache[K, V]) GetOrLoad(ctx context.Context, key K, load func() (V, time.Time, error)) (Entry[V], error)
+func (c *Cache[K, V]) InvalidateIfCurrent(key K, entry Entry[V])
+```
+
+**How `*evm.ConcurrentFunctionOf[S]` verification works (`evmcompiler/shared.go` and
+`evmbind`):** When `evmbind` builds a schema, each `*evm.ConcurrentFunctionOf[S]`
+parameter records its zero-based explicit index (excluding any receiver) in
+`Package.ConcurrentCallbackParams[key]` (`"FuncName"` or `"Receiver.Method"`). Hand-written
+packages can populate `Package.ConcurrentCallbackParams` directly (merged by
+`evm.MergePackages`) and call `fn.CheckConcurrentUse()` in their native wrapper. For a capturing callback,
+the wrapper must also call `vm.CheckConcurrentBorrow(i)` for the registration parameter.
+
+- **Compile-time check on statically visible calls:** Right after
+  `discoverFunctions` and before bytecode lowering or optimizations, when any
+  imported package declares `ConcurrentCallbackParams`, `checkConcurrentCallbacks` scans SSA
+  instructions for statically visible calls (direct function calls, concrete
+  method calls, and interface method calls) to those symbols. At each matching
+  argument position it accepts `nil`, a plain top-level function
+  (`*ssa.Function`), or a statically known closure/bound method
+  (`*ssa.MakeClosure`), following local aliases, `Phi` nodes, interface boxing,
+  and type conversions. Passing a dynamic function parameter, field, or unknown
+  expression fails compilation
+  (`concurrent callback parameter requires a statically known function, closure, or bound method`).
+  Plain `*evm.FunctionOf[S]` parameters are left unchecked.
+- **Transitive read-only alias tracking:** Starting from the closure's
+  `FreeVars` (captures and bound receiver), the checker tracks every SSA value
+  whose type can alias mutable storage: pointers, slices, maps, interfaces,
+  functions, `unsafe.Pointer`, structs/arrays containing any of those, and named
+  structs imported from other packages (whose native layouts may omit private
+  fields). Pure guest scalars and scalar-only guest structs/arrays copy by value
+  and are skipped.
+  - **Allowed:** Reads and address/element derivations (`*`, `FieldAddr`,
+    `IndexAddr`, `Index`, `Field`, `Lookup`, `Slice`, `Range`/`Next`, `Phi`,
+    `Extract`, interface/type conversions), binary comparisons, `len` and `cap`,
+    calls to statically resolved guest functions (adding the callee's matching
+    parameter to the worklist), `*concurrency.Cache` receiver methods (`Get`,
+    `Set`, `GetOrLoad`, `InvalidateIfCurrent`), and nested closures whose every
+    use invokes them synchronously (direct call or `Cache.GetOrLoad` loader
+    argument).
+  - **Rejected:** Any write or mutating builtin (`append`, `copy`, `delete`,
+    `clear`, field/element/map stores), returning or storing an alias to tracked
+    state, escaping nested closures, calling a captured function or making an
+    indirect call on tracked state, and passing tracked state to external/native
+    functions (other than `*concurrency.Cache` receiver methods).
+- **Native-boundary enforcement (`evmbind` and `fn.CheckConcurrentUse()`):** Verified
+  closures and bound methods carry `evm.Function.CapturesVerifiedForConcurrency = true` in the
+  compiled `Module`. At run time, every `evmbind` wrapper for an operation with
+  `ConcurrentCallbackParams` automatically checks each non-nil concurrent callback argument with
+  `fn.CheckConcurrentUse()` before invoking the host function or method (`nil` passes
+  through for optional callbacks). `fn.CheckConcurrentUse()` accepts plain
+  non-capturing guest functions and compiler-verified closures/bound methods,
+  rejecting unverified capturing callbacks, native callables, and `nil`.
+- **Limitations (indirect calls and external aliases):**
+  - Calling a registration method or function indirectly (for example,
+    `add := ctx.AddAdminHandler; add(...)`) is not statically visible to the
+    compiler, so capturing callbacks passed that way are not verified at compile
+    time and fail at run time at the `evmbind` boundary via `CheckConcurrentUse()`
+    (plain top-level functions and `nil` still pass).
+  - A receiver or capture borrowed for a concurrent callback becomes read-only
+    in the builder from the method-value or closure expression onward. If one
+    branch borrows, the check applies after the join. A concurrent interface
+    parameter borrows the concrete receiver at the call. The compiler checks
+    the visible guest aliases. Host-owned aliases require host synchronization.
+
+**`concurrency.Cache[K, V]` behavior and limits:**
+
+- **Bounded capacity and expiry:** Synchronized across VMs and goroutines,
+  capped at **1,024 entries** (`maxEntries`; inserting a new key at capacity
+  evicts one arbitrary existing entry). A zero `time.Time` keeps the entry
+  eligible until eviction or invalidation; a non-zero expiry at or before
+  `time.Now()` is not stored (removing any existing entry on `Set`/put), and
+  expired entries are deleted lazily on `Get`.
+- **Versioned entries:** Each `Set` or successful `GetOrLoad` creates a fresh
+  internal version identity inside `Entry[V]` (copies retain it).
+  `InvalidateIfCurrent(key, entry)` removes `key` only when the cached entry's
+  version matches, preventing a stale caller from deleting a newer publication.
+- **Single-flight `GetOrLoad`:** Hits return immediately; misses run the loader
+  synchronously while concurrent callers for the same key wait and cancel
+  independently via context (`vm.Context` in guest code; explicit `ctx` in
+  native Go). A failing or panicking loader releases waiters to retry with
+  their own loader. A concurrent `Set` detaches the in-flight load so an older
+  loader can finish without overwriting the newer `Set` value.
+- **Guest vs. native Go limits:**
+  - Guest code must allocate caches with `concurrency.NewCache[K, V]()` (a
+    zero-value guest `Cache` panics). In native Go, the zero value is ready to
+    use and must not be copied after first use.
+  - Guest keys admit `bool`, integers, `string`, and guest-defined structs or
+    fixed-size arrays composed solely of those leaves (`_` struct fields
+    skipped). Guest values also admit floats, including floats inside structs
+    and arrays. The compiler rejects reference-bearing types. The binding copies
+    strings and aggregate values and rejects opaque native storage. Native Go
+    accepts any `comparable` key (panicking on non-reflexive keys such as `NaN`
+    in `Set`/`GetOrLoad`) and any value, leaving key/value concurrency safety
+    to the caller.
+  - In guest code, calling `GetOrLoad` inside an active loader on the same VM
+    returns a cached hit normally, but fails on a miss with
+    `concurrency: nested cache load would block` (even for another key or
+    cache) so a single VM cannot deadlock on itself. In native Go, a loader
+    must not wait on its own pending load.
 
 ### 8.2 Fuel checkpoints, deadlines, and allocation meters
 
@@ -4612,11 +4865,12 @@ the VM guarantees automatically and what remains the host's job:
 | **Slow or blocked host I/O** | Polls `ctx` at 256-step checkpoints and around external calls. | Honor `vm.Context` inside every native host callback and set timeouts on external I/O. |
 | **Escaping a borrowed DB record** | Compiler ownership analysis inserts budgeted `Own` copies before any borrowed value escapes its scope or survives invalidation. | Declare accurate `OwnershipEffects` (or `//evm:borrow-bytes`) on host APIs; `Link` checks consistency, not host implementation honesty. |
 | **Partial side effects on failure** | Outermost `vm.Run` clears globals/buffers on exit, keeps spent budget charged, and leaves caller result slots untouched on failure. | Roll back database transactions and release host resources on error—EVM never rolls back host state. |
-| **Shared mutable captures / native pointers** | Each goroutine acquires its own `*evm.VM` with independent registers and per-run globals. | Synchronize concurrent guest writes to shared captures or native Go pointers—EVM makes no blanket guarantee of guest race safety. |
+| **Shared mutable captures / native pointers** | Each goroutine acquires its own `*evm.VM` with independent registers and per-run globals; `*evm.ConcurrentFunctionOf[S]` registration parameters verify captured/receiver state read-only at statically visible calls and enforce `CheckConcurrentUse()` at the `evmbind` boundary, while `concurrency.Cache` synchronizes shared entries. | Plain `*evm.FunctionOf[S]` callbacks remain unchecked; declare concurrent registrations with `*evm.ConcurrentFunctionOf[S]` + `concurrency.Cache` or synchronize concurrent writes to shared captures, external aliases, and native Go pointers on the host side. |
 | **Malicious hand-crafted bytecode** | `Link` validates indices, layouts, and control-flow edges, but cannot prove arbitrary raw pointer provenance. | **Always accept Go source** through `evmcompiler.Compile`; never accept untrusted pre-compiled `Module`s. |
 
 > **Key takeaways — Chapter 8**
-> - A `*evm.Program` is immutable, holds default limits (`LinkOptions.DefaultLimits`), and is shared across goroutines; `program.AcquireVM(ctx)` leases a pooled single-goroutine `*evm.VM` that runs fresh package globals and `init()` on every outermost `vm.Run` and returns cleared buffers on `Release()`.
+> - EVM uses a PHP-style share-nothing concurrency model: an immutable `*evm.Program` is shared across goroutines, `program.AcquireVM(ctx)` leases a pooled single-goroutine `*evm.VM` with fresh package globals and `init()` on every outermost `vm.Run`, and `Release()` returns cleared buffers.
+> - Retained closures, bound mutable receivers, and shared native pointers are the one exception to share-nothing: declaring concurrent registration parameters as `*evm.ConcurrentFunctionOf[S]` makes the compiler prove read-only use of captured/receiver state at statically visible calls and makes `evmbind` enforce `fn.CheckConcurrentUse()` at the native boundary, while `concurrency.Cache` provides a synchronized shared cache (guest `GetOrLoad` receives `vm.Context` from the VM; native Go takes `ctx` explicitly); plain `*evm.FunctionOf[S]` callbacks and external aliases remain outside compiler verification and rely on host discipline or synchronization.
 > - Fuel counts *down* and polls `ctx` on `remaining&255 == 0`, giving exact step limits with one context check every 256 dispatches; `vm.SetBudget` starts a fresh allowance while idle, and `NarrowBudget` lets host transactions tighten budgets temporarily.
 > - Allocation meters charge cumulative reservations *before* allocating Go memory; omitting `DefaultLimits` selects finite defaults, while an explicit empty `Limits{}` disables quotas while keeping structural bounds and cancellation.
 > - Language faults unwind through script `defer`/`recover`; budget, cancellation, and host errors trap immediately, clear globals/buffers on exit, and keep spent budget charged.

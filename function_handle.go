@@ -27,6 +27,10 @@ type callTarget struct {
 // required function signature. Use any for host-checked registrations.
 type FunctionOf[S any] = Callable
 
+// ConcurrentFunctionOf marks a host parameter for a retained callback that may run
+// concurrently. The compiler verifies its receiver and captures at the call site.
+type ConcurrentFunctionOf[S any] = Callable
+
 // linkCallables gives host entries stable function references, including entries
 // that never occur as function values in bytecode. Existing numbers stay valid.
 func (p *Program) linkCallables() {
@@ -95,6 +99,25 @@ func (f Callable) CheckSignature(want Signature) error {
 		return fmt.Errorf("%w: %s has %s, want %s", ErrFunction, f.Name(), signatureText(*f.signature), signatureText(want))
 	}
 	return nil
+}
+
+// CheckConcurrentUse lets a host require capture verification at registration. Plain
+// guest functions have no captures. A host that accepts bytecode directly must
+// trust its producer, as it does for other compiler metadata.
+func (f Callable) CheckConcurrentUse() error {
+	if f.callTarget == nil {
+		return ErrNilFunction
+	}
+	if f.number == boundMethodValue && f.captures != nil {
+		ref := (*boundMethod)(f.captures).ref
+		if !ref.Native && f.program.functions[ref.Index].CapturesVerifiedForConcurrency {
+			return nil
+		}
+	}
+	if f.index >= 0 && (!f.HasCaptures() || f.program.functions[f.index].CapturesVerifiedForConcurrency) {
+		return nil
+	}
+	return fmt.Errorf("%w: callback captures require verification for concurrent use", ErrFunction)
 }
 
 func (f Callable) guestValue() values.Value {
@@ -180,4 +203,16 @@ func (f Callable) Signature() Signature {
 		return Signature{}
 	}
 	return copySignature(*f.signature)
+}
+
+// CheckConcurrentBorrow checks the guest registration site. Checking only the
+// method body would let an indirect registration reuse a proof from a different
+// receiver without checking later writes to this one.
+func (vm *VM) CheckConcurrentBorrow(parameter int) error {
+	if vm.hostPC != 0 {
+		if site, ok := vm.program.functions[vm.hostCaller].ConcurrentBorrowCalls[vm.hostPC-1]; ok && slices.Contains(site, parameter) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: concurrent registration requires a compiler-checked borrow", ErrFunction)
 }

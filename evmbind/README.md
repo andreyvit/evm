@@ -463,22 +463,24 @@ serve the other.
 
 ## Retained functions and callbacks
 
-EVM gives you typed and untyped handles for passing script functions across the
-host boundary.
+Use `*evm.FunctionOf[S]` to retain a guest callback. Declare the parameter as
+`*evm.ConcurrentFunctionOf[S]` when the host may invoke the callback concurrently.
 
-### Typed function handles
+### Typed function handles (`*evm.FunctionOf[S]`)
 
 - **`*evm.FunctionOf[func(int) int]`** (type-aliased to `evm.Callable`) accepts
   named guest functions, closures, bound methods, and native functions; Go sees
-  `*evm.Callable`. The type argument supplies the guest signature so
-  incompatible functions fail compilation, and both generated and reflected
-  bindings accept and return these callables as script function values without
-  boxing them in `any`. Returned callables must belong to the current program
-  and match the declared signature (`nil` round-trips as `nil`). Retaining a
-  closure keeps its captures and owning `*evm.Program` alive; invoke it with
-  `vm.Run(*fn, slots)` on an acquired `*evm.VM` (or synchronously on the active
-  `*evm.VM` inside a binding). If a host requires a named, non-capturing guest
-  function, check `fn.Name()` and `!fn.HasCaptures()`.
+  `*evm.Callable`. Use `FunctionOf` for single-run, per-request, or
+  host-serialized callbacks where the compiler does not need to prove read-only
+  captures. The type argument supplies the guest signature so incompatible
+  functions fail compilation, and both generated and reflected bindings accept
+  and return these callables as script function values without boxing them in
+  `any`. Returned callables must belong to the current program and match the
+  declared signature (`nil` round-trips as `nil`). Retaining a closure keeps its
+  captures and owning `*evm.Program` alive; invoke it with `vm.Run(*fn, slots)`
+  on an acquired `*evm.VM` (or synchronously on the active `*evm.VM` inside a
+  binding). If a host requires a named, non-capturing guest function, check
+  `fn.Name()` and `!fn.HasCaptures()`.
   - The signature may include nested function parameters and slices (such as
     `func(func([]string), func([]any))` for a header/row producer). Those
     values stay in VM storage, so invoke the callable with program-owned native
@@ -488,16 +490,91 @@ host boundary.
     before invocation), stores meter the retained callable, and Go keeps an
     ordinary typed pointer field.
 
-### Untyped (host-validated) handles
+### Untyped (host-validated) handles (`*evm.FunctionOf[any]`)
 
 Use **`*evm.FunctionOf[any]`** (input-only; scripts see an `any` parameter)
 when the host itself validates the signature at registration (for example, a
-GoX renderer whose data type is declared by the script). It accepts named guest
-functions, closures, bound methods, and native functions, returning
-`*evm.Callable`. Both untyped `nil` and typed `nil` functions yield a `nil`
-pointer, while non-functions fail at the call boundary. Validate the contract
-with `fn.CheckSignature(want)` (and inspect `fn.Signature()`, `fn.Name()`, or
-`fn.HasCaptures()`) before publishing or invoking.
+single-request GoX renderer whose data type is declared by the script). It
+accepts named guest functions, closures, bound methods, and native functions,
+returning `*evm.Callable`. Both untyped `nil` and typed `nil` functions yield a
+`nil` pointer, while non-functions fail at the call boundary. Validate the
+contract with `fn.CheckSignature(want)` (and inspect `fn.Signature()`,
+`fn.Name()`, or `fn.HasCaptures()`) before publishing or invoking.
+
+### Concurrent callback parameters (`*evm.ConcurrentFunctionOf[S]`)
+
+When a host registers a callback that may run concurrently across pooled VMs,
+declare the registration parameter as **`*evm.ConcurrentFunctionOf[S]`** instead of
+`*evm.FunctionOf[S]`. Like `FunctionOf`, `ConcurrentFunctionOf` aliases
+`evm.Callable` (Go sees `*evm.Callable`), and `S` is either a non-variadic
+function signature or `any` for host-checked registrations:
+
+```go
+type InitContext interface {
+    AddBlock(renderer *evm.ConcurrentFunctionOf[any])
+    AddAdminHandler(path, method string, handler *evm.ConcurrentFunctionOf[func(HandlerContext) any], options *AdminHandler)
+}
+```
+
+`evmbind` handles both halves of the contract automatically:
+
+- **Compile-time verification (`Package.ConcurrentCallbackParams`):** `evmbind` records each
+  `*evm.ConcurrentFunctionOf[S]` parameter's zero-based explicit index (excluding
+  any receiver) in `Package.ConcurrentCallbackParams`. During compilation, the EVM compiler
+  scans statically visible calls to those functions and methods, verifying that
+  any capturing closure or bound method uses its captures and receiver
+  read-only (with `*concurrency.Cache` methods allowed for synchronized shared
+  state). Scripts pass `c.Handle` or a closure directly with no wrapper call.
+- **Native-boundary enforcement (`fn.CheckConcurrentUse()`):** Every generated and
+  reflected `evmbind` wrapper checks every `*evm.ConcurrentFunctionOf[S]` argument
+  before calling the host function or method. `nil` passes through as `nil` (for
+  optional callbacks); any non-nil value must pass `fn.CheckConcurrentUse()`, accepting
+  plain non-capturing guest functions and compiler-verified closures/bound
+  methods and rejecting unverified capturing callbacks and native callables with
+  `evm.ErrFunction`.
+
+```go
+// Allowed: plugin passes c.Handle directly; c.prefix is read-only, c.tokens is a concurrency.Cache.
+type Client struct { prefix string; tokens *concurrency.Cache[string, string] }
+func (c *Client) Handle(h bh.HandlerContext) any {
+    e, err := c.tokens.GetOrLoad("k", func() (string, time.Time, error) {
+        var exp time.Time
+        return c.prefix + h.Method(), exp, nil
+    })
+    if err != nil { panic(err) }
+    return e.Value
+}
+// ctx.AddAdminHandler("token", "GET", c.Handle, opts) // passes compile + boundary check
+
+// Forbidden:
+// - mutating c.prefix or a captured map/slice inside Handle -> compile error
+// - returning an alias to a captured map/slice -> compile error
+// - passing a dynamic function parameter to AddAdminHandler -> compile error
+// - calling indirectly (add := ctx.AddAdminHandler; add(..., c.Handle, opts))
+//   -> skips static check, rejected at the evmbind boundary by CheckConcurrentUse()
+```
+
+Keep two boundaries in mind:
+
+- **Indirect registration calls and dynamic callbacks:** Passing a dynamic
+  function variable or parameter to a `*evm.ConcurrentFunctionOf[S]` parameter fails
+  compilation. Calling the registration method indirectly (for example, through
+  a function variable `add := ctx.AddAdminHandler; add(...)`) is not statically
+  visible to the compiler, so `evmbind` rejects unverified capturing callbacks at
+  run time at the native boundary.
+- **Writes after registration:** The compiler checks the builder too. Once a
+  receiver or capture is borrowed, later writes through tracked aliases fail,
+  including after a conditional registration. Host-owned pointers can still
+  have other writers. See
+  [Concurrent callbacks and caches](../_docs/embedding.md#concurrent-callbacks-and-caches)
+  for the full verification rules and `concurrency.Cache` limits.
+
+### Concurrent interface parameters
+
+Declare `//evm:concurrent impl` on a host function or method taking `impl Foo`.
+Supply a factory for `reflect.TypeFor[Foo]()` in `Options.InterfaceAdapters`.
+It receives the bound methods of one checked guest receiver and returns a Go
+implementation of `Foo`. See [the embedding guide](../_docs/embedding.md#scripts-implementing-go-host-interfaces).
 
 ### Native Go function types and callback scopes
 

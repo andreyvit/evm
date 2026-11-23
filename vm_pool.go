@@ -106,23 +106,25 @@ func (vm *VM) clearWindow() {
 	vm.R, vm.P, vm.native = nil, nil, nil
 	vm.usedR, vm.usedP = 0, 0
 	vm.Position = SourcePosition{}
+	vm.hostCaller, vm.hostPC = 0, 0
 	if vm.direct != nil {
 		clear(vm.direct.p[:])
 	}
 }
 
 type suspendedCall struct {
-	registers    executionBuffers
-	segment      *executionBuffers
-	native       *linkedNative
-	r            []uint64
-	p            []unsafe.Pointer
-	usedR, usedP int
-	position     SourcePosition
+	registers          executionBuffers
+	segment            *executionBuffers
+	native             *linkedNative
+	r                  []uint64
+	p                  []unsafe.Pointer
+	usedR, usedP       int
+	position           SourcePosition
+	hostCaller, hostPC int
 }
 
 func (vm *VM) enterCallback() suspendedCall {
-	saved := suspendedCall{registers: vm.executionBuffers, segment: callbackBuffers.Get().(*executionBuffers), native: vm.native, r: vm.R, p: vm.P, usedR: vm.usedR, usedP: vm.usedP, position: vm.Position}
+	saved := suspendedCall{registers: vm.executionBuffers, segment: callbackBuffers.Get().(*executionBuffers), native: vm.native, r: vm.R, p: vm.P, usedR: vm.usedR, usedP: vm.usedP, position: vm.Position, hostCaller: vm.hostCaller, hostPC: vm.hostPC}
 	vm.executionBuffers = *saved.segment
 	vm.deferGeneration = 1
 	vm.prepareRecordLists()
@@ -137,6 +139,7 @@ func (s *suspendedCall) restore(vm *VM) {
 	*s.segment = vm.executionBuffers
 	callbackBuffers.Put(s.segment)
 	vm.executionBuffers = s.registers
+	vm.hostCaller, vm.hostPC = s.hostCaller, s.hostPC
 	vm.R, vm.P, vm.native, vm.Position, vm.usedR, vm.usedP = s.r, s.p, s.native, s.position, s.usedR, s.usedP
 }
 

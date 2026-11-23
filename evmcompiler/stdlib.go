@@ -210,9 +210,11 @@ func (s *sourceImporter) Import(path string) (*types.Package, error) {
 		pkg := types.NewPackage(path, "evm")
 		handle := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Callable", nil), types.NewStruct(nil, nil), nil)
 		pkg.Scope().Insert(handle.Obj())
-		alias := types.NewAlias(types.NewTypeName(token.NoPos, pkg, "FunctionOf", nil), handle)
-		alias.SetTypeParams([]*types.TypeParam{types.NewTypeParam(types.NewTypeName(token.NoPos, pkg, "Signature", nil), types.Universe.Lookup("any").Type())})
-		pkg.Scope().Insert(alias.Obj())
+		for _, name := range []string{"FunctionOf", "ConcurrentFunctionOf"} {
+			alias := types.NewAlias(types.NewTypeName(token.NoPos, pkg, name, nil), handle)
+			alias.SetTypeParams([]*types.TypeParam{types.NewTypeParam(types.NewTypeName(token.NoPos, pkg, "Signature", nil), types.Universe.Lookup("any").Type())})
+			pkg.Scope().Insert(alias.Obj())
+		}
 		pkg.MarkComplete()
 		s.imported[path] = pkg
 		return pkg, nil

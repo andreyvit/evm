@@ -23,6 +23,14 @@ func (e *typeEnvironment) shape(t types.Type) (result *values.Shape, err error) 
 	if s := e.shapeOf(t); s != nil {
 		return s, nil
 	}
+	if n, ok := t.(*types.Named); ok && n.Obj().Name() == "Cache" && n.Obj().Pkg() != nil && n.Obj().Pkg().Path() == concurrencyPath && n.TypeArgs().Len() == 2 {
+		for i := range 2 {
+			arg := n.TypeArgs().At(i)
+			if !e.cacheDataType(arg, i == 0, make(map[types.Type]bool)) {
+				return nil, fmt.Errorf("concurrency.Cache cannot share %s", arg)
+			}
+		}
+	}
 	s := &values.Shape{Cells: 1, DisplayName: displayTypeName(t)}
 	e.shapes.Set(t, s)
 	e.shapeOrder = append(e.shapeOrder, s)

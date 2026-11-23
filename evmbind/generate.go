@@ -7,6 +7,7 @@ import (
 	"go/types"
 	"io/fs"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 
@@ -361,7 +362,9 @@ func generateSource(s *source, nativeImport, outputPackage string) ([]byte, erro
 			if op.recv != nil {
 				idx++
 			}
-			if n.kind == nodeNativeFunction {
+			if slices.Contains(op.concurrentInterfaces, i) {
+				args = append(args, fmt.Sprintf("evmbind.ConcurrentInterfaceArgument[%s](f,%q,f.CallArgument(%d))", typ(n), n.name, idx))
+			} else if n.kind == nodeNativeFunction {
 				if b := op.callbackBorrow; b != nil && b.argument == i {
 					args = append(args, fmt.Sprintf("f.DecodeBorrowedCallback(%q,f.CallArgument(%d),%q).(%s)", n.name, idx, b.domain, typ(n)))
 				} else {

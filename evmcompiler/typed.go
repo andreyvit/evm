@@ -18,6 +18,7 @@ import (
 )
 
 type typedCompiler struct {
+	concurrentSites   map[ssa.Instruction][]int
 	branchPositions   map[*ssa.If]token.Pos
 	dereferenceWrites map[token.Pos]bool
 	nativeInstances   map[*ssa.Function]nativeInstance
@@ -251,6 +252,17 @@ func compileTypedFiles(sources map[string]string, environment *Environment, opti
 		allDecls.Decls = append(allDecls.Decls, file.Decls...)
 	}
 	functions := c.discoverFunctions(prog, allDecls, info, needsInit)
+	var verifiedCaptures map[*ssa.Function]bool
+	if slices.ContainsFunc(used, func(p *types.Package) bool {
+		pkg := c.env.packages[p.Path()]
+		return pkg != nil && (len(pkg.ConcurrentCallbackParams) > 0 || len(pkg.ConcurrentInterfaceParams) > 0)
+	}) {
+		verifiedCaptures = make(map[*ssa.Function]bool)
+		c.checkConcurrentCallbacks(functions, verifiedCaptures)
+	}
+	if len(c.errors) > 0 {
+		return nil, c.errors
+	}
 	c.captureBranchPositions(functions)
 	c.markDeferValues(functions)
 	if needsInit {
@@ -280,7 +292,7 @@ func compileTypedFiles(sources map[string]string, environment *Environment, opti
 		}
 		c.functions[f] = uint32(len(c.module.Functions))
 		name, internal := c.functionName(f, len(c.module.Functions))
-		c.module.Functions = append(c.module.Functions, evm.Function{Method: f.Signature.Recv() != nil, RecoverTransparent: strings.HasPrefix(f.Synthetic, "bound method wrapper") || strings.HasPrefix(f.Synthetic, "wrapper for") || strings.HasPrefix(f.Synthetic, "thunk for"), Internal: internal, Name: name, Position: c.position(f.Pos()), Signature: sig})
+		c.module.Functions = append(c.module.Functions, evm.Function{CapturesVerifiedForConcurrency: verifiedCaptures[f], Method: f.Signature.Recv() != nil, RecoverTransparent: strings.HasPrefix(f.Synthetic, "bound method wrapper") || strings.HasPrefix(f.Synthetic, "wrapper for") || strings.HasPrefix(f.Synthetic, "thunk for"), Internal: internal, Name: name, Position: c.position(f.Pos()), Signature: sig})
 	}
 	if len(c.errors) > 0 {
 		return nil, c.errors

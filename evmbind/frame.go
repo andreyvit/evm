@@ -206,3 +206,42 @@ func (f *Frame) SetBorrowedBytesResult(index int, data []byte) {
 	}
 	f.SetCallResult(index, v)
 }
+
+// ConcurrentInterfaceArgument constructs the host adapter for a verified receiver.
+func ConcurrentInterfaceArgument[I any](f *Frame, name string, v values.Value) I {
+	var zero I
+	if v == (values.Value{}) {
+		return zero
+	}
+	return f.concurrentInterface(f.s.src.nodes[name], v).Interface().(I)
+}
+
+func (f *Frame) concurrentInterface(n *node, v values.Value) reflect.Value {
+	t := f.s.nodesByNative[n]
+	if v == (values.Value{}) {
+		return reflect.Zero(t)
+	}
+	methods := make(map[string]evm.Callable, len(n.shape.Methods))
+	for _, m := range n.shape.Methods {
+		sig := evm.Signature{}
+		for _, arg := range m.Signature.Params {
+			sig.Params = append(sig.Params, arg.Type)
+		}
+		for _, out := range m.Signature.Results {
+			sig.Results = append(sig.Results, out.Type)
+		}
+		fn, err := f.LookupMethod(v, m.ID, sig)
+		if err != nil {
+			panic(err)
+		}
+		if err := fn.CheckConcurrentUse(); err != nil {
+			panic(err)
+		}
+		methods[m.ID] = fn
+	}
+	result := reflect.ValueOf(f.s.interfaceAdapters[t](methods))
+	if !result.IsValid() || !result.Type().Implements(t) {
+		panic(fmt.Errorf("adapter must implement %s", t))
+	}
+	return result
+}

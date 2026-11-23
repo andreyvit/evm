@@ -3,6 +3,7 @@ package evmbind
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"time"
 	"unsafe"
 
@@ -188,7 +189,9 @@ func reflectWrapper(op *operation, host reflect.Type, ts map[*node]reflect.Type,
 			}
 		}
 		for i, n := range op.args {
-			if b := op.callbackBorrow; b != nil && b.argument == i {
+			if slices.Contains(op.concurrentInterfaces, i) {
+				args = append(args, f.concurrentInterface(n, f.CallArgument(start+i)))
+			} else if b := op.callbackBorrow; b != nil && b.argument == i {
 				args = append(args, f.decodeCallback(n, f.CallArgument(start+i), b.domain))
 			} else {
 				args = append(args, decodeArgument(f, n, f.CallArgument(start+i), ts))

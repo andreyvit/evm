@@ -498,6 +498,23 @@ func Initialize(ctx bh.InitContext) {
 }
 ```
 
+The host answers for native code, so a callback can use native calls freely
+with shared state, and can return shared values to the host:
+
+```go
+// Allowed plugin: native handle captured at setup, shared value returned.
+func Initialize(ctx bh.InitContext) {
+    frame := ctx.AddStaticFrame(&bh.StaticFrame{HTMLFile: "library.html"})
+    raw := &model.RawOutput{Data: []byte("ok"), ContentType: "text/plain"}
+    ctx.AddAdminTab(func(page bh.AdminPageContext) any {
+        return &model.ViewData{ViewFunc: frame.Render()} // native method on a capture
+    }, &bh.AdminTab{...})
+    ctx.AddAdminHandler("raw", "GET", func(h bh.HandlerContext) any {
+        return raw // the host receives the shared value and must not change it
+    }, &bh.AdminHandler{...})
+}
+```
+
 ```go
 // Forbidden plugin patterns:
 // 1. Mutating receiver/captured state (compile error):
@@ -506,10 +523,19 @@ func (c *Client) BadWrite(h bh.HandlerContext) any {
     return c.prefix
 }
 
-// 2. Returning/escaping an alias to captured mutable state (compile error):
-type Holder struct{ items map[string]int }
-func (h *Holder) BadEscape(bh.HandlerContext) any {
-    return h.items // fails: escaping alias to tracked receiver field
+// 2. Handing native code a pointer to a plain shared field (compile error):
+type Counter struct{ n int }
+func (c *Counter) BadFill(h bh.HandlerContext) any {
+    forms.Var(&c.n) // fails: native code takes such a pointer to write through it
+    return c.n
+}
+
+// 2a. Using the registration context inside the callback (compile error):
+func BadLateUse(ctx bh.InitContext) {
+    ctx.AddAdminHandler("late", "GET", func(h bh.HandlerContext) any {
+        ctx.AddLog("late") // fails: uses the bh.InitContext it is registered on
+        return nil
+    }, &bh.AdminHandler{...})
 }
 
 // 3. Passing a dynamic callback value (compile error):

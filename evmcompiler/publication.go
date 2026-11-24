@@ -435,6 +435,17 @@ func (p *publicationCheck) checkEarlierCalls(work publication, locked map[ssa.Va
 			if _, builtin := common.Value.(*ssa.Builtin); builtin {
 				continue
 			}
+			if p.c.nativeCall(common) {
+				// Native code is trusted with shared state, except that it
+				// keeps a pointer it can write through.
+				for _, arg := range common.Args {
+					if locked[arg] && p.c.outParameter(arg) {
+						p.c.fail(ins.Pos(), "cannot verify concurrent borrow: earlier call may retain a mutable alias")
+						return
+					}
+				}
+				continue
+			}
 			target := common.StaticCallee()
 			if result := call.Value(); result != nil && locked[result] {
 				if target == nil {

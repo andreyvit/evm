@@ -27,6 +27,17 @@ func concurrencyFunction(f *ssa.Function) *types.Func {
 // their usual mutation and aliasing rules.
 func (c *typedCompiler) checkConcurrentCallbacks(functions []*ssa.Function, verified map[*ssa.Function]bool) {
 	borrows := publicationCheck{c: c, functions: functions}
+	boxed := map[types.Type]bool{}
+	for _, f := range functions {
+		for _, block := range f.Blocks {
+			for _, ins := range block.Instrs {
+				if box, ok := ins.(*ssa.MakeInterface); ok && !boxed[box.X.Type()] && c.guestType(box.X.Type()) {
+					boxed[box.X.Type()] = true
+					c.guestBoxed = append(c.guestBoxed, box.X.Type())
+				}
+			}
+		}
+	}
 	for _, f := range functions {
 		for _, block := range f.Blocks {
 			for _, ins := range block.Instrs {
@@ -45,6 +56,13 @@ func (c *typedCompiler) checkConcurrentCallbacks(functions []*ssa.Function, veri
 					}
 					c.concurrentSites[ins] = append(append([]int(nil), pkg.ConcurrentInterfaceParams[key]...), pkg.ConcurrentCallbackParams[key]...)
 				}
+				// A callback runs after registration ends, so it cannot use the registrar.
+				var registrar types.Type
+				if call.IsInvoke() {
+					registrar = call.Value.Type()
+				} else if offset == 1 && len(call.Args) > 0 {
+					registrar = call.Args[0].Type()
+				}
 				for _, i := range pkg.ConcurrentInterfaceParams[key] {
 					if i < 0 || i >= len(call.Args)-offset || i >= call.Signature().Params().Len() {
 						c.fail(ins.Pos(), "invalid concurrent interface parameter for %s", key)
@@ -55,7 +73,7 @@ func (c *typedCompiler) checkConcurrentCallbacks(functions []*ssa.Function, veri
 						c.fail(ins.Pos(), "concurrent interface parameter requires a method interface")
 						return
 					}
-					c.verifyConcurrentInterface(call.Args[offset+i], iface, ins, verified, &borrows, map[ssa.Value]bool{})
+					c.verifyConcurrentInterface(call.Args[offset+i], iface, ins, registrar, verified, &borrows, map[ssa.Value]bool{})
 					if len(c.errors) > 0 {
 						return
 					}
@@ -65,7 +83,7 @@ func (c *typedCompiler) checkConcurrentCallbacks(functions []*ssa.Function, veri
 						c.fail(ins.Pos(), "invalid concurrent callback parameter for %s", key)
 						return
 					}
-					c.verifyConcurrentCallbackArgument(call.Args[offset+i], ins.Pos(), verified, &borrows, map[ssa.Value]bool{})
+					c.verifyConcurrentCallbackArgument(call.Args[offset+i], ins.Pos(), registrar, verified, &borrows, map[ssa.Value]bool{})
 					if len(c.errors) > 0 {
 						return
 					}
@@ -115,7 +133,7 @@ func (c *typedCompiler) concurrentCallbackTarget(call *ssa.CallCommon) (*evm.Pac
 	return c.env.packages[owner.Path()], key, offset
 }
 
-func (c *typedCompiler) verifyConcurrentCallbackArgument(v ssa.Value, pos token.Pos, verified map[*ssa.Function]bool, borrows *publicationCheck, seen map[ssa.Value]bool) {
+func (c *typedCompiler) verifyConcurrentCallbackArgument(v ssa.Value, pos token.Pos, registrar types.Type, verified map[*ssa.Function]bool, borrows *publicationCheck, seen map[ssa.Value]bool) {
 	if seen[v] {
 		return
 	}
@@ -128,14 +146,14 @@ func (c *typedCompiler) verifyConcurrentCallbackArgument(v ssa.Value, pos token.
 	case *ssa.Function:
 		return
 	case *ssa.MakeInterface:
-		c.verifyConcurrentCallbackArgument(v.X, pos, verified, borrows, seen)
+		c.verifyConcurrentCallbackArgument(v.X, pos, registrar, verified, borrows, seen)
 		return
 	case *ssa.ChangeType:
-		c.verifyConcurrentCallbackArgument(v.X, pos, verified, borrows, seen)
+		c.verifyConcurrentCallbackArgument(v.X, pos, registrar, verified, borrows, seen)
 		return
 	case *ssa.Phi:
 		for _, edge := range v.Edges {
-			c.verifyConcurrentCallbackArgument(edge, pos, verified, borrows, seen)
+			c.verifyConcurrentCallbackArgument(edge, pos, registrar, verified, borrows, seen)
 		}
 		return
 	case *ssa.MakeClosure:
@@ -146,7 +164,7 @@ func (c *typedCompiler) verifyConcurrentCallbackArgument(v ssa.Value, pos token.
 		if verified[target] {
 			return
 		}
-		check := sharedCheck{c: c, pos: pos, seen: map[ssa.Value]bool{}, aliases: map[types.Type]bool{}}
+		check := sharedCheck{c: c, pos: pos, registrar: registrar, seen: map[ssa.Value]bool{}, aliases: map[types.Type]bool{}}
 		for _, root := range target.FreeVars {
 			check.add(root)
 		}
@@ -161,9 +179,91 @@ type sharedCheck struct {
 	initializing bool // setup helpers may write through the root, but may not publish an alias
 	c            *typedCompiler
 	pos          token.Pos
+	registrar    types.Type // receiver type of the registration call, if it has one
 	seen         map[ssa.Value]bool
 	pending      []ssa.Value
 	aliases      map[types.Type]bool
+	returned     map[*ssa.Function]bool        // helpers that return a tracked value
+	callers      map[*ssa.Function][]*ssa.Call // calls that passed a tracked value to a helper
+}
+
+// Native packages have no guest source. The host declares their functions safe
+// to call with shared state, so only guest code needs verification.
+func (c *typedCompiler) nativePackage(p *types.Package) bool {
+	if p == nil || p == c.pkg.Pkg {
+		return false
+	}
+	std := c.env.standard[p.Path()]
+	return std == nil || std.declarationsOnly
+}
+
+func (c *typedCompiler) guestType(t types.Type) bool {
+	t = types.Unalias(t)
+	if p, ok := t.(*types.Pointer); ok {
+		t = types.Unalias(p.Elem())
+	}
+	n, ok := t.(*types.Named)
+	return ok && n.Obj().Pkg() != nil && !c.nativePackage(n.Obj().Pkg())
+}
+
+// nativeCall reports a call that runs no guest code. The host declares such
+// calls safe to make with shared state.
+func (c *typedCompiler) nativeCall(call *ssa.CallCommon) bool {
+	if call.IsInvoke() {
+		iface, ok := call.Value.Type().Underlying().(*types.Interface)
+		if !ok || call.Method.Pkg() == c.pkg.Pkg {
+			return false
+		}
+		// A guest type behind the interface still runs guest code.
+		for _, t := range c.guestBoxed {
+			if types.Implements(t, iface) {
+				return false
+			}
+		}
+		return true
+	}
+	f := call.StaticCallee()
+	if f == nil || len(f.Blocks) > 0 {
+		return false
+	}
+	obj := f.Object()
+	if obj == nil || obj.Pkg() == nil || obj.Pkg() == c.pkg.Pkg {
+		return false
+	}
+	// A source package declares its primitives without bodies. An instance of
+	// a generic source function can have no body yet, so do not trust it.
+	return c.nativePackage(obj.Pkg()) || f.Origin() == nil
+}
+
+// Go code passes a pointer to a plain variable or field so that the callee can
+// write through it. Pointers to structs name objects, and the host owns the
+// types that it declares.
+func (c *typedCompiler) outParameter(v ssa.Value) bool {
+	if box, ok := v.(*ssa.MakeInterface); ok {
+		v = box.X
+	}
+	p, ok := types.Unalias(v.Type()).(*types.Pointer)
+	if !ok {
+		return false
+	}
+	elem := types.Unalias(p.Elem())
+	if n, ok := elem.(*types.Named); ok && c.nativePackage(n.Obj().Pkg()) {
+		return false
+	}
+	_, object := elem.Underlying().(*types.Struct)
+	return !object
+}
+
+// A helper that returns a tracked value hands the alias to its guest caller.
+func (s *sharedCheck) returnsTo(f *ssa.Function, call *ssa.Call) {
+	if s.returned[f] {
+		s.add(call)
+		return
+	}
+	if s.callers == nil {
+		s.callers = map[*ssa.Function][]*ssa.Call{}
+	}
+	s.callers[f] = append(s.callers[f], call)
 }
 
 // Cache data can contain independent guest values, including flattened structs.
@@ -249,6 +349,19 @@ func (s *sharedCheck) run() {
 		i := len(s.pending) - 1
 		v := s.pending[i]
 		s.pending = s.pending[:i]
+		if s.registrar != nil && types.Identical(v.Type(), s.registrar) {
+			pos := s.pos
+			if refs := v.Referrers(); refs != nil {
+				for _, use := range *refs {
+					if use.Pos().IsValid() {
+						pos = use.Pos()
+						break
+					}
+				}
+			}
+			s.c.fail(pos, "concurrent callback uses the %s it is registered on; use the callback's own argument", types.TypeString(s.registrar, func(p *types.Package) string { return p.Name() }))
+			return
+		}
 		if refs := v.Referrers(); refs != nil {
 			if !s.c.chargeConcurrentCheck(s.pos, len(*refs)+1) {
 				return
@@ -323,6 +436,9 @@ func (s *sharedCheck) safeUse(v ssa.Value, use ssa.Instruction) bool {
 			}
 			return false
 		}
+		if s.c.nativeCall(call) {
+			return !s.c.outParameter(v)
+		}
 		target := call.StaticCallee()
 		if target == nil || call.Value == v {
 			return false
@@ -338,9 +454,11 @@ func (s *sharedCheck) safeUse(v ssa.Value, use ssa.Instruction) bool {
 				return false
 			}
 			s.add(target.Params[i])
-			if s.initializing {
-				if result, ok := op.(*ssa.Call); ok {
+			if result, ok := op.(*ssa.Call); ok {
+				if s.initializing {
 					s.add(result)
+				} else {
+					s.returnsTo(target, result)
 				}
 			}
 		}
@@ -348,7 +466,18 @@ func (s *sharedCheck) safeUse(v ssa.Value, use ssa.Instruction) bool {
 	case *ssa.MapUpdate:
 		return s.initializing && op.Map == v && op.Value != v && op.Key != v
 	case *ssa.Return:
-		return s.initializing
+		// The callback itself returns to the host. A helper returns to a guest
+		// call, which then holds the alias.
+		if f := op.Parent(); !s.initializing && !s.returned[f] {
+			if s.returned == nil {
+				s.returned = map[*ssa.Function]bool{}
+			}
+			s.returned[f] = true
+			for _, call := range s.callers[f] {
+				s.add(call)
+			}
+		}
+		return true
 	case *ssa.Store:
 		if s.initializing && op.Addr == v && op.Val != v {
 			return true
@@ -356,14 +485,21 @@ func (s *sharedCheck) safeUse(v ssa.Value, use ssa.Instruction) bool {
 		box, ok := op.Addr.(*ssa.Alloc)
 		return ok && v == op.Val && v != box && s.localAlias(box)
 	case *ssa.MakeClosure:
-		// Analyze the body only if every use calls it synchronously. An escaped
-		// closure could publish another alias or run after this invocation.
+		// Analyze the body only if every use calls it synchronously or hands it
+		// to native code. A closure that escapes to guest storage could publish
+		// another alias.
 		for _, ref := range *op.Referrers() {
 			switch r := ref.(type) {
 			case *ssa.DebugRef:
 				continue
 			case *ssa.Call:
 				if r.Call.Value == op {
+					if !s.initializing {
+						s.returnsTo(op.Fn.(*ssa.Function), r)
+					}
+					continue
+				}
+				if s.c.nativeCall(&r.Call) {
 					continue
 				}
 				if f := r.Call.StaticCallee(); cacheMethod(f) && concurrencyFunction(f).Name() == "GetOrLoad" && r.Call.Args[len(r.Call.Args)-1] == op {
@@ -437,7 +573,7 @@ func cacheMethod(f *ssa.Function) bool {
 
 // Check the concrete methods visible through the declared interface. A method
 // outside the interface can still be used during ordinary initialization.
-func (c *typedCompiler) verifyConcurrentInterface(v ssa.Value, iface *types.Interface, site ssa.Instruction, verified map[*ssa.Function]bool, borrows *publicationCheck, seen map[ssa.Value]bool) {
+func (c *typedCompiler) verifyConcurrentInterface(v ssa.Value, iface *types.Interface, site ssa.Instruction, registrar types.Type, verified map[*ssa.Function]bool, borrows *publicationCheck, seen map[ssa.Value]bool) {
 	if seen[v] {
 		return
 	}
@@ -449,11 +585,11 @@ func (c *typedCompiler) verifyConcurrentInterface(v ssa.Value, iface *types.Inte
 		}
 	case *ssa.Phi:
 		for _, edge := range x.Edges {
-			c.verifyConcurrentInterface(edge, iface, site, verified, borrows, seen)
+			c.verifyConcurrentInterface(edge, iface, site, registrar, verified, borrows, seen)
 		}
 		return
 	case *ssa.ChangeInterface:
-		c.verifyConcurrentInterface(x.X, iface, site, verified, borrows, seen)
+		c.verifyConcurrentInterface(x.X, iface, site, registrar, verified, borrows, seen)
 		return
 	case *ssa.MakeInterface:
 		borrows.add(site, x.X)
@@ -471,7 +607,7 @@ func (c *typedCompiler) verifyConcurrentInterface(v ssa.Value, iface *types.Inte
 				return
 			}
 			if !verified[fn] {
-				check := sharedCheck{c: c, pos: site.Pos(), seen: map[ssa.Value]bool{}, aliases: map[types.Type]bool{}}
+				check := sharedCheck{c: c, pos: site.Pos(), registrar: registrar, seen: map[ssa.Value]bool{}, aliases: map[types.Type]bool{}}
 				check.add(fn.Params[0])
 				check.run()
 				if len(c.errors) > 0 {

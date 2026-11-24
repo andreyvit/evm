@@ -1059,8 +1059,14 @@ EVM uses a **PHP-style share-nothing model** for host concurrency:
   and statically known closures/bound methods whose captures and receiver are
   used read-only (allowing `len`/`cap`, static guest helpers,
   `*concurrency.Cache` methods, and synchronous nested closures including
-  `GetOrLoad` loaders), while rejecting writes, escaping aliases, captured or
-  indirect calls, and other external calls on tracked state. Dynamic callback
+  `GetOrLoad` loaders), while rejecting writes, aliases stored in guest
+  storage, and captured or indirect guest calls. The host answers for native
+  code: a callback can call native functions and methods with tracked state and
+  return tracked values to the host. Three guards remain: a pointer to a plain
+  shared variable or field (`&c.n`) cannot go to native code, a guest type
+  behind a native interface is still checked as guest code, and a callback
+  cannot use the object it is registered on (`ctx` in `ctx.AddHandler(...)`).
+  Dynamic callback
   expressions fail compilation. **Limitations:** calling the registration
   function indirectly (e.g. `add := ctx.AddAdminHandler; add(...)`) is not
   statically visible, so `evmbind` rejects unverified capturing callbacks at

@@ -19,6 +19,7 @@ import (
 
 type typedCompiler struct {
 	concurrentSites   map[ssa.Instruction][]int
+	guestBoxed        []types.Type // guest types converted to interfaces
 	branchPositions   map[*ssa.If]token.Pos
 	dereferenceWrites map[token.Pos]bool
 	nativeInstances   map[*ssa.Function]nativeInstance

@@ -4633,13 +4633,26 @@ the wrapper must also call `vm.CheckConcurrentBorrow(i)` for the registration pa
     calls to statically resolved guest functions (adding the callee's matching
     parameter to the worklist), `*concurrency.Cache` receiver methods (`Get`,
     `Set`, `GetOrLoad`, `InvalidateIfCurrent`), and nested closures whose every
-    use invokes them synchronously (direct call or `Cache.GetOrLoad` loader
-    argument).
+    use invokes them synchronously or hands them to native code (the checker
+    still verifies the closure body).
+  - **Native calls are trusted:** The host answers for the code it exposes. A
+    callback can call native functions and methods with tracked state, including
+    methods of a captured native handle (`frame.Render()`), and can return
+    tracked values to the host. When a guest helper returns a tracked value, the
+    checker follows the alias into the caller.
   - **Rejected:** Any write or mutating builtin (`append`, `copy`, `delete`,
-    `clear`, field/element/map stores), returning or storing an alias to tracked
-    state, escaping nested closures, calling a captured function or making an
-    indirect call on tracked state, and passing tracked state to external/native
-    functions (other than `*concurrency.Cache` receiver methods).
+    `clear`, field/element/map stores), storing an alias to tracked state in
+    guest storage, nested closures that escape into guest storage, calling a
+    captured function, and making an indirect guest call on tracked state.
+  - **Guards on native calls:** Three cases stay rejected, because the script
+    author would not expect a data race there. (1) A pointer to a plain shared
+    variable or field (`&c.n`, `&count`) cannot go to native code, because Go
+    code takes such a pointer to write through it. Pointers to structs and
+    values of host-declared types pass. (2) A method call through an interface
+    is native only if no guest type that the script converts to an interface
+    implements it. (3) A callback cannot use the object that it is registered
+    on, such as `ctx` in `ctx.AddAdminHandler(...)`: the callback runs after
+    registration ends, and must use its own argument.
 - **Native-boundary enforcement (`evmbind` and `fn.CheckConcurrentUse()`):** Verified
   closures and bound methods carry `evm.Function.CapturesVerifiedForConcurrency = true` in the
   compiled `Module`. At run time, every `evmbind` wrapper for an operation with

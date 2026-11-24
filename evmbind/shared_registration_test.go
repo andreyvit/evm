@@ -210,3 +210,78 @@ func Run(){b:=&Bar{4};reg.Register(b);` + tc.after + `}`
 		})
 	}
 }
+
+type HostFrame interface{ Render() string }
+type HostSetup interface {
+	AddFrame(name string) HostFrame
+	AddHook(hook *evm.ConcurrentFunctionOf[func(int) any])
+	Note(text string)
+}
+type HostOptions struct{ Limit int }
+type testHostFrame struct{}
+
+func (*testHostFrame) Render() string { return "" }
+
+type testHostSetup struct{}
+
+func (*testHostSetup) AddFrame(string) HostFrame                        { return &testHostFrame{} }
+func (*testHostSetup) AddHook(*evm.ConcurrentFunctionOf[func(int) any]) {}
+func (*testHostSetup) Note(string)                                      {}
+
+// The host answers for native code. The compiler still checks guest code, and
+// rejects the calls that hand native code a way to write shared guest state.
+func TestConcurrentCallbackNativeCalls(t *testing.T) {
+	schema, err := evmbind.New("host", fstest.MapFS{"api.go": {Data: []byte(`package host
+import "github.com/andreyvit/evm"
+type HostFrame interface { Render() string }
+type HostSetup interface {
+	AddFrame(name string) HostFrame
+	AddHook(hook *evm.ConcurrentFunctionOf[func(int) any])
+	Note(text string)
+}
+type HostOptions struct { Limit int }
+func Fill(p *int)
+func Total(xs []int) int
+func Describe(o *HostOptions) string
+`)}}, evmbind.Options{Selective: true,
+		Types:           []reflect.Type{reflect.TypeFor[HostFrame](), reflect.TypeFor[HostSetup](), reflect.TypeFor[HostOptions]()},
+		Implementations: []evmbind.Implementation{evmbind.Pointer[testHostFrame](), evmbind.Pointer[testHostSetup]()},
+		Functions: map[string]any{
+			"Fill":     func(p *int) { *p = 1 },
+			"Total":    func(xs []int) int { return len(xs) },
+			"Describe": func(o *HostOptions) string { return "" },
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := schema.Bind(nil)
+	for _, tc := range []struct{ name, body, want string }{
+		{"method of a captured native handle", `s.AddHook(func(int) any { return frame.Render() })`, ""},
+		{"captured pointer returned to the host", `s.AddHook(func(int) any { return c })`, ""},
+		{"captured slice returned to the host", `s.AddHook(func(int) any { return c.xs })`, ""},
+		{"shared data passed to native functions", `s.AddHook(func(int) any { return host.Total(c.xs) + len(host.Describe(c.o)) })`, ""},
+		{"native call during setup", `_ = host.Describe(c.o); s.AddHook(func(int) any { return c.o.Limit })`, ""},
+		{"helper result read", `s.AddHook(func(int) any { return pick(c)[0] })`, ""},
+		{"helper result written", `s.AddHook(func(int) any { xs := pick(c); xs[0] = 1; return nil })`, "concurrent callback writes"},
+		{"pointer to a shared field passed to native code", `s.AddHook(func(int) any { host.Fill(&c.n); return nil })`, "cannot prove read-only use"},
+		{"pointer to a shared field retained during setup", `host.Fill(&c.n); s.AddHook(func(int) any { return c.n })`, "earlier call may retain a mutable alias"},
+		{"registration object used later", `s.AddHook(func(int) any { s.Note("late"); return nil })`, "host.HostSetup it is registered on"},
+		{"guest type behind a native interface", `var f host.HostFrame = &myFrame{}; s.AddHook(func(int) any { return f.Render() })`, "cannot prove read-only use"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := evmcompiler.Compile("plugin.go", `import "host"
+type C struct{n int; xs []int; o *host.HostOptions}
+type myFrame struct{n int}
+func (f *myFrame) Render() string { f.n++; return "" }
+func pick(c *C) []int { return c.xs }
+func Initialize(s host.HostSetup) { c := &C{xs: []int{1}, o: &host.HostOptions{}}; frame := s.AddFrame("a"); _, _ = c, frame; `+tc.body+` }`, pkg)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want %q, got %v", tc.want, err)
+			}
+		})
+	}
+}

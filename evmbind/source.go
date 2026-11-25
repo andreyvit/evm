@@ -547,6 +547,15 @@ func parseOptions(path string, files fs.FS, selected []string, typesOnly bool, o
 						found = true
 					}
 				}
+				if found {
+					// Each instance is a separate row; nothing binds a template's
+					// methods to them. Say so instead of dropping the selection.
+					for i := 0; i < named.NumMethods(); i++ {
+						if m := named.Method(i); m.Exported() {
+							fail("methods of generic model %s are not bound: %s", name, m.Name())
+						}
+					}
+				}
 				if !found {
 					for _, in := range s.instances {
 						if in.typ.Origin() == named {
@@ -582,7 +591,9 @@ func parseOptions(path string, files fs.FS, selected []string, typesOnly bool, o
 					m := named.Method(i)
 					if m.Exported() {
 						sig := m.Type().(*types.Signature)
-						op := s.op(m, s.node(sig.Recv().Type()))
+						// A value receiver crosses like a value argument: the
+						// row's storage must be this Go struct.
+						op := s.op(m, s.callNode(sig.Recv().Type()))
 						if borrow := byteBorrows[m.Pos()]; borrow != nil {
 							if len(op.outs) != 1 || op.outs[0].shape.Type != evm.ByteSliceType {
 								fail("%s: borrowed byte method must return []byte", op.key)

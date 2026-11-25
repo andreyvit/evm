@@ -158,13 +158,15 @@ money, _ := evmbind.New("money", source, evmbind.Options{
     Selective: true, Models: &models,
     Methods: map[string][]string{"Money": {"Valid", "Add"}},
 })
-models.Methods = append(models.Methods, money.ModelMethods(nil)...)
+money.AddModelMethods(&models, nil)
 ```
 
 Only the package that declares a type can declare its methods, and a row type
 belongs to the model package. So `Schema.Package` and `Schema.Bind` leave these
-methods out, and `Schema.ModelMethods(host)` returns them for you to append to
-the model package. Use the same model package to compile and to link.
+methods out, and `Schema.AddModelMethods(pkg, host)` declares them on the model
+package, bound to `host` like `Bind`. It skips a row that `pkg` does not declare
+and a method that `pkg` already has, and it returns how many it added. Use the
+same model package to compile and to link.
 
 - A method with a value receiver runs on a row value, a row pointer and a call
   result, as in Go: `price.Valid()`, `price.Add(*tax).Valid()`. A method with a
@@ -174,7 +176,13 @@ the model package. Use the same model package to compile and to link.
   row a call fails with `model row requires explicit conversion`; call
   `row.NativeCopy()` first. On a `nil` pointer a value method fails with
   `nil record dereference`.
+- A value receiver needs the struct to be the row's `NativeAllocation`, like a
+  value argument; the schema fails otherwise. A pointer receiver checks the
+  row's backing on each call.
+- A callback or interface parameter marked for concurrent use keeps its rules:
+  `AddModelMethods` copies them to the model package under the row's name.
 - A method cannot have the name of one of the model's property selectors.
+- Methods of a generic model struct are not bound; the schema refuses them.
 - Generated bindings call the methods directly; reflection is the fallback.
 
 A helper that reads properties, and so also works on encoded rows, is an

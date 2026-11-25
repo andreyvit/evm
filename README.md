@@ -1369,7 +1369,7 @@ Deep dives: [KVO overview](kvo/README.md) ·
   `vm.FlushRecord` before saving).
 - **Methods & native storage:** Expose Go helpers as model methods with
   `evmbind.RecordMethod`, `RegisterMethods`, and `GenerateMethods`; expose a
-  model struct's own Go methods with `evmbind.Schema.ModelMethods`; pass model
+  model struct's own Go methods with `evmbind.Schema.AddModelMethods`; pass model
   structs through host APIs with `evmbind.Options.Models` and `Mutable`; add
   `row.NativeCopy()` via `RecordType.NativeAllocation` +
   `evm.RegisterNativeCopies`. The compiler automatically copies records that

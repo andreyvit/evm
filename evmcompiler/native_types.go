@@ -345,7 +345,7 @@ func (e *typeEnvironment) addNativeMethods(pkg *types.Package, decl *evm.Package
 			}
 		}
 		for _, r := range decl.Records {
-			if (r.Pointer == m.Receiver || r.Value == m.Receiver) && r.Model.PropBySelector(m.Name) != nil {
+			if r.Pointer == m.Receiver && r.Model.PropBySelector(m.Name) != nil {
 				return fmt.Errorf("method %s conflicts with a KVO property", m.Name)
 			}
 		}

@@ -163,8 +163,6 @@ type Schema struct {
 	src               *source
 	pkg               evm.Package
 	funcs, methods    []entry
-	modelMethods      []evm.ExternalMethod // receivers are rows of Options.Models
-	modelEntries      []entry              // parallel to modelMethods
 	host              reflect.Type
 	pointers          map[reflect.Type]*nativePointer
 	reverse           map[*values.Type]*nativePointer
@@ -717,79 +715,9 @@ func (s *Schema) method(op *operation, recv *values.Type, e entry, direct evm.Di
 		}
 		effects.CallbackBytes = b.domain
 	}
-	m := evm.ExternalMethod{Ownership: effects, Direct: direct, Name: op.name, Receiver: recv, Signature: op.sig(), Variadic: op.variadic}
-	if op.recv != nil && op.recv.kind == nodeRecord {
-		// The row type belongs to the Options.Models package; see AddModelMethods.
-		s.modelMethods = append(s.modelMethods, m)
-		s.modelEntries = append(s.modelEntries, e)
-		return
-	}
-	s.pkg.Methods = append(s.pkg.Methods, m)
+	s.pkg.Methods = append(s.pkg.Methods, evm.ExternalMethod{Ownership: effects, Direct: direct, Name: op.name, Receiver: recv, Signature: op.sig(), Variadic: op.variadic})
 	s.methods = append(s.methods, e)
 }
-
-// AddModelMethods declares the native methods of this schema's model structs
-// on the rows that pkg declares, bound to host like Bind, and reports how many
-// it added. Only the package that declares a type can declare its methods, and
-// a row type belongs to the Options.Models package, so Package and Bind leave
-// these methods out. Call this on that package before compiling and linking.
-//
-// A method whose row pkg does not declare is skipped, as is one that pkg
-// already has, so a host can call this on each package it assembles.
-func (s *Schema) AddModelMethods(pkg *evm.Package, host any) int {
-	if reflect.TypeOf(host) != s.host {
-		panic(fmt.Sprintf("evmbind: expected host %s, got %T", s.host, host))
-	}
-	added := 0
-	cloned := false
-methods:
-	for i, m := range s.modelMethods {
-		var row *evm.RecordType
-		for _, r := range pkg.Records {
-			if r != nil && (r.Pointer == m.Receiver || r.Value != nil && r.Value == m.Receiver) {
-				row = r
-			}
-		}
-		if row == nil {
-			continue
-		}
-		for _, old := range pkg.Methods {
-			if old.Receiver == m.Receiver && old.Name == m.Name {
-				continue methods
-			}
-		}
-		e := s.modelEntries[i]
-		m.Call = s.bind(e, host)
-		if e.direct != nil {
-			m.Direct.Call = e.direct(host)
-		}
-		if !cloned {
-			// pkg may share these with the copy it was made from.
-			pkg.Methods = slices.Clone(pkg.Methods)
-			pkg.ConcurrentCallbackParams = maps.Clone(pkg.ConcurrentCallbackParams)
-			pkg.ConcurrentInterfaceParams = maps.Clone(pkg.ConcurrentInterfaceParams)
-			cloned = true
-		}
-		pkg.Methods = append(pkg.Methods, m)
-		// The compiler looks up callback rules under the row's own name.
-		source, target := strings.TrimPrefix(e.op.key, "*"), row.Name+"."+m.Name
-		if params := s.pkg.ConcurrentCallbackParams[source]; len(params) != 0 {
-			if pkg.ConcurrentCallbackParams == nil {
-				pkg.ConcurrentCallbackParams = map[string][]int{}
-			}
-			pkg.ConcurrentCallbackParams[target] = params
-		}
-		if params := s.pkg.ConcurrentInterfaceParams[source]; len(params) != 0 {
-			if pkg.ConcurrentInterfaceParams == nil {
-				pkg.ConcurrentInterfaceParams = map[string][]int{}
-			}
-			pkg.ConcurrentInterfaceParams[target] = params
-		}
-		added++
-	}
-	return added
-}
-
 func (s *Schema) Bind(host any) evm.Package {
 	if reflect.TypeOf(host) != s.host {
 		panic(fmt.Sprintf("evmbind: expected host %s, got %T", s.host, host))

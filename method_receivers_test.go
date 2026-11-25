@@ -19,7 +19,6 @@ func TestMethodReceiversMatchOwnsMethodReceiver(t *testing.T) {
 	sourcePointer := typ("*Source", values.Pointer)
 	shared := typ("Shared", values.Raw)
 	record := typ("*Record", values.Pair)
-	recordValue := typ("Record", values.Pointer)
 	foreign := typ("Foreign", values.Pointer)
 	foreignPointer := typ("*Foreign", values.Pointer)
 	redeclared := typ("Redeclared", values.Pointer)
@@ -33,9 +32,7 @@ func TestMethodReceiversMatchOwnsMethodReceiver(t *testing.T) {
 	p := Package{
 		Path:        "host",
 		SharedTypes: []SharedType{{Name: "Shared", Type: shared}},
-		// A record owns its pointer and its value type; a record without a
-		// value type must not own nil.
-		Records: []*RecordType{nil, {Name: "Record", Pointer: record, Value: recordValue}, {Name: "Bare", Pointer: typ("*Bare", values.Pair)}},
+		Records:     []*RecordType{nil, {Name: "Record", Pointer: record}},
 		Types: []TypeDecl{
 			{Shape: shape(structPointer, values.PointerKind, shape(structure, values.StructKind, nil))},
 			{Name: "Struct", Shape: shape(structure, values.StructKind, nil)},
@@ -56,9 +53,9 @@ func TestMethodReceiversMatchOwnsMethodReceiver(t *testing.T) {
 			{Name: "Broken"},
 		},
 	}
-	want := map[*values.Type]bool{structure: true, structPointer: true, source: true, sourcePointer: true, shared: true, record: true, recordValue: true}
+	want := map[*values.Type]bool{structure: true, structPointer: true, source: true, sourcePointer: true, shared: true, record: true}
 	receivers := p.methodReceivers()
-	for _, typ := range []*values.Type{structure, structPointer, iface, ifacePointer, namedPointer, source, sourcePointer, shared, record, recordValue, foreign, foreignPointer, redeclared, twice, unnamedSlice, unknown, nil} {
+	for _, typ := range []*values.Type{structure, structPointer, iface, ifacePointer, namedPointer, source, sourcePointer, shared, record, foreign, foreignPointer, redeclared, twice, unnamedSlice, unknown, nil} {
 		name := "nil"
 		if typ != nil {
 			name = typ.Name()

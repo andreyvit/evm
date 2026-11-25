@@ -79,6 +79,9 @@ func prepareModels(files []*ast.File, selected []string, typesOnly bool, opt Opt
 		if _, selectedFields := opt.Fields[base]; selectedFields || len(opt.OmitFields[base]) != 0 {
 			return nil, nil, fmt.Errorf("native model fields are defined by model metadata: %s", name)
 		}
+		if len(opt.Methods[base]) != 0 {
+			return nil, nil, fmt.Errorf("native model methods are not yet bound: %s", name)
+		}
 		declared[base].Type = &ast.StructType{Fields: &ast.FieldList{}}
 
 	}

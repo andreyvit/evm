@@ -1294,7 +1294,9 @@ models = evm.WithoutRecords(models, coinModel)
 - **Value model.** A property whose type is the model reads as the struct, by
   value: `line.price.Valid()`, `line.price.Add(line.paid)`. The VM packs the two
   stored words into the cell. It works on encoded rows and on rows backed by a
-  Go struct alike, and allocates nothing. A missing sub-object reads as the
+  Go struct alike, and allocates nothing there. A row still held as MessagePack
+  is the exception: a sub-object with a custom codec is decoded into a Go value
+  first, one allocation per read. A missing sub-object reads as the
   zero value, so test the value, not a pointer.
 - **Copies.** The value is a copy of the stored fields. A script can change
   its own copy; it cannot assign to `line.price.Amount` or take `&line.price`.

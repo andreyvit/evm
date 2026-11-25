@@ -96,6 +96,19 @@ func valueModels(packages []Package) (map[*values.Type]*ValueModel, error) {
 	return result, nil
 }
 
+// valueModelOf returns the value model declared for a sub-object model.
+func (e *LinkEnvironment) valueModelOf(m *kvo.Model) *ValueModel {
+	if m == nil {
+		return nil
+	}
+	for _, vm := range e.valueModels {
+		if vm.Model == m {
+			return vm
+		}
+	}
+	return nil
+}
+
 // WithoutRecords returns p without the row types of the given models and
 // without their methods. A host uses it for value models: scripts read those
 // sub-objects as struct values and never as rows.

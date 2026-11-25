@@ -615,13 +615,19 @@ func (e *LinkEnvironment) link(m *Module, hostData any) (*Program, error) {
 			flags := frozen.Model.PropFlags(op.Index)
 			op.step = row2.Step{Key: op.Index, Options: kvo.WriteOptions(flags)}
 			op.childModel = prop.TypeModel()
-			if op.childModel != nil && op.Shape != nil && op.Shape.CellStruct != nil {
+			compact := op.Shape != nil && op.Shape.CellStruct != nil
+			if value := e.valueModelOf(op.childModel); value != nil {
+				// Scripts read this child as a struct value, on a read-only
+				// row, and in no other way. A module compiled before the
+				// value model existed would take the child as a row.
+				if !compact || op.Shape.Type != value.Type || op.Kind != ExtendedGetKey || frozen.Mutable {
+					return nil, fmt.Errorf("KVO property %d of %s reads only as a %s value", op.Index, frozen.Name, value.Type.Name())
+				}
+				op.valueModel = value
+			} else if op.childModel != nil && compact {
 				// A cell is not a record handle: only a declared value model
 				// may turn this child into one.
-				op.valueModel = e.valueModels[op.Shape.Type]
-				if op.valueModel == nil || op.valueModel.Model != op.childModel || op.Kind != ExtendedGetKey || frozen.Mutable {
-					return nil, fmt.Errorf("KVO property %d of %s does not read as %s", op.Index, frozen.Name, op.Shape.Type.Name())
-				}
+				return nil, fmt.Errorf("KVO property %d of %s does not read as %s", op.Index, frozen.Name, op.Shape.Type.Name())
 			}
 			if list, ok := prop.AnyType().(*kvo.ListType); ok && !frozen.Mutable && op.Kind == ExtendedGetKey {
 				if _, objects := list.ItemType().(*kvo.EntityType); objects {

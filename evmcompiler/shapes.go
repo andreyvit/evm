@@ -46,7 +46,13 @@ func (e *typeEnvironment) shape(t types.Type) (result *values.Shape, err error) 
 	}()
 	vt := e.typeOf(t)
 	if d, ok := e.nativeTypes[vt]; ok && d.decl.Shape.CellStruct != nil {
+		if err := e.checkCompactFields(t, d.decl.Shape); err != nil {
+			return nil, err
+		}
+		// The storage is the host's; the name stays the one that source uses.
+		name := s.DisplayName
 		*s = *d.decl.Shape
+		s.DisplayName = name
 		return s, nil
 	}
 	if row := e.recordValues[vt]; e.recordFacade && row != nil && row.NativeAllocation != nil {
@@ -331,6 +337,39 @@ func (e *typeEnvironment) shape(t types.Type) (result *values.Shape, err error) 
 
 // Match the source type spelling used by Go's formatter. go/types uses compact
 // struct/interface spelling; reflect (and therefore fmt) includes inner spaces.
+// checkCompactFields makes sure that a struct declared in source has the
+// fields of the host's compact struct, in the same order. A field access
+// reads a cell by position: if source swapped two fields, each name would
+// read the other's value.
+func (e *typeEnvironment) checkCompactFields(t types.Type, native *values.Shape) error {
+	st, ok := t.Underlying().(*types.Struct)
+	if !ok {
+		return nil
+	}
+	mismatch := func(format string, args ...any) error {
+		return fmt.Errorf("struct %s does not match its host declaration: %s", displayTypeName(t), fmt.Sprintf(format, args...))
+	}
+	if st.NumFields() != len(native.Fields) {
+		return mismatch("it has %d fields, the host has %d", st.NumFields(), len(native.Fields))
+	}
+	for i, want := range native.Fields {
+		f := st.Field(i)
+		if f.Name() != want.Name || f.Embedded() != want.Embedded {
+			return mismatch("field %d is %s, the host has %s", i, f.Name(), want.Name)
+		}
+		got, err := e.shape(f.Type())
+		if err != nil {
+			return err
+		}
+		// Host declarations leave some widths unset, a string's for one.
+		w := want.Shape
+		if got.Kind != w.Kind || got.Bits != 0 && w.Bits != 0 && got.Bits != w.Bits || got.Type != nil && w.Type != nil && got.Type != w.Type {
+			return mismatch("field %s has another type than the host's", f.Name())
+		}
+	}
+	return nil
+}
+
 func displayTypeName(t types.Type) string {
 	t = types.Unalias(t)
 	switch u := t.(type) {

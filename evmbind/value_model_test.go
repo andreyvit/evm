@@ -116,12 +116,12 @@ func TestValueModel(t *testing.T) {
 	paid := kvo.NewRecordProp(schema, 5, "paid", coinType)
 	coinModel := kvo.NewModel(schema, coinType, func(b *kvo.ModelBuilder) { b.Prop(amount); b.Prop(code) })
 	lineModel := kvo.NewModel(schema, kvo.NewEntityType(schema, "Line", reflect.TypeFor[coinLine]()), func(b *kvo.ModelBuilder) { b.Prop(title); b.Prop(price); b.Prop(paid) })
-	models, err := evm.ModelPackage("db", schema)
+	withRows, err := evm.ModelPackage("db", schema)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Scripts never see the sub-object as a row, so its row types can go.
-	models = evm.WithoutRecords(models, coinModel)
+	models := evm.WithoutRecords(withRows, coinModel)
 
 	cell := coinCell()
 	native, err := evmbind.New("money", fstest.MapFS{"money.go": {Data: []byte(coinSource)}}, evmbind.Options{
@@ -273,6 +273,67 @@ func None() bool { var line db.Line; return line.price.Valid() || line.price != 
 	undeclared.ValueModels = nil
 	if _, err = evm.Link(m, models, undeclared, pkgs[2]); err == nil || !strings.Contains(err.Error(), "does not read as money.Coin") {
 		t.Fatal(err)
+	}
+	// And the other way round: a program compiled when the sub-object was
+	// still a row does not link once it reads as a struct value.
+	for _, source := range []string{
+		`func Run(line *db.Line) bool { return line.price != nil }`,
+		`func Run(line *db.Line) int64 { return line.price.amount }`,
+		`func Run(line *db.LineEdit) bool { return line.price != nil }`,
+	} {
+		old, err := evmcompiler.Compile("old.go", "import \"db\"\n"+source, withRows)
+		if err != nil {
+			t.Fatal(source, err)
+		}
+		if _, err = evm.Link(old, pkgs...); err == nil || !strings.Contains(err.Error(), "reads only as a money.Coin value") {
+			t.Fatal(source, err)
+		}
+	}
+
+	// Source declares the struct as the host has it. A field reads a cell by
+	// position, so swapped fields would read each other's value.
+	swapped := money
+	swapped.Source = strings.NewReplacer(
+		"Amount int64  `kvo:\"amount\"`\n\tCode   uint32 `kvo:\"code\"`", "Code   uint32 `kvo:\"code\"`\n\tAmount int64  `kvo:\"amount\"`",
+		"Coin{amount, code}", "Coin{Amount: amount, Code: code}",
+	).Replace(coinSource)
+	if swapped.Source == coinSource {
+		t.Fatal("fields not swapped")
+	}
+	if _, err = evmcompiler.Compile("swapped.go", `import "money"; func Run(c money.Coin) int64 { return c.Amount }`, models, swapped, pkgs[2]); err == nil || !strings.Contains(err.Error(), "struct money.Coin does not match its host declaration") {
+		t.Fatal(err)
+	}
+
+	// The type prints as Go prints it: by its package name, not its path.
+	named, err := evmcompiler.Compile("name.go", `import("fmt";"money")
+func Run() string { c := money.Make(4, 7); return fmt.Sprintf("%T %v", c, c) }`, pkgs...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, err = evm.Link(named, pkgs...); err != nil {
+		t.Fatal(err)
+	}
+	if err = evmtest.New(p).Run(context.Background(), "Run", nil, out[:]); err != nil || out[0].AsString() != "money.Coin {4 7}" {
+		t.Fatal(out[0].AsString(), err)
+	}
+
+	// A concurrent callback must not write what it shares. A captured value
+	// is shared, but a copy of it is the callback's own: two scalars alias
+	// nothing.
+	hooks, err := evmbind.New("hooks", fstest.MapFS{"api.go": {Data: []byte("package hooks\nimport \"github.com/andreyvit/evm\"\nfunc Add(hook *evm.ConcurrentFunctionOf[func(int64) int64])\n")}},
+		evmbind.Options{Selective: true, Functions: map[string]any{"Add": func(*evm.Callable) {}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for body, ok := range map[string]bool{
+		`c := v; c.Amount += n; return c.Amount`: true,
+		`return v.Add(v).Amount + n`:             true,
+		`v.Amount = n; return n`:                 false,
+	} {
+		_, err := evmcompiler.Compile("hook.go", "import(\"hooks\";\"money\")\nfunc Register() { v := money.Make(1, 7); hooks.Add(func(n int64) int64 { "+body+" }) }", append(pkgs[:len(pkgs):len(pkgs)], hooks.Bind(nil))...)
+		if (err == nil) != ok || err != nil && !strings.Contains(err.Error(), "concurrent callback") {
+			t.Fatalf("%s: %v", body, err)
+		}
 	}
 }
 

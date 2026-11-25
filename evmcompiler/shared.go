@@ -300,6 +300,12 @@ func (e *typeEnvironment) cacheDataType(t types.Type, key bool, memo map[types.T
 	return valid
 }
 
+// compactStruct reports whether the host keeps t in one cell.
+func (e *typeEnvironment) compactStruct(t types.Type) bool {
+	d, ok := e.nativeTypes[e.typeOf(t)]
+	return ok && d.decl.Shape.CellStruct != nil
+}
+
 // Copying a scalar or a struct/array of scalars does not copy a writable alias.
 func (s *sharedCheck) sharedAlias(t types.Type) (alias bool) {
 	if a, ok := s.aliases[t]; ok {
@@ -308,7 +314,9 @@ func (s *sharedCheck) sharedAlias(t types.Type) (alias bool) {
 	defer func() { s.aliases[t] = alias }()
 	if n, ok := types.Unalias(t).(*types.Named); ok && n.Obj().Pkg() != nil && n.Obj().Pkg() != s.c.pkg.Pkg {
 		// Native layouts can omit private fields from the visible struct.
-		if _, ok := n.Underlying().(*types.Struct); ok {
+		// A compact struct cannot: its two fields are all it has, and they
+		// decide below whether a copy can alias anything.
+		if _, ok := n.Underlying().(*types.Struct); ok && !s.c.env.compactStruct(n) {
 			return true
 		}
 	}

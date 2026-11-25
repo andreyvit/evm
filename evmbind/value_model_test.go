@@ -2,6 +2,7 @@ package evmbind_test
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -35,6 +36,9 @@ type Coin struct {
 
 func Make(amount int64, code uint32) Coin { return Coin{amount, code} }
 
+// The host runs Parse; the source only names it.
+func Parse(s string) (Coin, error)
+
 func (c Coin) Valid() bool { return c.Code != 0 }
 
 func (c Coin) Add(o Coin) Coin {
@@ -64,7 +68,9 @@ func coinCell() *values.CellStruct {
 		return v
 	}
 	return &values.CellStruct{
-		Type: values.NewType("money.Coin", values.Pair),
+		// The amount takes all of R, so the cell carries no type tag.
+		Untagged: true,
+		Type:     values.NewType("money.Coin", values.Pair),
 		Get: func(v values.Value, i int) values.Value {
 			if i == 0 {
 				return values.Int(int64(v.R))
@@ -75,6 +81,13 @@ func coinCell() *values.CellStruct {
 		LoadNative:  func(p unsafe.Pointer) values.Value { return pack(*(*Coin)(p)) },
 		StoreNative: func(p unsafe.Pointer, v values.Value) { *(*Coin)(p) = Coin{int64(v.R), code(v)} },
 	}
+}
+
+func parseCoin(s string) (Coin, error) {
+	if s == "" {
+		return Coin{}, errors.New("no coin")
+	}
+	return Coin{Amount: int64(len(s)), Code: 7}, nil
 }
 
 type coinLine struct {
@@ -114,12 +127,14 @@ func TestValueModel(t *testing.T) {
 	native, err := evmbind.New("money", fstest.MapFS{"money.go": {Data: []byte(coinSource)}}, evmbind.Options{
 		Only: []string{"Coin"}, NativePackage: reflect.TypeFor[Coin]().PkgPath(), Types: []reflect.Type{reflect.TypeFor[Coin]()},
 		CellStructs: map[string]*values.CellStruct{"Coin": cell},
+		Functions:   map[string]any{"Parse": parseCoin},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	money := evm.Package{Path: "money", Source: coinSource, ValueModels: []evm.ValueModel{{Model: coinModel, Type: cell.Type, Props: [2]uint64{amount.Code(), code.Code()}}}}
-	for _, d := range native.Package().Types {
+	bound := native.Bind(nil)
+	money := evm.Package{Path: "money", Source: coinSource, Functions: bound.Functions, ValueModels: []evm.ValueModel{{Model: coinModel, Type: cell.Type, Props: [2]uint64{amount.Code(), code.Code()}}}}
+	for _, d := range bound.Types {
 		if d.Name == "Coin" {
 			d.Name, d.SourceName = "", "Coin" // the source declares it
 		}
@@ -145,6 +160,9 @@ func Values() int64 {
 	seen := map[money.Coin]int{sum: 1}
 	ptr := &sum
 	if !c.Valid() || seen[money.Make(7, 7)] != 1 || !ptr.Valid() || ptr.Amount != 7 { return -3 }
+	parsed, err := money.Parse("four")
+	_, bad := money.Parse("")
+	if err != nil || bad == nil || parsed != money.Make(4, 7) { return -4 }
 	return sum.Amount*10 + int64(sum.Code)
 }
 // Paid reads two stored sub-objects of a row as values.

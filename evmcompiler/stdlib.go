@@ -67,6 +67,11 @@ func (e *typeEnvironment) importSource(path string, sources []evm.SourceFile, pk
 			if d.SourceName != "" && len(d.TypeArgs) == 0 {
 				sharedPointer = true
 			}
+			if d.Name == "" && d.SourceName == "" && d.Shape.Type == values.ErrorType {
+				// How native functions of the package return the built-in
+				// error type; it declares nothing that source could miss.
+				sharedPointer = true
+			}
 			requireDeclarations = requireDeclarations || !sharedPointer
 		}
 	}

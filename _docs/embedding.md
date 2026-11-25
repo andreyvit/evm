@@ -1284,9 +1284,11 @@ models = evm.WithoutRecords(models, coinModel)
 ```
 
 - **Cell storage.** A `values.CellStruct` keeps a two-field struct in one cell,
-  so a copy allocates nothing. Equal values must have equal cells: `==` and map
-  keys compare the cell. Put only a real pointer in `P`, for example a pointer
-  into a static table that stands for a small code.
+  so a copy allocates nothing. `==` and map keys compare the two fields, not
+  the cell. Put only a real pointer in `P`, for example a pointer into a static
+  table that stands for a small code. A cell that uses all of `R` for data has
+  no room for a type tag: set `Untagged`; such a value is boxed when it becomes
+  an interface.
 - **Host boundary.** Other schemas import `native` and use the struct in
   signatures and fields as usual.
 - **Value model.** A property whose type is the model reads as the struct, by

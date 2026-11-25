@@ -23,6 +23,7 @@ type ExtendedOp struct {
 	listSlot   int       // reusable VM iterator slot, assigned by Link
 	step       row2.Step // model-specific policy resolved by Link
 	childModel *kvo.Model
+	valueModel *ValueModel // the child reads as a struct value; resolved by Link
 	Record     *RecordType
 	Kind       ExtendedKind
 	Shape      *values.Shape

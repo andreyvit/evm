@@ -58,6 +58,14 @@ func (e *typeEnvironment) importSource(path string, sources []evm.SourceFile, pk
 						break
 					}
 				}
+				for _, other := range host.Types {
+					if other.SourceName != "" && len(other.TypeArgs) == 0 && other.Shape.Type == d.Shape.Elem.Type {
+						sharedPointer = true
+					}
+				}
+			}
+			if d.SourceName != "" && len(d.TypeArgs) == 0 {
+				sharedPointer = true
 			}
 			requireDeclarations = requireDeclarations || !sharedPointer
 		}

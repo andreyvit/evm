@@ -31,6 +31,7 @@ type LinkEnvironment struct {
 	shapes        *sharedShapes // nil unless LinkOptions.Shapes listed some
 	nativeCodecs  map[*values.Type]*NativeValueCodec
 	records       map[*RecordType]bool
+	valueModels   map[*values.Type]*ValueModel
 	recordResults map[*values.Type]*RecordType
 	pairResults   map[*values.Type]bool
 	hostKinds     map[*values.Type]values.Repr
@@ -157,6 +158,9 @@ func newLinkEnvironment(packages []Package, prepared bool) *LinkEnvironment {
 		return e
 	}
 	e.codecsErr = e.prepareCodecs()
+	if e.codecsErr == nil {
+		e.valueModels, e.codecsErr = valueModels(e.packages)
+	}
 	e.records = make(map[*RecordType]bool)
 	e.recordResults = recordResults(e.packages)
 	e.pairResults = make(map[*values.Type]bool)

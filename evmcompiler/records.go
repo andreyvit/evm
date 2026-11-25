@@ -19,6 +19,10 @@ type recordProperty struct {
 	owner         *evm.RecordType
 	prop          kvo.PropImpl
 	valueReceiver bool
+	// structValue marks a sub-object that reads as a struct value (a value
+	// model). Its accessor returns the value itself, never an address: Go
+	// would otherwise select a field of the struct through that address.
+	structValue bool
 }
 
 func (p recordProperty) method() string {
@@ -106,6 +110,18 @@ func (e *typeEnvironment) defineRecords(pkg *types.Package, records []*evm.Recor
 		var fieldType func(kvo.AnyType) types.Type
 		fieldType = func(k kvo.AnyType) types.Type {
 			if child := k.Model(); child != nil {
+				if value := e.valueModels[child]; value != nil {
+					// The sub-object reads as a struct value, not as a row.
+					if _, err := e.importPackage(e.valueModelOwners[child]); err != nil {
+						fieldErr = err
+						return nil
+					}
+					if t := e.goOf(value.Type); t != nil {
+						return t
+					}
+					fieldErr = fmt.Errorf("value type %s is not declared", value.Type.Name())
+					return nil
+				}
 				if decl := byModel[identity{child, r.Mutable}]; decl != nil {
 					return e.goOf(decl.Pointer)
 				}
@@ -169,6 +185,10 @@ func (e *typeEnvironment) defineRecords(pkg *types.Package, records []*evm.Recor
 		}
 		selectorTypes := make(map[kvo.PropCode]types.Type)
 		for _, prop := range r.Model.AllProps() {
+			if r.Mutable && e.valueModels[prop.TypeModel()] != nil {
+				// An editable row does not expose value properties yet.
+				continue
+			}
 			t := fieldType(prop.AnyType())
 			if fieldErr != nil {
 				return fmt.Errorf("%s.%s: %w", r.Name, prop.Name(), fieldErr)
@@ -182,12 +202,15 @@ func (e *typeEnvironment) defineRecords(pkg *types.Package, records []*evm.Recor
 			if prop.Code() >= evm.VMFieldBase || !token.IsIdentifier(prop.Name()) || prop.Name() == "_" || prop.Name() == seal.Name() {
 				return fmt.Errorf("invalid KVO property %s.%s", r.Name, prop.Name())
 			}
-			property := recordProperty{owner: r, prop: prop}
+			property := recordProperty{owner: r, prop: prop, structValue: e.valueModels[prop.TypeModel()] != nil}
 			if e.recordFacade {
 				selectorTypes[prop.Code()] = t
 			} else {
 				recv := types.NewVar(token.NoPos, pkg, "", e.goOf(r.Pointer))
 				res := types.NewVar(token.NoPos, pkg, "", types.NewPointer(t))
+				if property.structValue {
+					res = types.NewVar(token.NoPos, pkg, "", t)
+				}
 				sig := types.NewSignatureType(recv, nil, nil, nil, types.NewTuple(res), false)
 				fn := types.NewFunc(token.NoPos, pkg, property.method(), sig)
 				named.AddMethod(fn)
@@ -214,7 +237,7 @@ func (e *typeEnvironment) defineRecords(pkg *types.Package, records []*evm.Recor
 				selectors[name] = true
 				field := types.NewField(token.NoPos, e.guest, name, t, false)
 				fields = append(fields, field)
-				e.recordFields[field] = recordProperty{owner: r, prop: prop}
+				e.recordFields[field] = recordProperty{owner: r, prop: prop, structValue: e.valueModels[prop.TypeModel()] != nil}
 			}
 		}
 		named.SetUnderlying(types.NewStruct(fields, nil))
@@ -267,7 +290,7 @@ func rewriteRecordFields(file *ast.File, info *types.Info, fields map[*types.Var
 			}
 		}
 		s.Sel = &ast.Ident{NamePos: s.Sel.Pos(), Name: prop.method()}
-		if prop.valueReceiver {
+		if prop.valueReceiver || prop.structValue {
 			c.Replace(&ast.CallExpr{Fun: s})
 			return true
 		}
@@ -305,6 +328,12 @@ func (f *lowerer) recordInstruction(ins ssa.Instruction) bool {
 				f.c.registerJSONTypes(i.Pos())
 			}
 			f.extended(evm.ExtendedGetKey, f.shape(i.Type()), f.regs[receiver], f.regs[i], property.prop.Code(), evm.RecordValueReceiver, f.shape(receiver.Type()))
+			ops := f.c.module.ExtendedOps
+			ops[len(ops)-1].Record = property.owner
+			return true
+		}
+		if property.structValue {
+			f.extended(evm.ExtendedGetKey, f.shape(i.Type()), []vreg{f.regs[i.Call.Args[0]][0]}, f.regs[i], property.prop.Code(), 0, nil)
 			ops := f.c.module.ExtendedOps
 			ops[len(ops)-1].Record = property.owner
 			return true

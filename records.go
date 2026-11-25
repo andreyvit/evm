@@ -35,6 +35,99 @@ type RecordType struct {
 	Pointer    *values.Type // guest *Model: Pair for immutable cells and editable rows
 }
 
+// ValueModel exposes the sub-objects of a KVO model as values of a struct type
+// that the same package declares. A property of that model then reads as the
+// struct, by value, on any read-only row, encoded or backed by a Go struct:
+// the VM packs the two stored words into the struct's cell. Nothing is decoded
+// into a Go struct and nothing is allocated, so the struct's methods, compiled
+// from package source, run on stored data directly. A missing sub-object reads
+// as the zero value.
+//
+// The struct must keep its value copies in one cell (values.CellStruct), and
+// each of its two fields must be a scalar property that fits one word.
+// Editable rows do not expose such a property yet.
+type ValueModel struct {
+	Model *kvo.Model
+	Type  *values.Type
+	// Props are the property codes of the struct's two fields, in field order.
+	Props [2]uint64
+}
+
+// valueModels indexes the declarations by struct type and checks each against
+// the struct's shape, so that a read can trust the cell it builds.
+func valueModels(packages []Package) (map[*values.Type]*ValueModel, error) {
+	var result map[*values.Type]*ValueModel
+	for i := range packages {
+		pkg := &packages[i]
+		for j := range pkg.ValueModels {
+			vm := &pkg.ValueModels[j]
+			if vm.Model == nil || vm.Type == nil {
+				return nil, fmt.Errorf("%s: incomplete value model", pkg.Path)
+			}
+			var shape *values.Shape
+			for _, d := range pkg.Types {
+				if d.Shape != nil && d.Shape.Type == vm.Type {
+					shape = d.Shape
+				}
+			}
+			if shape == nil || shape.CellStruct == nil || len(shape.Fields) != 2 {
+				return nil, fmt.Errorf("%s: value model %s needs a two-field struct with cell storage declared by the same package", pkg.Path, vm.Type.Name())
+			}
+			for k, code := range vm.Props {
+				prop := vm.Model.PropByCode(code)
+				if code >= VMFieldBase || prop == nil || RecordWordType(prop) == nil || !recordShapeMatches(prop.AnyType(), shape.Fields[k].Shape) {
+					return nil, fmt.Errorf("%s: field %d of value model %s does not match a one-word property of %s", pkg.Path, k, vm.Type.Name(), vm.Model.Name())
+				}
+			}
+			if result == nil {
+				result = make(map[*values.Type]*ValueModel)
+			}
+			if result[vm.Type] != nil {
+				return nil, fmt.Errorf("%s: duplicate value model %s", pkg.Path, vm.Type.Name())
+			}
+			for _, other := range result {
+				if other.Model == vm.Model {
+					return nil, fmt.Errorf("%s: model %s already has a value type", pkg.Path, vm.Model.Name())
+				}
+			}
+			result[vm.Type] = vm
+		}
+	}
+	return result, nil
+}
+
+// WithoutRecords returns p without the row types of the given models and
+// without their methods. A host uses it for value models: scripts read those
+// sub-objects as struct values and never as rows.
+func WithoutRecords(p Package, models ...*kvo.Model) Package {
+	dropped := make(map[*values.Type]bool)
+	records := make([]*RecordType, 0, len(p.Records))
+	for _, r := range p.Records {
+		if r != nil && slices.Contains(models, r.Model) {
+			dropped[r.Pointer], dropped[r.Value] = true, true
+			continue
+		}
+		records = append(records, r)
+	}
+	p.Records = records
+	p.Methods = slices.DeleteFunc(slices.Clone(p.Methods), func(m ExternalMethod) bool { return dropped[m.Receiver] })
+	return p
+}
+
+// ValueModels validates the value model declarations of packages and returns
+// them by model. Compilers use it to type properties.
+func ValueModels(packages []Package) (map[*kvo.Model]*ValueModel, error) {
+	byType, err := valueModels(packages)
+	if err != nil || len(byType) == 0 {
+		return nil, err
+	}
+	result := make(map[*kvo.Model]*ValueModel, len(byType))
+	for _, vm := range byType {
+		result[vm.Model] = vm
+	}
+	return result, nil
+}
+
 // Only direct pointer-result imports need this index. A schema can expose
 // many more models than a script uses.
 func recordResults(packages []Package) map[*values.Type]*RecordType {
@@ -592,6 +685,14 @@ func (vm *VM) recordOp(f frame, op, second *ExtendedOp, b *executionBudget) erro
 			if second != nil {
 				vm.r[f.rb+int(second.Out[0].Slot)] = child.GetValue(second.ChildKey).R
 			}
+			return nil
+		}
+		if model := op.valueModel; model != nil {
+			v := values.Value{}
+			if child := r.Child(op.step); !child.Missing() {
+				v = op.Shape.CellStruct.Pack([2]values.Value{child.GetValue(model.Props[0]), child.GetValue(model.Props[1])})
+			}
+			vm.write(f, op.Out[0], v)
 			return nil
 		}
 		if op.childModel != nil {

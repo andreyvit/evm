@@ -269,6 +269,9 @@ type Package struct {
 	Source       string
 	SharedTypes  []SharedType
 	Records      []*RecordType
+	// ValueModels expose sub-objects of KVO models as struct values that this
+	// package declares.
+	ValueModels []ValueModel
 	// EntryTypes are native concrete types that may enter in interface arguments to Run.
 	EntryTypes []*values.Type
 	Types      []TypeDecl
@@ -353,6 +356,7 @@ func MergePackages(packages ...Package) ([]Package, error) {
 		m.Aliases = slices.Concat(m.Aliases, p.Aliases)
 		m.SharedTypes = slices.Concat(m.SharedTypes, p.SharedTypes)
 		m.Records = slices.Concat(m.Records, p.Records)
+		m.ValueModels = slices.Concat(m.ValueModels, p.ValueModels)
 		m.EntryTypes = slices.Concat(m.EntryTypes, p.EntryTypes)
 		m.Types = slices.Concat(m.Types, p.Types)
 		m.Methods = slices.Concat(m.Methods, p.Methods)
@@ -611,6 +615,14 @@ func (e *LinkEnvironment) link(m *Module, hostData any) (*Program, error) {
 			flags := frozen.Model.PropFlags(op.Index)
 			op.step = row2.Step{Key: op.Index, Options: kvo.WriteOptions(flags)}
 			op.childModel = prop.TypeModel()
+			if op.childModel != nil && op.Shape != nil && op.Shape.CellStruct != nil {
+				// A cell is not a record handle: only a declared value model
+				// may turn this child into one.
+				op.valueModel = e.valueModels[op.Shape.Type]
+				if op.valueModel == nil || op.valueModel.Model != op.childModel || op.Kind != ExtendedGetKey || frozen.Mutable {
+					return nil, fmt.Errorf("KVO property %d of %s does not read as %s", op.Index, frozen.Name, op.Shape.Type.Name())
+				}
+			}
 			if list, ok := prop.AnyType().(*kvo.ListType); ok && !frozen.Mutable && op.Kind == ExtendedGetKey {
 				if _, objects := list.ItemType().(*kvo.EntityType); objects {
 					op.listAccess = kvo.BindListAccess(frozen.Model, op.Index)

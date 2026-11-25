@@ -49,7 +49,9 @@ type typeEnvironment struct {
 	unnamedNativeTypes  []*values.Type
 	recordOwners        map[*values.Type]string
 	recordValues        map[*values.Type]*evm.RecordType
-	readRecords         map[*values.Type]bool // record pointer to "is read-only"
+	valueModels         map[*kvo.Model]*evm.ValueModel // sub-objects that read as struct values
+	valueModelOwners    map[*kvo.Model]string          // the package that declares the struct
+	readRecords         map[*values.Type]bool          // record pointer to "is read-only"
 	nativeMethodsByBase map[*values.Type][]*evm.ExternalMethod
 	sharedOwners        map[*values.Type]string
 	nativeAllocations   map[*values.Type]*values.NativeLayout
@@ -136,6 +138,17 @@ func newTypeEnvironment(packages []evm.Package) (*typeEnvironment, error) {
 	e.fromGo.Set(e.goOf(values.ErrorType), values.ErrorType)
 	e.toGo[evm.ErrorSliceType] = types.NewSlice(e.goOf(values.ErrorType))
 	e.fromGo.Set(e.goOf(evm.ErrorSliceType), evm.ErrorSliceType)
+	if e.valueModels, err = evm.ValueModels(packages); err != nil {
+		return nil, err
+	}
+	for i := range packages {
+		for _, vm := range packages[i].ValueModels {
+			if e.valueModelOwners == nil {
+				e.valueModelOwners = make(map[*kvo.Model]string)
+			}
+			e.valueModelOwners[vm.Model] = packages[i].Path
+		}
+	}
 	for i := range packages {
 		p := &packages[i]
 		if err := validateSourceFiles(p.Path, p.Sources()); err != nil {

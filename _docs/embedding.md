@@ -1195,6 +1195,12 @@ functions, and methods, provided the mixed package contains declarations only
 (put function bodies in a separate source package). Declare method receivers in
 source and map their native shapes with `SourceName`.
 
+One kind of mixed package may have function bodies: a package whose native
+types are all nongeneric source types bound with `SourceName`, pointers to
+them, or pointers to shared scalars, and that declares no records or values.
+Its source sees every field, so its bodies compile like any script. See
+[Sharing a struct type with its methods](#sharing-a-struct-type-with-its-methods).
+
 Native declarations are seeded before source type checking. A native struct
 (`TypeDecl.Name`) may contain or embed a registered source generic instance—even
 one parameterized by that same struct. The compiler fills in those native
@@ -1233,6 +1239,64 @@ package. Shared source must use supported EVM imports and cannot declare
 package variables or `init` functions, and the shared type's scalar kind must
 match its native declaration. Keep host-specific integrations in separate files
 and embed only the shared source.
+
+### Sharing a struct type with its methods
+
+A small domain value, such as an amount with its currency, can be one type for
+the host, for stored data and for scripts. The host keeps its Go struct. Scripts
+compile the same Go source, so the methods run as script code: no host call,
+and no Go struct to build first.
+
+```go
+type Coin struct {
+    Amount int64  `kvo:"amount"`
+    Code   uint32 `kvo:"code"`
+}
+
+func (c Coin) Valid() bool { return c.Code != 0 }
+```
+
+Three declarations connect the parts:
+
+```go
+// 1. The host struct, with value copies kept in one cell.
+native, _ := evmbind.New("money", source, evmbind.Options{
+    Only: []string{"Coin"}, Types: []reflect.Type{reflect.TypeFor[Coin]()},
+    CellStructs: map[string]*values.CellStruct{"Coin": cell},
+})
+
+// 2. The package that scripts import: the source, and the source type bound
+// to the native shape.
+money := evm.Package{Path: "money", Source: coinSource}
+for _, d := range native.Package().Types {
+    if d.Name == "Coin" {
+        d.Name, d.SourceName = "", "Coin"
+    }
+    money.Types = append(money.Types, d)
+}
+
+// 3. Stored sub-objects of the Coin model read as that struct.
+money.ValueModels = []evm.ValueModel{{
+    Model: coinModel, Type: cell.Type,
+    Props: [2]uint64{amount.Code(), code.Code()},
+}}
+models = evm.WithoutRecords(models, coinModel)
+```
+
+- **Cell storage.** A `values.CellStruct` keeps a two-field struct in one cell,
+  so a copy allocates nothing. Equal values must have equal cells: `==` and map
+  keys compare the cell. Put only a real pointer in `P`, for example a pointer
+  into a static table that stands for a small code.
+- **Host boundary.** Other schemas import `native` and use the struct in
+  signatures and fields as usual.
+- **Value model.** A property whose type is the model reads as the struct, by
+  value: `line.price.Valid()`, `line.price.Add(line.paid)`. The VM packs the two
+  stored words into the cell. It works on encoded rows and on rows backed by a
+  Go struct alike, and allocates nothing. A missing sub-object reads as the
+  zero value, so test the value, not a pointer.
+- **Limits.** Each field must be a scalar property that fits one word. Editable
+  rows do not expose such a property yet. `evm.WithoutRecords` removes the
+  model's row types, which scripts no longer reach.
 
 ## Execution coverage
 

@@ -1197,7 +1197,10 @@ in a separate process with an OS memory limit.
   `evm.Package{Path: "ids", Source: source}` and unify host/KVO/script scalar
   identity with `Package.SharedTypes`. Bodyless declarations bind to
   `ExternalFunction` / `ExternalMethod` (generics via `Instantiate`), and
-  `TypeDecl{SourceName, TypeArgs}` maps source types to native shapes.
+  `TypeDecl{SourceName, TypeArgs}` maps source types to native shapes. A small
+  struct can share its type the same way and keep each copy in one cell
+  (`values.CellStruct`); `Package.ValueModels` then reads stored sub-objects as
+  that struct, on any row and without allocation.
 - **Coverage:** Attach `evm.NewCoverage(program)` via `vm.SetCoverage(cov)`
   (one collector per concurrent run, combined with `Merge`). Read line-level
   coverage via `Lines()` and per-instruction counts via `Instructions()`.

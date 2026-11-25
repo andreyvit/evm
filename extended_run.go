@@ -294,11 +294,10 @@ func (vm *VM) extended(f frame, op *ExtendedOp, budget *executionBudget) error {
 			var v values.Value
 			var err error
 			if x.R == values.NativeAddress {
-				v = s.Native.Fields[index].Get(x.P)
 				if s.Native.Fields[index].Cells {
-					v, err = snapshot(field.Shape, v, allocated, limits)
+					v, err = snapshot(field.Shape, s.Native.Fields[index].Get(x.P), allocated, limits)
 				} else {
-					v, err = nativeLoadedValue(vm, vm.program.nativeFieldShape(s, int(index)), v, allocated, limits)
+					v, err = loadNativeField(vm, s, int(index), x.P, allocated, limits)
 				}
 			} else {
 				v, err = snapshot(field.Shape, field.Shape.Stored(p), allocated, limits)

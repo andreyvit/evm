@@ -231,6 +231,20 @@ func None() bool { var line db.Line; return line.price.Valid() || line.price != 
 		}
 	}
 
+	// The value is a copy. A script can change its own copy, but it cannot
+	// write a stored field through the row or take the field's address.
+	for source, ok := range map[string]bool{
+		`func Run(line *db.Line) int64 { c := line.price; c.Amount = 9; return c.Amount + line.price.Amount }`: true,
+		`func Run(line *db.Line) { line.price.Amount = 9 }`:                                                    false,
+		`func Run(line *db.Line) { line.price = money.Make(1, 2) }`:                                            false,
+		`func Run(line *db.Line) *money.Coin { return &line.price }`:                                           false,
+	} {
+		_, err := evmcompiler.Compile("copy.go", "import(\"db\";\"money\")\nvar _ = money.Make\n"+source, pkgs...)
+		if (err == nil) != ok {
+			t.Fatalf("%s: %v", source, err)
+		}
+	}
+
 	// An editable row does not expose the property yet.
 	if _, err = evmcompiler.Compile("edit.go", `import "db"; func Run(line *db.LineEdit) bool { return line.price.Valid() }`, pkgs...); err == nil || !strings.Contains(err.Error(), "price") {
 		t.Fatal(err)
@@ -240,6 +254,48 @@ func None() bool { var line db.Line; return line.price.Valid() || line.price != 
 	undeclared := money
 	undeclared.ValueModels = nil
 	if _, err = evm.Link(m, models, undeclared, pkgs[2]); err == nil || !strings.Contains(err.Error(), "does not read as money.Coin") {
+		t.Fatal(err)
+	}
+}
+
+// A collection decodes its elements as rows, so a model that reads as a
+// struct value cannot be a list element yet. The compiler says so.
+func TestValueModelCollectionsAreRefused(t *testing.T) {
+	schema := kvo.NewSchema()
+	amount := kvo.NewSignedProp[int64](schema, 1, "amount", kvo.TInt64)
+	code := kvo.NewUnsignedProp[uint32](schema, 2, "code", kvo.TUint32)
+	coinType := kvo.NewEntityType(schema, "Coin", reflect.TypeFor[Coin]())
+	coins := kvo.NewRecordListProp(schema, 3, "coins", kvo.ListOf(coinType))
+	coinModel := kvo.NewModel(schema, coinType, func(b *kvo.ModelBuilder) { b.Prop(amount); b.Prop(code) })
+	kvo.NewModel(schema, kvo.NewEntityType(schema, "Purse"), func(b *kvo.ModelBuilder) { b.Prop(coins) })
+	models, err := evm.ModelPackage("db", schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cell := coinCell()
+	native, err := evmbind.New("money", fstest.MapFS{"money.go": {Data: []byte(coinSource)}}, evmbind.Options{
+		Only: []string{"Coin"}, NativePackage: reflect.TypeFor[Coin]().PkgPath(), Types: []reflect.Type{reflect.TypeFor[Coin]()},
+		CellStructs: map[string]*values.CellStruct{"Coin": cell},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	money := evm.Package{Path: "money", Source: coinSource, ValueModels: []evm.ValueModel{{Model: coinModel, Type: cell.Type, Props: [2]uint64{amount.Code(), code.Code()}}}}
+	for _, d := range native.Package().Types {
+		if d.Name == "Coin" {
+			d.Name, d.SourceName = "", "Coin"
+		}
+		money.Types = append(money.Types, d)
+	}
+	_, err = evmcompiler.Compile("purse.go", `import "db"; func Run(p *db.Purse) int { return len(p.coins) }`, evm.WithoutRecords(models, coinModel), money)
+	if err == nil || !strings.Contains(err.Error(), "a collection of Coin is not supported") {
+		t.Fatal(err)
+	}
+
+	// A declaration that does not fit the struct is refused when it is read.
+	bad := money
+	bad.ValueModels = []evm.ValueModel{{Model: coinModel, Type: cell.Type, Props: [2]uint64{code.Code(), amount.Code()}}}
+	if _, err = evmcompiler.Compile("bad.go", `func Run() {}`, models, bad); err == nil || !strings.Contains(err.Error(), "does not match a one-word property") {
 		t.Fatal(err)
 	}
 }

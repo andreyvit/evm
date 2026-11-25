@@ -1294,9 +1294,15 @@ models = evm.WithoutRecords(models, coinModel)
   stored words into the cell. It works on encoded rows and on rows backed by a
   Go struct alike, and allocates nothing. A missing sub-object reads as the
   zero value, so test the value, not a pointer.
+- **Copies.** The value is a copy of the stored fields. A script can change
+  its own copy; it cannot assign to `line.price.Amount` or take `&line.price`.
 - **Limits.** Each field must be a scalar property that fits one word. Editable
-  rows do not expose such a property yet. `evm.WithoutRecords` removes the
-  model's row types, which scripts no longer reach.
+  rows do not expose such a property yet, and a list or map of the model does
+  not compile. `evm.WithoutRecords` removes the model's row types, which
+  scripts no longer reach.
+- **Inside host structs.** A native struct can have a field of the compact
+  type. The field keeps its Go layout there; reads, writes and copies of the
+  parent convert through `LoadNative` and `StoreNative`.
 
 ## Execution coverage
 

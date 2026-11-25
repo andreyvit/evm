@@ -176,9 +176,11 @@ func loadNative(c *VM, s *values.Shape, p unsafe.Pointer, used *allocationUsage,
 		*(*values.Value)(values.CellAt(dst, slot-1)) = values.Value{P: snapshot}
 	}
 	for i, f := range s.Fields {
-		v := s.Native.Fields[i].Get(p)
-		if !s.Native.Fields[i].Cells {
-			v, err = nativeLoadedValue(c, c.program.nativeFieldShape(s, i), v, used, limits)
+		var v values.Value
+		if s.Native.Fields[i].Cells {
+			v = s.Native.Fields[i].Get(p)
+		} else {
+			v, err = loadNativeField(c, s, i, p, used, limits)
 		}
 		if err != nil {
 			return values.Value{}, err
@@ -186,6 +188,25 @@ func loadNative(c *VM, s *values.Shape, p unsafe.Pointer, used *allocationUsage,
 		f.Shape.Store(values.CellAt(dst, f.Offset), v)
 	}
 	return values.Value{P: dst}, nil
+}
+
+// compactNativeSlot reports whether a slot holds a compact struct. Such a
+// struct keeps its Go layout inside its parent, while a copy of it is one
+// packed cell. The slot accessors of the parent work with the slot's address,
+// so a read or a write of the whole value must go through the struct's own
+// LoadNative and StoreNative.
+func compactNativeSlot(s *values.Shape) bool {
+	return s.CellStruct != nil && s.Native != nil && s.Native.Load != nil && s.Native.Store != nil
+}
+
+// loadNativeField reads one native-layout field of the Go struct at p.
+func loadNativeField(c *VM, s *values.Shape, i int, p unsafe.Pointer, used *allocationUsage, limits Limits) (values.Value, error) {
+	field := &s.Native.Fields[i]
+	shape := c.program.nativeFieldShape(s, i)
+	if compactNativeSlot(shape) {
+		return shape.Native.Load(unsafe.Add(p, field.Offset)), nil
+	}
+	return nativeLoadedValue(c, shape, field.Get(p), used, limits)
 }
 func storeNative(c *VM, s *values.Shape, p unsafe.Pointer, v values.Value, used *allocationUsage, limits Limits) error {
 	if s.Native == nil {
@@ -237,6 +258,10 @@ func storeNativeField(c *VM, s *values.Shape, i int, p unsafe.Pointer, v values.
 	field := &s.Native.Fields[i]
 	if !field.Cells {
 		shape := c.program.nativeFieldShape(s, i)
+		if compactNativeSlot(shape) {
+			shape.Native.Store(unsafe.Add(p, field.Offset), v)
+			return nil
+		}
 		if shape.Aggregate() && shape.Native != nil && shape.Native.Codec == nil && c.program.nativeCodecs[shape.Type] == nil {
 			return storeNative(c, shape, unsafe.Add(p, field.Offset), v, used, limits)
 		}

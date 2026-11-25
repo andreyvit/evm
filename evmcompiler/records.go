@@ -166,6 +166,12 @@ func (e *typeEnvironment) defineRecords(pkg *types.Package, records []*evm.Recor
 				}
 				return t
 			}
+			if item := k.ItemType(); item != nil && item.Model() != nil && e.valueModels[item.Model()] != nil {
+				// A collection decodes its elements as rows. Refuse it here
+				// instead of handing a row out as a struct.
+				fieldErr = fmt.Errorf("a collection of %s is not supported: the model reads as a struct value", item.Model().Name())
+				return nil
+			}
 			switch k := k.(type) {
 			case *kvo.ScalarDataType:
 				if k.NativeType().Kind() == reflect.Slice {

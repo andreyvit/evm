@@ -93,7 +93,8 @@ func (m ExternalMethod) Binding() ExternalFunction {
 }
 
 // OwnsMethodReceiver reports whether t is a named concrete type declared by p,
-// or an explicitly declared pointer to one.
+// or an explicitly declared pointer to one. A record owns both its pointer
+// and its value type.
 func (p *Package) OwnsMethodReceiver(t *values.Type) bool {
 	for _, shared := range p.SharedTypes {
 		if shared.Type == t {
@@ -101,7 +102,7 @@ func (p *Package) OwnsMethodReceiver(t *values.Type) bool {
 		}
 	}
 	for _, r := range p.Records {
-		if r != nil && r.Pointer == t {
+		if r != nil && t != nil && (r.Pointer == t || r.Value == t) {
 			return true
 		}
 	}
@@ -146,6 +147,9 @@ func (p *Package) methodReceivers() methodReceivers {
 	for _, record := range p.Records {
 		if record != nil {
 			r.owned[record.Pointer] = true
+			if record.Value != nil {
+				r.owned[record.Value] = true
+			}
 		}
 	}
 	for i := range p.Types {

@@ -163,6 +163,8 @@ type Schema struct {
 	src               *source
 	pkg               evm.Package
 	funcs, methods    []entry
+	modelMethods      []evm.ExternalMethod // receivers are rows of Options.Models
+	modelEntries      []entry              // parallel to modelMethods
 	host              reflect.Type
 	pointers          map[reflect.Type]*nativePointer
 	reverse           map[*values.Type]*nativePointer
@@ -715,8 +717,34 @@ func (s *Schema) method(op *operation, recv *values.Type, e entry, direct evm.Di
 		}
 		effects.CallbackBytes = b.domain
 	}
-	s.pkg.Methods = append(s.pkg.Methods, evm.ExternalMethod{Ownership: effects, Direct: direct, Name: op.name, Receiver: recv, Signature: op.sig(), Variadic: op.variadic})
+	m := evm.ExternalMethod{Ownership: effects, Direct: direct, Name: op.name, Receiver: recv, Signature: op.sig(), Variadic: op.variadic}
+	if op.recv != nil && op.recv.kind == nodeRecord {
+		// The row type belongs to the Options.Models package; see ModelMethods.
+		s.modelMethods = append(s.modelMethods, m)
+		s.modelEntries = append(s.modelEntries, e)
+		return
+	}
+	s.pkg.Methods = append(s.pkg.Methods, m)
 	s.methods = append(s.methods, e)
+}
+
+// ModelMethods returns the native methods of this schema's model structs,
+// bound to host like Bind. Their receivers are row types of the Options.Models
+// package, and only the package that declares a type can declare its methods.
+// Append the result to that package's Methods, for both compiling and linking.
+// Package and Bind leave these methods out.
+func (s *Schema) ModelMethods(host any) []evm.ExternalMethod {
+	if reflect.TypeOf(host) != s.host {
+		panic(fmt.Sprintf("evmbind: expected host %s, got %T", s.host, host))
+	}
+	methods := slices.Clone(s.modelMethods)
+	for i, e := range s.modelEntries {
+		methods[i].Call = s.bind(e, host)
+		if e.direct != nil {
+			methods[i].Direct.Call = e.direct(host)
+		}
+	}
+	return methods
 }
 func (s *Schema) Bind(host any) evm.Package {
 	if reflect.TypeOf(host) != s.host {

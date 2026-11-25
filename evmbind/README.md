@@ -138,6 +138,48 @@ link the shared model package alongside it:
 - Native-backed immutable rows are live views: host code can still mutate the
   underlying Go object.
 
+### Methods of model structs
+
+A model struct keeps its Go methods. List them in `Options.Methods`, as for any
+other native type, and scripts call them on the model's row:
+
+```go
+type Money struct {
+    Amount int64  `kvo:"amount"`
+    Code   string `kvo:"code"`
+}
+
+func (m Money) Valid() bool       { return m.Code != "" }
+func (m Money) Add(o Money) Money { ... }
+```
+
+```go
+money, _ := evmbind.New("money", source, evmbind.Options{
+    Selective: true, Models: &models,
+    Methods: map[string][]string{"Money": {"Valid", "Add"}},
+})
+models.Methods = append(models.Methods, money.ModelMethods(nil)...)
+```
+
+Only the package that declares a type can declare its methods, and a row type
+belongs to the model package. So `Schema.Package` and `Schema.Bind` leave these
+methods out, and `Schema.ModelMethods(host)` returns them for you to append to
+the model package. Use the same model package to compile and to link.
+
+- A method with a value receiver runs on a row value, a row pointer and a call
+  result, as in Go: `price.Valid()`, `price.Add(*tax).Valid()`. A method with a
+  pointer receiver needs a pointer or an addressable value.
+- A row satisfies a script interface through these methods.
+- The call passes the Go struct, so the row must be backed by it. On an encoded
+  row a call fails with `model row requires explicit conversion`; call
+  `row.NativeCopy()` first. On a `nil` pointer a value method fails with
+  `nil record dereference`.
+- A method cannot have the name of one of the model's property selectors.
+- Generated bindings call the methods directly; reflection is the fallback.
+
+A helper that reads properties, and so also works on encoded rows, is an
+[explicit record method](#explicit-record-methods).
+
 ### Borrowing byte slices from native methods
 
 A native method that returns a single `[]byte` can lend its backing bytes to

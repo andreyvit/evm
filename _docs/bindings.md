@@ -12,6 +12,7 @@ reuse.
 | --- | --- | --- |
 | A Go API package | `evmbind.New` with generated `Options.Static` bindings | Compile with `schema.Package()`, link with `schema.Bind(host)`. |
 | A Go helper over a KVO model | `evmbind.RecordMethod`, `GenerateMethods`, `RegisterMethods` | The helper becomes a method on the model's script type. |
+| A Go method of a model struct | `Options.Models` with `Options.Methods`, then `Schema.ModelMethods` | The method runs on the model's row; add the result to the model package. |
 | Neither, or you want full control | `evm.Package` with `Types`, `Functions`, and `Methods` | You write each signature and call handler directly. |
 
 All three paths produce the same declarations. Host functions and record
